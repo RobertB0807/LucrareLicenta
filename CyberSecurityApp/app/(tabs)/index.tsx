@@ -1,170 +1,149 @@
-import { useState } from 'react';
-import { ActivityIndicator, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 
 import ParallaxScrollView from '@/components/parallax-scroll-view';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-
-type ScenarioOption = {
-  id: string;
-  text: string;
-};
-
-type Scenario = {
-  scenario_id: string;
-  attack_type: string;
-  difficulty: string;
-  channel: string;
-  attacker_message: string;
-  options: ScenarioOption[];
-  red_flags: string[];
-};
-
-type Evaluation = {
-  is_correct: boolean;
-  score_delta: number;
-  explanation: string;
-};
-
-// For physical devices, set EXPO_PUBLIC_API_BASE_URL in .env.local
-const API_BASE_URL =
-  process.env.EXPO_PUBLIC_API_BASE_URL ??
-  Platform.select({
-    android: 'http://10.0.2.2:8000',
-    default: 'http://127.0.0.1:8000',
-  });
+import { FeedbackPanel } from '@/features/training/components/FeedbackPanel';
+import { ScenarioSetupCard } from '@/features/training/components/ScenarioSetupCard';
+import { TrainingHero } from '@/features/training/components/TrainingHero';
+import { getDifficultyLabel } from '@/features/training/options';
+import { TrainingColors } from '@/features/training/ui-theme';
+import { useTrainingSession } from '../../features/training/useTrainingSession';
 
 export default function HomeScreen() {
-  const [scenario, setScenario] = useState<Scenario | null>(null);
-  const [evaluation, setEvaluation] = useState<Evaluation | null>(null);
-  const [selectedOptionId, setSelectedOptionId] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const startSimulation = async () => {
-    setIsLoading(true);
-    setError(null);
-    setEvaluation(null);
-    setSelectedOptionId(null);
-
-    try {
-      const response = await fetch(`${API_BASE_URL}/scenario/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ attack_type: 'phishing', difficulty: 'easy' }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Nu am putut genera scenariul.');
-      }
-
-      const data = (await response.json()) as Scenario;
-      setScenario(data);
-    } catch {
-      setError(
-        'Conexiune esuata cu backend-ul. Verifica daca FastAPI ruleaza pe portul 8000 si endpoint-ul este accesibil.'
-      );
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const evaluateAnswer = async () => {
-    if (!scenario || !selectedOptionId) {
-      return;
-    }
-
-    setIsLoading(true);
-    setError(null);
-
-    try {
-      const response = await fetch(`${API_BASE_URL}/scenario/evaluate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          scenario_id: scenario.scenario_id,
-          selected_option_id: selectedOptionId,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Nu am putut evalua raspunsul.');
-      }
-
-      const data = (await response.json()) as Evaluation;
-      setEvaluation(data);
-    } catch {
-      setError('Eroare la evaluare. Incearca din nou.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  const {
+    scenario,
+    evaluation,
+    sessionId,
+    selectedOptionId,
+    attackType,
+    difficulty,
+    isLoading,
+    error,
+    stats,
+    perAttackStats,
+    setSelectedOptionId,
+    setAttackType,
+    setDifficulty,
+    startSimulation,
+    evaluateAnswer,
+    runCurrentSelection,
+    runRecommendedScenario,
+    resetSession,
+  } = useTrainingSession();
 
   return (
     <ParallaxScrollView
-      headerBackgroundColor={{ light: '#E7F0EA', dark: '#1F2E27' }}
-      headerImage={<View style={styles.headerAccent} />}>
-      <ThemedView style={styles.container}>
-        <ThemedText type="title">MVP: Simulare phishing</ThemedText>
-        <ThemedText>
-          Flux minimal: generezi un scenariu, alegi o actiune, primesti feedback si scor.
-        </ThemedText>
-
-        {!scenario ? (
-          <Pressable style={styles.primaryButton} onPress={startSimulation}>
-            <ThemedText type="defaultSemiBold">Start simulare</ThemedText>
-          </Pressable>
-        ) : (
-          <View style={styles.scenarioCard}>
-            <ThemedText type="subtitle">Mesaj suspect</ThemedText>
-            <ThemedText>{scenario.attacker_message}</ThemedText>
-
-            <ThemedText type="subtitle" style={styles.sectionTitle}>
-              Ce faci?
+      headerBackgroundColor={{ light: TrainingColors.pageBase, dark: TrainingColors.pageBase }}
+      headerImage={
+        <View style={styles.headerVisual}>
+          <View style={styles.headerGrid} />
+          <View style={styles.headerGlowLeft} />
+          <View style={styles.headerGlowRight} />
+          <View style={styles.headerCore}>
+            <View style={styles.headerLine} />
+            <ThemedText style={styles.headerCoreTitle}>THREAT SIMULATION</ThemedText>
+            <ThemedText style={styles.headerCoreSubtitle}>
+              Observe, decide, defend.
             </ThemedText>
-            {scenario.options.map((option) => {
-              const isSelected = selectedOptionId === option.id;
-              return (
-                <Pressable
-                  key={option.id}
-                  style={[styles.optionButton, isSelected && styles.optionButtonSelected]}
-                  onPress={() => setSelectedOptionId(option.id)}>
-                  <ThemedText>{option.text}</ThemedText>
-                </Pressable>
-              );
-            })}
+          </View>
+        </View>
+      }>
+      <ThemedView style={styles.container}>
+        <TrainingHero sessionId={sessionId} stats={stats} />
+
+        <ScenarioSetupCard
+          attackType={attackType}
+          difficulty={difficulty}
+          onSelectAttackType={setAttackType}
+          onSelectDifficulty={setDifficulty}
+          onGenerateScenario={() => startSimulation()}
+        />
+
+        {scenario ? (
+          <View style={styles.scenarioCard}>
+            <View style={styles.scenarioHeaderRow}>
+              <ThemedText type="subtitle" style={styles.blockTitle}>
+                Threat Brief
+              </ThemedText>
+              <View style={styles.metadataGroup}>
+                <View style={styles.metaPill}>
+                  <ThemedText style={styles.metaText}>{scenario.channel.toUpperCase()}</ThemedText>
+                </View>
+                <View style={styles.metaPill}>
+                  <ThemedText style={styles.metaText}>{scenario.attack_type.toUpperCase()}</ThemedText>
+                </View>
+                <View style={styles.metaPill}>
+                  <ThemedText style={styles.metaText}>{getDifficultyLabel(scenario.difficulty)}</ThemedText>
+                </View>
+              </View>
+            </View>
+
+            <View style={styles.attackerMessageBox}>
+              <ThemedText style={styles.attackerMessageText}>{scenario.attacker_message}</ThemedText>
+            </View>
+
+            <ThemedText style={styles.blockLabel}>Ce faci?</ThemedText>
+            <View style={styles.optionsList}>
+              {scenario.options.map((option, index) => {
+                const isSelected = selectedOptionId === option.id;
+                const optionLetter = String.fromCharCode(65 + index);
+
+                return (
+                  <Pressable
+                    key={option.id}
+                    style={[styles.optionCard, isSelected && styles.optionCardSelected]}
+                    onPress={() => setSelectedOptionId(option.id)}>
+                    <View style={[styles.optionLetterBadge, isSelected && styles.optionLetterBadgeSelected]}>
+                      <ThemedText style={[styles.optionLetterText, isSelected && styles.optionLetterTextSelected]}>
+                        {optionLetter}
+                      </ThemedText>
+                    </View>
+                    <ThemedText style={styles.optionText}>{option.text}</ThemedText>
+                  </Pressable>
+                );
+              })}
+            </View>
 
             <Pressable
-              style={[styles.primaryButton, !selectedOptionId && styles.buttonDisabled]}
+              style={[styles.primaryButton, (!selectedOptionId || !!evaluation) && styles.buttonDisabled]}
               onPress={evaluateAnswer}
-              disabled={!selectedOptionId || isLoading}>
-              <ThemedText type="defaultSemiBold">Trimite raspunsul</ThemedText>
-            </Pressable>
-          </View>
-        )}
-
-        {isLoading ? <ActivityIndicator size="small" /> : null}
-
-        {evaluation ? (
-          <View style={styles.feedbackCard}>
-            <ThemedText type="subtitle">Rezultat</ThemedText>
-            <ThemedText>{evaluation.is_correct ? 'Raspuns corect.' : 'Raspuns gresit.'}</ThemedText>
-            <ThemedText>Scor obtinut: {evaluation.score_delta}</ThemedText>
-            <ThemedText>{evaluation.explanation}</ThemedText>
-            <ThemedText type="subtitle" style={styles.sectionTitle}>
-              Red flags
-            </ThemedText>
-            {scenario?.red_flags.map((flag) => (
-              <ThemedText key={flag}>• {flag}</ThemedText>
-            ))}
-
-            <Pressable style={styles.secondaryButton} onPress={startSimulation}>
-              <ThemedText type="defaultSemiBold">Ruleaza alt scenariu</ThemedText>
+              disabled={!selectedOptionId || isLoading || !!evaluation}>
+              <ThemedText type="defaultSemiBold" style={styles.primaryButtonText}>
+                Evalueaza raspunsul
+              </ThemedText>
             </Pressable>
           </View>
         ) : null}
 
-        {error ? <ThemedText style={styles.errorText}>{error}</ThemedText> : null}
+        {isLoading ? (
+          <View style={styles.loadingWrap}>
+            <View style={styles.loadingPulse} />
+            <ThemedText style={styles.loadingText}>Se proceseaza scenariul...</ThemedText>
+          </View>
+        ) : null}
+
+        {evaluation && scenario ? (
+          <FeedbackPanel
+            evaluation={evaluation}
+            scenario={scenario}
+            perAttackStats={perAttackStats}
+            onRunCurrentSelection={runCurrentSelection}
+            onRunRecommendedScenario={runRecommendedScenario}
+          />
+        ) : null}
+
+        <Pressable style={styles.ghostButton} onPress={resetSession}>
+          <ThemedText type="defaultSemiBold" style={styles.ghostButtonText}>
+            Reseteaza sesiunea
+          </ThemedText>
+        </Pressable>
+
+        {error ? (
+          <View style={styles.errorCard}>
+            <ThemedText style={styles.errorText}>{error}</ThemedText>
+          </View>
+        ) : null}
       </ThemedView>
     </ParallaxScrollView>
   );
@@ -172,60 +151,223 @@ export default function HomeScreen() {
 
 const styles = StyleSheet.create({
   container: {
-    gap: 12,
-    paddingBottom: 24,
+    gap: 14,
+    paddingBottom: 28,
+  },
+  headerVisual: {
+    flex: 1,
+    margin: 14,
+    borderRadius: 22,
+    backgroundColor: TrainingColors.pageBase,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: TrainingColors.border,
+  },
+  headerGrid: {
+    ...StyleSheet.absoluteFillObject,
+    opacity: 0.7,
+    backgroundColor: 'rgba(88, 166, 255, 0.05)',
+  },
+  headerGlowLeft: {
+    position: 'absolute',
+    width: 180,
+    height: 180,
+    borderRadius: 90,
+    backgroundColor: 'rgba(69, 224, 177, 0.22)',
+    left: -40,
+    top: -20,
+  },
+  headerGlowRight: {
+    position: 'absolute',
+    width: 140,
+    height: 140,
+    borderRadius: 70,
+    backgroundColor: 'rgba(88, 166, 255, 0.18)',
+    right: -25,
+    top: 28,
+  },
+  headerCore: {
+    flex: 1,
+    margin: 18,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(104, 164, 255, 0.35)',
+    backgroundColor: 'rgba(12, 21, 39, 0.74)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+  },
+  headerLine: {
+    width: '62%',
+    height: 1,
+    backgroundColor: 'rgba(69, 224, 177, 0.7)',
+    marginBottom: 2,
+  },
+  headerCoreTitle: {
+    color: TrainingColors.textPrimary,
+    fontSize: 18,
+    letterSpacing: 2.4,
+    fontFamily: 'monospace',
+    fontWeight: '700',
+  },
+  headerCoreSubtitle: {
+    color: TrainingColors.textSecondary,
+    letterSpacing: 0.8,
+    fontFamily: 'monospace',
+    fontSize: 12,
   },
   scenarioCard: {
-    gap: 10,
+    gap: 12,
     padding: 14,
-    borderRadius: 12,
-    backgroundColor: 'rgba(117, 167, 128, 0.14)',
-  },
-  feedbackCard: {
-    gap: 10,
-    padding: 14,
-    borderRadius: 12,
-    backgroundColor: 'rgba(80, 112, 171, 0.16)',
-  },
-  sectionTitle: {
-    marginTop: 6,
-  },
-  optionButton: {
+    borderRadius: 16,
+    backgroundColor: TrainingColors.panel,
     borderWidth: 1,
-    borderColor: 'rgba(120, 120, 120, 0.35)',
-    borderRadius: 10,
-    padding: 10,
+    borderColor: TrainingColors.borderStrong,
   },
-  optionButtonSelected: {
-    borderColor: '#2D7D46',
-    backgroundColor: 'rgba(45, 125, 70, 0.15)',
+  scenarioHeaderRow: {
+    gap: 8,
+  },
+  blockTitle: {
+    color: TrainingColors.textPrimary,
+    fontSize: 18,
+  },
+  metadataGroup: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  metaPill: {
+    borderRadius: 999,
+    backgroundColor: 'rgba(26, 94, 71, 0.12)',
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: TrainingColors.border,
+  },
+  metaText: {
+    color: TrainingColors.textSecondary,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  attackerMessageBox: {
+    borderRadius: 12,
+    backgroundColor: TrainingColors.panelAlt,
+    borderWidth: 1,
+    borderColor: TrainingColors.border,
+    padding: 12,
+  },
+  attackerMessageText: {
+    color: TrainingColors.textPrimary,
+    lineHeight: 22,
+  },
+  blockLabel: {
+    color: TrainingColors.textMuted,
+    fontSize: 11,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    fontFamily: 'monospace',
+  },
+  optionsList: {
+    gap: 8,
+  },
+  optionCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    borderWidth: 1,
+    borderColor: TrainingColors.border,
+    borderRadius: 12,
+    padding: 10,
+    backgroundColor: TrainingColors.panelAlt,
+  },
+  optionCardSelected: {
+    borderColor: TrainingColors.accentBlue,
+    backgroundColor: 'rgba(88, 166, 255, 0.12)',
+  },
+  optionLetterBadge: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: TrainingColors.borderStrong,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: TrainingColors.pageBase,
+    marginTop: 1,
+  },
+  optionLetterBadgeSelected: {
+    borderColor: TrainingColors.accentBlue,
+    backgroundColor: 'rgba(88, 166, 255, 0.18)',
+  },
+  optionLetterText: {
+    color: TrainingColors.textSecondary,
+    fontSize: 12,
+    fontWeight: '700',
+    fontFamily: 'monospace',
+  },
+  optionLetterTextSelected: {
+    color: TrainingColors.textPrimary,
+  },
+  optionText: {
+    flex: 1,
+    color: TrainingColors.textPrimary,
   },
   primaryButton: {
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 10,
-    paddingVertical: 11,
+    borderRadius: 12,
+    paddingVertical: 12,
     paddingHorizontal: 14,
-    backgroundColor: 'rgba(45, 125, 70, 0.25)',
+    backgroundColor: TrainingColors.buttonPrimary,
+    borderWidth: 1,
+    borderColor: TrainingColors.buttonPrimaryBorder,
   },
-  secondaryButton: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 10,
-    paddingVertical: 11,
-    paddingHorizontal: 14,
-    backgroundColor: 'rgba(80, 112, 171, 0.22)',
+  primaryButtonText: {
+    color: '#EEF4FF',
+    fontFamily: 'monospace',
+    letterSpacing: 0.8,
   },
   buttonDisabled: {
-    opacity: 0.5,
+    opacity: 0.45,
+  },
+  loadingWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 2,
+  },
+  loadingPulse: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: TrainingColors.accentTeal,
+  },
+  loadingText: {
+    color: TrainingColors.textSecondary,
+    fontFamily: 'monospace',
+  },
+  ghostButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: TrainingColors.border,
+    backgroundColor: TrainingColors.panelAlt,
+  },
+  ghostButtonText: {
+    color: TrainingColors.textSecondary,
+  },
+  errorCard: {
+    borderRadius: 12,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 125, 125, 0.38)',
+    backgroundColor: 'rgba(255, 125, 125, 0.12)',
   },
   errorText: {
-    color: '#B32727',
-  },
-  headerAccent: {
-    flex: 1,
-    margin: 24,
-    borderRadius: 16,
-    backgroundColor: 'rgba(45, 125, 70, 0.35)',
+    color: '#FFC9C9',
   },
 });
