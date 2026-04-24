@@ -168,7 +168,10 @@ export default function AnalyticsScreen() {
                     ]}
                   />
                   <View style={styles.activityBody}>
-                    <Text style={styles.activityTitle}>{entry.title}</Text>
+                    <View style={styles.activityHeaderRow}>
+                      <Text style={styles.activityTitle}>{entry.title}</Text>
+                      {entry.timeLabel ? <Text style={styles.activityTime}>{entry.timeLabel}</Text> : null}
+                    </View>
                     <Text style={styles.activityDetail}>{entry.detail}</Text>
                   </View>
                 </View>
@@ -440,10 +443,22 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: 3,
   },
+  activityHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 10,
+  },
   activityTitle: {
     color: TrainingColors.textPrimary,
     fontSize: 14,
     fontWeight: '700',
+    flexShrink: 1,
+  },
+  activityTime: {
+    color: TrainingColors.textMuted,
+    fontSize: 11,
+    letterSpacing: 0.3,
   },
   activityDetail: {
     color: TrainingColors.textSecondary,

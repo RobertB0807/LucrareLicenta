@@ -7,9 +7,37 @@ import type {
   AttackType,
   DifficultyLevel,
   Evaluation,
+  SessionEvent,
   Scenario,
   SessionStats,
 } from './types';
+
+type ActivityItem = {
+  id: string;
+  title: string;
+  detail: string;
+  tone: 'neutral' | 'good' | 'warning';
+  timeLabel?: string;
+};
+
+function formatEventTime(isoTimestamp: string): string {
+  const parsedDate = new Date(isoTimestamp);
+  if (Number.isNaN(parsedDate.getTime())) {
+    return 'just now';
+  }
+
+  return parsedDate.toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function toActivityTone(value: string): 'neutral' | 'good' | 'warning' {
+  if (value === 'good' || value === 'warning') {
+    return value;
+  }
+  return 'neutral';
+}
 
 type TrainingSessionContextValue = {
   scenario: Scenario | null;
@@ -25,6 +53,7 @@ type TrainingSessionContextValue = {
     title: string;
     detail: string;
     tone: 'neutral' | 'good' | 'warning';
+    timeLabel?: string;
   }>;
   stats: {
     totalScore: number;
@@ -63,20 +92,14 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
   const [difficulty, setDifficulty] = useState<DifficultyLevel>('easy');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activityLog, setActivityLog] = useState<
-    Array<{
-      id: string;
-      title: string;
-      detail: string;
-      tone: 'neutral' | 'good' | 'warning';
-    }>
-  >([]);
+  const [activityLog, setActivityLog] = useState<ActivityItem[]>([]);
 
   const pushActivity = useCallback(
     (entry: { title: string; detail: string; tone: 'neutral' | 'good' | 'warning' }) => {
       setActivityLog((current) => [
         {
           id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+          timeLabel: formatEventTime(new Date().toISOString()),
           ...entry,
         },
         ...current,
@@ -84,6 +107,22 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
     },
     []
   );
+
+  const applyServerEvents = useCallback((events: SessionEvent[] | undefined) => {
+    if (!events?.length) {
+      return;
+    }
+
+    setActivityLog(
+      events.slice(0, 8).map((event) => ({
+        id: event.id,
+        title: event.title,
+        detail: event.detail,
+        tone: toActivityTone(event.tone),
+        timeLabel: formatEventTime(event.timestamp),
+      }))
+    );
+  }, []);
 
   const stats = useMemo(
     () => ({
@@ -156,11 +195,15 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
 
       setEvaluation(data);
       setSessionStats(data.session_stats);
-      pushActivity({
-        title: data.is_correct ? 'Answer marked correct' : 'Answer marked incorrect',
-        detail: `${data.score_delta >= 0 ? '+' : ''}${data.score_delta} points applied to the live score.`,
-        tone: data.is_correct ? 'good' : 'warning',
-      });
+      if (data.session_stats.recent_events?.length) {
+        applyServerEvents(data.session_stats.recent_events);
+      } else {
+        pushActivity({
+          title: data.is_correct ? 'Answer marked correct' : 'Answer marked incorrect',
+          detail: `${data.score_delta >= 0 ? '+' : ''}${data.score_delta} points applied to the live score.`,
+          tone: data.is_correct ? 'good' : 'warning',
+        });
+      }
     } catch {
       setError('Eroare la evaluare. Incearca din nou.');
     } finally {

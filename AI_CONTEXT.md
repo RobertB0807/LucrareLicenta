@@ -20,7 +20,11 @@ The project is already functional as a vertical MVP slice.
 
 ### Backend status
 Backend lives in `BackendAPI/` and currently includes:
-- `main.py` for API routing and session-aware orchestration
+- `main.py` for API routing only
+- `training_service.py` for session orchestration, scoring, recommendation, and event timeline
+- `db.py` for SQLite engine/session initialization
+- `persistence_models.py` for SQLAlchemy ORM models
+- `persistence_repository.py` for persistence read/write operations
 - `scenario_library.py` for the scenario templates
 - `scenario_models.py` for shared models/types
 
@@ -28,6 +32,8 @@ Backend features currently implemented:
 - `GET /health`
 - `POST /scenario/generate`
 - `POST /scenario/evaluate`
+- `GET /session/{session_id}`
+- `GET /session/{session_id}/events`
 - scenario templates for all combinations of:
   - attack type: phishing, smishing, impersonation
   - difficulty: easy, medium, hard
@@ -35,6 +41,8 @@ Backend features currently implemented:
 - adaptive session scoring
 - per-attack statistics
 - recommendation logic for the next scenario
+- session event history (`recent_events`) with timestamp and tone metadata
+- SQLite persistence for sessions, attempts and events
 
 ### Frontend status
 Frontend lives in `CyberSecurityApp/`.
@@ -55,6 +63,18 @@ UI components currently extracted:
 - `FeedbackPanel`
 
 The training feature now exposes a shared session context, so the Home and Analytics tabs read from the same live state.
+The analytics feed is now synchronized with backend event history, not only local frontend events.
+
+## Recent Progress (April 2026)
+- Backend refactor completed: service layer extracted from `main.py` into `training_service.py`.
+- Added session timeline events in backend for `scenario_generated` and `answer_evaluated`.
+- Extended API contract with `session_stats.recent_events`.
+- Frontend session provider maps backend events into the analytics activity feed.
+- Analytics feed now displays event timestamps.
+- Added SQLite persistence (dual-write): in-memory state + DB writes.
+- Added persisted session snapshot and paginated events endpoints.
+- Fixed session re-hydration from DB after restart/memory reset (existing score and attempts are no longer overwritten when continuing an old session).
+- Validated re-hydration behavior with a restart simulation test.
 
 ## What the App Already Does
 1. User selects attack type and difficulty.
@@ -65,6 +85,7 @@ The training feature now exposes a shared session context, so the Home and Analy
    - result
    - score delta
    - session stats
+  - recent event history in analytics
    - adaptive recommendation
    - red flags
 6. User can continue with current selection or recommended scenario.
@@ -78,6 +99,10 @@ The training feature now exposes a shared session context, so the Home and Analy
 ## Main Files to Know
 ### Backend
 - `BackendAPI/main.py`
+- `BackendAPI/training_service.py`
+- `BackendAPI/db.py`
+- `BackendAPI/persistence_models.py`
+- `BackendAPI/persistence_repository.py`
 - `BackendAPI/scenario_library.py`
 - `BackendAPI/scenario_models.py`
 
@@ -86,6 +111,7 @@ The training feature now exposes a shared session context, so the Home and Analy
 - `CyberSecurityApp/features/training/api.ts`
 - `CyberSecurityApp/features/training/useTrainingSession.ts`
 - `CyberSecurityApp/features/training/types.ts`
+- `CyberSecurityApp/app/(tabs)/analytics.tsx`
 - `CyberSecurityApp/features/training/options.ts`
 - `CyberSecurityApp/features/training/ui-theme.ts`
 - `CyberSecurityApp/features/training/components/TrainingHero.tsx`
@@ -95,11 +121,19 @@ The training feature now exposes a shared session context, so the Home and Analy
 ## Remaining Tasks / Suggested Roadmap
 Priority order:
 
-### 1. Backend refactor into service layer
-Current `main.py` still contains orchestration and adaptive logic.
-Suggested next step:
-- extract session/scoring/recommendation logic into a service module
-- keep `main.py` only for route definitions
+### 1. Add persistence layer (higher complexity next step)
+Status: implemented as MVP with SQLite + SQLAlchemy + repository + startup init.
+
+Current approach:
+- dual-write mode (existing in-memory flow + DB writes)
+- existing `/scenario/generate` and `/scenario/evaluate` contracts preserved
+- persisted reads available via `/session/{session_id}` and `/session/{session_id}/events`
+- when a known `session_id` is reused after restart, in-memory state is restored from persisted snapshot before new updates
+
+Next persistence step:
+- add migration tooling (Alembic)
+- switch read path fully to DB after test coverage
+- optionally remove in-memory state
 
 ### 2. Add more UI polish
 Possible improvements:
@@ -115,11 +149,11 @@ If needed:
 - move the scenario body into a dedicated component
 - move the stats section into a dashboard component
 
-### 4. Add persistence
-Current session data is in memory only.
-Next step:
-- add SQLite or Postgres
-- persist sessions, attempts, score, stats, and history
+### 4. Extend analytics with persisted trends
+Once persistence is available:
+- progression over time (score/accuracy evolution)
+- richer timeline queries (filters by attack type and date)
+- charts based on stored attempts
 
 ### 5. Add LLM integration
 When ready:
@@ -127,16 +161,11 @@ When ready:
 - validate the output shape strictly
 - keep a rule-based fallback if AI output fails
 
-### 6. Extend analytics
-The analytics tab is now implemented, but can still be expanded with:
-- progression over time
-- richer event history
-- charts or trend visualizations
-- session export / persistence
-
-### 7. Add tests
+### 6. Add tests
 Recommended:
 - backend tests for generate/evaluate endpoints
+- backend tests for persistence repositories and timeline queries
+- integration tests for `/session/{session_id}` and `/session/{session_id}/events`
 - unit tests for session recommendation and score logic
 - basic UI smoke tests if needed
 
@@ -165,10 +194,10 @@ npx expo start
 Focus on incremental improvements only.
 
 Good next tasks:
-- backend service layer extraction
-- analytics enhancements and event history
+- migration tooling + DB-focused tests
+- switch read path fully to DB
+- tests for persistence and recommendation logic
 - more cyber-themed UI polish
-- persistence layer
 - LLM integration with fallback
 
 Avoid large rewrites unless necessary.

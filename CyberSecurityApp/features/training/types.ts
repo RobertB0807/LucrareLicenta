@@ -22,6 +22,15 @@ export type AttackStats = {
   accuracy: number;
 };
 
+export type SessionEvent = {
+  id: string;
+  timestamp: string;
+  event_type: string;
+  title: string;
+  detail: string;
+  tone: string;
+};
+
 export type SessionStats = {
   total_score: number;
   total_attempts: number;
@@ -30,6 +39,7 @@ export type SessionStats = {
   correct_streak: number;
   incorrect_streak: number;
   per_attack: Record<string, AttackStats>;
+  recent_events: SessionEvent[];
 };
 
 export type Recommendation = {
