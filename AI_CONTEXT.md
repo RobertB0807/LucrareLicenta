@@ -47,23 +47,21 @@ Backend features currently implemented:
 ### Frontend status
 Frontend lives in `CyberSecurityApp/`.
 
-The main training feature is already modularized into:
-- `app/(tabs)/index.tsx` for screen orchestration
-- `app/(tabs)/analytics.tsx` for live training analytics
-- `features/training/api.ts` for API calls
-- `features/training/types.ts` for shared types
-- `features/training/options.ts` for static config
-- `features/training/useTrainingSession.ts` for the shared session provider and hook
-- `features/training/components/` for UI components
-- `features/training/ui-theme.ts` for feature-specific colors/helpers
+The app now has a broader product-style tab shell and route flow:
+- `app/(tabs)/dashboard.tsx` as the new home screen
+- `app/(tabs)/scenarios.tsx` as the scenario catalog
+- `app/(tabs)/learn.tsx` for lesson content
+- `app/(tabs)/assistant.tsx` for the AI coach chat UI
+- `app/(tabs)/analytics.tsx` for progress/stats UI
+- `app/chat/[scenarioId].tsx` for chat-style scenario simulation
+- `app/feedback/[scenarioId].tsx` for post-scenario debrief
 
-UI components currently extracted:
-- `TrainingHero`
-- `ScenarioSetupCard`
-- `FeedbackPanel`
+Navigation updates:
+- `app/(tabs)/_layout.tsx` now defines the new visible tabs and hides legacy routes (`index`, `training`, `explore`)
+- `app/_layout.tsx` now includes stack routes for `chat/[scenarioId]` and `feedback/[scenarioId]`
+- `app/(tabs)/index.tsx` now redirects to `/(tabs)/dashboard`
 
-The training feature now exposes a shared session context, so the Home and Analytics tabs read from the same live state.
-The analytics feed is now synchronized with backend event history, not only local frontend events.
+The existing `features/training/*` architecture is still present and reusable, but many of the new screens currently use mocked/static data for UI prototyping.
 
 ## Recent Progress (April 2026)
 - Backend refactor completed: service layer extracted from `main.py` into `training_service.py`.
@@ -75,6 +73,9 @@ The analytics feed is now synchronized with backend event history, not only loca
 - Added persisted session snapshot and paginated events endpoints.
 - Fixed session re-hydration from DB after restart/memory reset (existing score and attempts are no longer overwritten when continuing an old session).
 - Validated re-hydration behavior with a restart simulation test.
+- Added a new multi-tab UX shell (Home/Train/Learn/Assist/Stats) with cyber-themed styling.
+- Added a chat-based scenario flow (`/chat/[scenarioId]`) and a dedicated feedback/debrief screen (`/feedback/[scenarioId]`).
+- Reworked analytics into a richer dashboard-style presentation (charts, weak spots, badges) currently driven by local sample data.
 
 ## What the App Already Does
 1. User selects attack type and difficulty.
@@ -107,11 +108,19 @@ The analytics feed is now synchronized with backend event history, not only loca
 - `BackendAPI/scenario_models.py`
 
 ### Frontend
+- `CyberSecurityApp/app/(tabs)/_layout.tsx`
+- `CyberSecurityApp/app/(tabs)/dashboard.tsx`
+- `CyberSecurityApp/app/(tabs)/scenarios.tsx`
+- `CyberSecurityApp/app/(tabs)/learn.tsx`
+- `CyberSecurityApp/app/(tabs)/assistant.tsx`
+- `CyberSecurityApp/app/(tabs)/analytics.tsx`
 - `CyberSecurityApp/app/(tabs)/index.tsx`
+- `CyberSecurityApp/app/chat/[scenarioId].tsx`
+- `CyberSecurityApp/app/feedback/[scenarioId].tsx`
+- `CyberSecurityApp/app/_layout.tsx`
 - `CyberSecurityApp/features/training/api.ts`
 - `CyberSecurityApp/features/training/useTrainingSession.ts`
 - `CyberSecurityApp/features/training/types.ts`
-- `CyberSecurityApp/app/(tabs)/analytics.tsx`
 - `CyberSecurityApp/features/training/options.ts`
 - `CyberSecurityApp/features/training/ui-theme.ts`
 - `CyberSecurityApp/features/training/components/TrainingHero.tsx`
@@ -121,7 +130,17 @@ The analytics feed is now synchronized with backend event history, not only loca
 ## Remaining Tasks / Suggested Roadmap
 Priority order:
 
-### 1. Add persistence layer (higher complexity next step)
+### 1. Connect new UX flows to real backend/session state
+Current gap:
+- new tab screens, chat simulation, and feedback are mostly mock-data driven
+- the older training/session logic in `features/training/` is not yet the source of truth for all new routes
+
+Next integration step:
+- wire scenario list/generation/evaluation to backend endpoints
+- pass real `session_id`, scenario payload, and evaluation outputs through the chat + feedback route flow
+- make analytics consume persisted session/event data instead of local constants
+
+### 2. Add persistence layer hardening
 Status: implemented as MVP with SQLite + SQLAlchemy + repository + startup init.
 
 Current approach:
@@ -135,7 +154,7 @@ Next persistence step:
 - switch read path fully to DB after test coverage
 - optionally remove in-memory state
 
-### 2. Add more UI polish
+### 3. Add more UI polish
 Possible improvements:
 - cyber background pattern / grid
 - animated transitions for cards
@@ -143,25 +162,25 @@ Possible improvements:
 - richer scenario visuals
 - better mobile spacing for smaller screens
 
-### 3. Extract reusable hooks or subcomponents further
+### 4. Extract reusable hooks or subcomponents further
 If needed:
 - split `index.tsx` even more
 - move the scenario body into a dedicated component
 - move the stats section into a dashboard component
 
-### 4. Extend analytics with persisted trends
+### 5. Extend analytics with persisted trends
 Once persistence is available:
 - progression over time (score/accuracy evolution)
 - richer timeline queries (filters by attack type and date)
 - charts based on stored attempts
 
-### 5. Add LLM integration
+### 6. Add LLM integration
 When ready:
 - use an LLM for generating scenario text
 - validate the output shape strictly
 - keep a rule-based fallback if AI output fails
 
-### 6. Add tests
+### 7. Add tests
 Recommended:
 - backend tests for generate/evaluate endpoints
 - backend tests for persistence repositories and timeline queries
@@ -194,11 +213,11 @@ npx expo start
 Focus on incremental improvements only.
 
 Good next tasks:
-- migration tooling + DB-focused tests
+- connect new tab/chat/feedback UX to backend data and shared session state
+- add migration tooling + DB-focused tests
 - switch read path fully to DB
-- tests for persistence and recommendation logic
-- more cyber-themed UI polish
-- LLM integration with fallback
+- extend analytics from persisted events/attempts
+- then iterate on UI polish and LLM integration with fallback
 
 Avoid large rewrites unless necessary.
 Preserve the current modular structure and API contract.
