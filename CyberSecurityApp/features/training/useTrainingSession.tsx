@@ -75,6 +75,7 @@ type TrainingSessionContextValue = {
     nextDifficulty?: DifficultyLevel
   ) => Promise<void>;
   evaluateAnswer: () => Promise<void>;
+  evaluateWithOptionId: (optionId: string) => Promise<void>;
   runCurrentSelection: () => Promise<void>;
   runRecommendedScenario: () => Promise<void>;
   resetSession: () => void;
@@ -211,6 +212,39 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const evaluateWithOptionId = async (optionId: string) => {
+    if (!scenario || evaluation) {
+      return;
+    }
+
+    setSelectedOptionId(optionId);
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const data = await evaluateScenario({
+        scenario_id: scenario.scenario_id,
+        selected_option_id: optionId,
+      });
+
+      setEvaluation(data);
+      setSessionStats(data.session_stats);
+      if (data.session_stats.recent_events?.length) {
+        applyServerEvents(data.session_stats.recent_events);
+      } else {
+        pushActivity({
+          title: data.is_correct ? 'Answer marked correct' : 'Answer marked incorrect',
+          detail: `${data.score_delta >= 0 ? '+' : ''}${data.score_delta} points applied to the live score.`,
+          tone: data.is_correct ? 'good' : 'warning',
+        });
+      }
+    } catch {
+      setError('Eroare la evaluare. Incearca din nou.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const runCurrentSelection = async () => {
     await startSimulation();
   };
@@ -254,6 +288,7 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
     setDifficulty,
     startSimulation,
     evaluateAnswer,
+    evaluateWithOptionId,
     runCurrentSelection,
     runRecommendedScenario,
     resetSession,

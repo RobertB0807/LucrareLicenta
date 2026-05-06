@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Link } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import type { AttackType, DifficultyLevel } from '@/features/training/types';
 import { TrainingColors } from '@/features/training/ui-theme';
 
 const stats = [
@@ -21,27 +22,33 @@ const stats = [
 
 const scenarios = [
   {
-    id: 'phishing-email-01',
+    id: 'phishing-easy',
     type: 'Phishing Email',
-    title: 'Bank verification alert',
-    risk: 'High',
+    title: 'Cont suspendat — link suspect',
+    risk: 'High' as const,
     icon: 'mail-outline' as keyof typeof Ionicons.glyphMap,
+    attackType: 'phishing' as AttackType,
+    difficulty: 'easy' as DifficultyLevel,
   },
   {
-    id: 'smishing-01',
+    id: 'smishing-easy',
     type: 'SMS Scam',
-    title: 'Package delivery failed',
-    risk: 'Medium',
+    title: 'Colet nelivrat — link de plată',
+    risk: 'Medium' as const,
     icon: 'chatbubble-ellipses-outline' as keyof typeof Ionicons.glyphMap,
+    attackType: 'smishing' as AttackType,
+    difficulty: 'easy' as DifficultyLevel,
   },
   {
-    id: 'vishing-01',
-    type: 'Fake Support',
-    title: 'IT helpdesk callback',
-    risk: 'Critical',
+    id: 'impersonation-medium',
+    type: 'Impersonare',
+    title: 'Manager fals — gift card-uri',
+    risk: 'Critical' as const,
     icon: 'call-outline' as keyof typeof Ionicons.glyphMap,
+    attackType: 'impersonation' as AttackType,
+    difficulty: 'medium' as DifficultyLevel,
   },
-] as const;
+];
 
 export default function DashboardScreen() {
   const cyberScore = 78;
@@ -81,15 +88,15 @@ export default function DashboardScreen() {
         </View>
       </View>
 
-      <Link href={{ pathname: '/chat/[scenarioId]', params: { scenarioId: 'daily' } }} asChild>
+      <Link href={{ pathname: '/chat/[scenarioId]', params: { scenarioId: 'daily', attackType: 'impersonation', difficulty: 'hard' } }} asChild>
         <Pressable style={({ pressed }) => [styles.challengeCard, pressed && styles.pressableFeedback]}>
           <View style={styles.challengeIcon}>
             <Ionicons name="flame" size={22} color="#EFF6FF" />
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.challengeEyebrow}>Daily challenge</Text>
-            <Text style={styles.challengeTitle}>Spot the CEO impersonator</Text>
-            <Text style={styles.challengeMeta}>+50 XP · 4 min</Text>
+            <Text style={styles.challengeTitle}>Detectează impersonarea CFO</Text>
+            <Text style={styles.challengeMeta}>+10 puncte · 5 min</Text>
           </View>
           <Ionicons name="chevron-forward" size={18} color="#DCEBFF" />
         </Pressable>
@@ -123,7 +130,7 @@ export default function DashboardScreen() {
       </View>
       <View style={styles.scenarioList}>
         {scenarios.map((scenario) => (
-          <Link key={scenario.id} href={{ pathname: '/chat/[scenarioId]', params: { scenarioId: scenario.id } }} asChild>
+          <Link key={scenario.id} href={{ pathname: '/chat/[scenarioId]', params: { scenarioId: scenario.id, attackType: scenario.attackType, difficulty: scenario.difficulty } }} asChild>
             <Pressable style={({ pressed }) => [styles.scenarioCard, pressed && styles.pressableFeedback]}>
               <View style={styles.scenarioIcon}>
                 <Ionicons name={scenario.icon} size={18} color={TrainingColors.accentTeal} />

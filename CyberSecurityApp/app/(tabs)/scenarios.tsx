@@ -3,67 +3,134 @@ import { Link } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import type { AttackType, DifficultyLevel } from '@/features/training/types';
 import { TrainingColors } from '@/features/training/ui-theme';
 
 type Scenario = {
   id: string;
-  type: 'Phishing Email' | 'Smishing' | 'Vishing' | 'Spoofed Website' | 'Business Email';
+  type: string;
   title: string;
   description: string;
   difficulty: 'Easy' | 'Medium' | 'Hard';
   risk: 'Medium' | 'High' | 'Critical';
   time: string;
+  attackType: AttackType;
+  backendDifficulty: DifficultyLevel;
+  channel: 'Email' | 'SMS' | 'Voice' | 'Web';
 };
 
 const scenarios: Scenario[] = [
   {
-    id: 'phishing-email-01',
+    id: 'phishing-easy',
     type: 'Phishing Email',
-    title: 'Bank verification alert',
-    description: 'An urgent email asking you to confirm a recent transaction.',
-    difficulty: 'Medium',
-    risk: 'High',
-    time: '5 min',
-  },
-  {
-    id: 'smishing-01',
-    type: 'Smishing',
-    title: 'Failed package delivery',
-    description: 'A text message with a tracking link from an unknown sender.',
+    title: 'Cont suspendat — link suspect',
+    description: 'Un email urgent care îți cere să verifici contul bancar prin link extern.',
     difficulty: 'Easy',
     risk: 'Medium',
     time: '3 min',
+    attackType: 'phishing',
+    backendDifficulty: 'easy',
+    channel: 'Email',
   },
   {
-    id: 'vishing-01',
-    type: 'Vishing',
-    title: 'IT helpdesk callback',
-    description: 'Someone calls claiming your laptop is compromised.',
-    difficulty: 'Hard',
-    risk: 'Critical',
-    time: '7 min',
-  },
-  {
-    id: 'phishing-web-01',
-    type: 'Spoofed Website',
-    title: 'Cloud login impersonation',
-    description: 'A near-perfect login page that is not what it seems.',
+    id: 'phishing-medium',
+    type: 'Phishing Email',
+    title: 'Factură neachitată — portal fals',
+    description: 'Un email despre o factură restantă cu link de autentificare neoficial.',
     difficulty: 'Medium',
     risk: 'High',
     time: '4 min',
+    attackType: 'phishing',
+    backendDifficulty: 'medium',
+    channel: 'Email',
   },
   {
-    id: 'bec-01',
-    type: 'Business Email',
-    title: 'CEO wire transfer request',
-    description: 'Your boss urgently needs a payment processed today.',
+    id: 'phishing-hard',
+    type: 'Phishing Email',
+    title: 'Thread hijacking — document fals',
+    description: 'Un reply în conversație existentă cu un document SharePoint fals.',
     difficulty: 'Hard',
     risk: 'Critical',
-    time: '6 min',
+    time: '5 min',
+    attackType: 'phishing',
+    backendDifficulty: 'hard',
+    channel: 'Email',
+  },
+  {
+    id: 'smishing-easy',
+    type: 'SMS Scam',
+    title: 'Colet nelivrat — link de plată',
+    description: 'Un SMS de la un curier fals care cere plata unei taxe de redirectionare.',
+    difficulty: 'Easy',
+    risk: 'Medium',
+    time: '3 min',
+    attackType: 'smishing',
+    backendDifficulty: 'easy',
+    channel: 'SMS',
+  },
+  {
+    id: 'smishing-medium',
+    type: 'SMS Scam',
+    title: 'Rambursare ANAF — date personale',
+    description: 'Un SMS care promite o rambursare și solicită date bancare.',
+    difficulty: 'Medium',
+    risk: 'High',
+    time: '4 min',
+    attackType: 'smishing',
+    backendDifficulty: 'medium',
+    channel: 'SMS',
+  },
+  {
+    id: 'smishing-hard',
+    type: 'SMS Scam',
+    title: 'Alertă bancară — verificare identitate',
+    description: 'Un SMS urgent de la bancă despre o tranzacție blocată.',
+    difficulty: 'Hard',
+    risk: 'Critical',
+    time: '5 min',
+    attackType: 'smishing',
+    backendDifficulty: 'hard',
+    channel: 'SMS',
+  },
+  {
+    id: 'impersonation-easy',
+    type: 'Impersonare',
+    title: 'Suport IT fals — cod MFA',
+    description: 'Cineva din "IT" cere codul de verificare primit pe telefon.',
+    difficulty: 'Easy',
+    risk: 'Medium',
+    time: '3 min',
+    attackType: 'impersonation',
+    backendDifficulty: 'easy',
+    channel: 'Voice',
+  },
+  {
+    id: 'impersonation-medium',
+    type: 'Impersonare',
+    title: 'Manager fals — gift card-uri',
+    description: 'Un "manager" cere urgent cumpărarea de gift card-uri.',
+    difficulty: 'Medium',
+    risk: 'High',
+    time: '5 min',
+    attackType: 'impersonation',
+    backendDifficulty: 'medium',
+    channel: 'Voice',
+  },
+  {
+    id: 'impersonation-hard',
+    type: 'Impersonare',
+    title: 'CFO fals — transfer urgent',
+    description: 'Un apel de la "CFO" care cere un transfer bancar urgent și discret.',
+    difficulty: 'Hard',
+    risk: 'Critical',
+    time: '7 min',
+    attackType: 'impersonation',
+    backendDifficulty: 'hard',
+    channel: 'Voice',
   },
 ];
 
-const filters = ['All', 'Email', 'SMS', 'Voice', 'Web'] as const;
+const filters = ['All', 'Email', 'SMS', 'Voice'] as const;
 
 export default function ScenariosScreen() {
   const [query, setQuery] = useState('');
@@ -72,13 +139,8 @@ export default function ScenariosScreen() {
   const filtered = useMemo(() => {
     const q = query.toLowerCase().trim();
     return scenarios.filter((scenario) => {
-      const matchesFilter =
-        activeFilter === 'All' ||
-        (activeFilter === 'Email' && (scenario.type === 'Phishing Email' || scenario.type === 'Business Email')) ||
-        (activeFilter === 'SMS' && scenario.type === 'Smishing') ||
-        (activeFilter === 'Voice' && scenario.type === 'Vishing') ||
-        (activeFilter === 'Web' && scenario.type === 'Spoofed Website');
-      const text = `${scenario.title} ${scenario.description}`.toLowerCase();
+      const matchesFilter = activeFilter === 'All' || scenario.channel === activeFilter;
+      const text = `${scenario.title} ${scenario.description} ${scenario.type}`.toLowerCase();
       return matchesFilter && text.includes(q);
     });
   }, [query, activeFilter]);
@@ -107,13 +169,13 @@ export default function ScenariosScreen() {
       </View>
 
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filters}>
-        {filters.map((f, i) => {
+        {filters.map((f) => {
           const active = f === activeFilter;
           return (
             <Pressable
               key={f}
               onPress={() => setActiveFilter(f)}
-              style={[styles.filter, active || (i === 0 && activeFilter === 'All') ? styles.filterActive : null]}>
+              style={[styles.filter, active ? styles.filterActive : null]}>
               <Text style={[styles.filterText, active ? styles.filterTextActive : null]}>{f}</Text>
             </Pressable>
           );
@@ -122,7 +184,17 @@ export default function ScenariosScreen() {
 
       <View style={styles.list}>
         {filtered.map((scenario) => (
-          <Link key={scenario.id} href={{ pathname: '/chat/[scenarioId]', params: { scenarioId: scenario.id } }} asChild>
+          <Link
+            key={scenario.id}
+            href={{
+              pathname: '/chat/[scenarioId]',
+              params: {
+                scenarioId: scenario.id,
+                attackType: scenario.attackType,
+                difficulty: scenario.backendDifficulty,
+              },
+            }}
+            asChild>
             <Pressable style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}>
               <View style={styles.cardTop}>
                 <Text style={styles.cardType}>{scenario.type}</Text>

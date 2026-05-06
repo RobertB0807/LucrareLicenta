@@ -1,106 +1,172 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Link, useLocalSearchParams } from 'expo-router';
+import { Link, router } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { TrainingColors } from '@/features/training/ui-theme';
-
-const config = {
-  right: {
-    title: 'Excellent decision',
-    badge: 'Threat neutralized',
-    score: '+25 XP',
-    body: "You verified through a trusted channel instead of the link the attacker sent. That's exactly the right move.",
-    color: TrainingColors.accentTeal,
-    icon: 'checkmark-circle' as const,
-  },
-  wrong: {
-    title: 'You fell for it',
-    badge: 'Credentials compromised',
-    score: '-15 XP',
-    body: 'The link looked official but pointed to a spoofed domain. In the real world, your password would now be in attacker hands.',
-    color: TrainingColors.accentDanger,
-    icon: 'close-circle' as const,
-  },
-  neutral: {
-    title: 'Cautious — but not safe',
-    badge: 'Risk reduced, not removed',
-    score: '+5 XP',
-    body: 'Asking for their employee ID is good instinct, but a skilled attacker will improvise. Always end the conversation and verify independently.',
-    color: TrainingColors.accentAmber,
-    icon: 'warning' as const,
-  },
-};
-
-const redFlags = [
-  { label: 'Urgent 10-minute deadline', severity: 'High' },
-  { label: 'Suspicious domain: secur3-bank-verify.com', severity: 'Critical' },
-  { label: 'Unsolicited contact about charges', severity: 'Medium' },
-  { label: 'Requesting credentials over chat', severity: 'High' },
-];
+import { useTrainingSession } from '@/features/training/useTrainingSession';
 
 export default function FeedbackScreen() {
-  const { scenarioId, verdict } = useLocalSearchParams<{ scenarioId: string; verdict?: 'right' | 'wrong' | 'neutral' }>();
-  const key = verdict && verdict in config ? verdict : 'neutral';
-  const details = config[key];
+  const { evaluation, scenario, stats } = useTrainingSession();
+
+  // Determine verdict from real evaluation
+  const isCorrect = evaluation?.is_correct ?? false;
+  const scoreDelta = evaluation?.score_delta ?? 0;
+  const explanation = evaluation?.explanation ?? 'Nu există date de evaluare.';
+  const redFlags = scenario?.red_flags ?? [];
+  const recommendation = evaluation?.recommendation;
+
+  // Dynamic hero config based on real result
+  const heroConfig = isCorrect
+    ? {
+        title: 'Decizie excelentă!',
+        badge: 'Amenințare neutralizată',
+        color: TrainingColors.accentTeal,
+        icon: 'checkmark-circle' as const,
+      }
+    : scoreDelta < 0
+      ? {
+          title: 'Ai căzut în capcană',
+          badge: 'Credențiale compromise',
+          color: TrainingColors.accentDanger,
+          icon: 'close-circle' as const,
+        }
+      : {
+          title: 'Precaut — dar nu în siguranță',
+          badge: 'Risc redus, nu eliminat',
+          color: TrainingColors.accentAmber,
+          icon: 'warning' as const,
+        };
+
+  // Format score display
+  const scoreDisplay = scoreDelta >= 0 ? `+${scoreDelta} puncte` : `${scoreDelta} puncte`;
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
-      <View style={[styles.hero, { borderColor: details.color }]}>
-        <View style={[styles.heroIcon, { backgroundColor: details.color }]}>
-          <Ionicons name={details.icon} size={26} color="#EFF6FF" />
+      {/* Hero section */}
+      <View style={[styles.hero, { borderColor: heroConfig.color }]}>
+        <View style={[styles.heroIcon, { backgroundColor: heroConfig.color }]}>
+          <Ionicons name={heroConfig.icon} size={26} color="#EFF6FF" />
         </View>
         <View style={{ flex: 1 }}>
-          <Text style={styles.heroBadge}>{details.badge}</Text>
-          <Text style={styles.heroTitle}>{details.title}</Text>
+          <Text style={styles.heroBadge}>{heroConfig.badge}</Text>
+          <Text style={styles.heroTitle}>{heroConfig.title}</Text>
           <View style={styles.scorePill}>
             <Ionicons name="trophy-outline" size={12} color="#EFF6FF" />
-            <Text style={styles.scoreText}>{details.score}</Text>
+            <Text style={styles.scoreText}>{scoreDisplay}</Text>
           </View>
         </View>
       </View>
 
+      {/* AI Debrief — real explanation */}
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <Ionicons name="sparkles" size={14} color={TrainingColors.accentTeal} />
-          <Text style={styles.sectionEyebrow}>AI debrief</Text>
+          <Text style={styles.sectionEyebrow}>Explicație AI</Text>
         </View>
-        <Text style={styles.sectionText}>{details.body}</Text>
+        <Text style={styles.sectionText}>{explanation}</Text>
       </View>
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Red flags in this attack</Text>
-        <View style={styles.flags}>
-          {redFlags.map((flag) => (
-            <View key={flag.label} style={styles.flagRow}>
-              <View
-                style={[
-                  styles.flagIcon,
-                  flag.severity === 'Critical'
-                    ? styles.flagCritical
-                    : flag.severity === 'High'
-                      ? styles.flagHigh
-                      : styles.flagMedium,
-                ]}>
-                <Ionicons name="alert" size={13} color={TrainingColors.accentDanger} />
+      {/* Red Flags — real data */}
+      {redFlags.length > 0 ? (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Red flags în acest atac</Text>
+          <View style={styles.flags}>
+            {redFlags.map((flag, index) => (
+              <View key={flag} style={styles.flagRow}>
+                <View
+                  style={[
+                    styles.flagIcon,
+                    index === 0
+                      ? styles.flagCritical
+                      : index === 1
+                        ? styles.flagHigh
+                        : styles.flagMedium,
+                  ]}>
+                  <Ionicons name="alert" size={13} color={TrainingColors.accentDanger} />
+                </View>
+                <Text style={styles.flagLabel}>{flag}</Text>
               </View>
-              <Text style={styles.flagLabel}>{flag.label}</Text>
-              <View style={styles.flagPill}>
-                <Text style={styles.flagPillText}>{flag.severity}</Text>
-              </View>
-            </View>
-          ))}
+            ))}
+          </View>
+        </View>
+      ) : null}
+
+      {/* Session stats summary */}
+      <View style={styles.statsCard}>
+        <Text style={styles.statsTitle}>Sesiune curentă</Text>
+        <View style={styles.statsGrid}>
+          <View style={styles.statItem}>
+            <Text style={styles.statValue}>{stats.totalScore}</Text>
+            <Text style={styles.statLabel}>Scor</Text>
+          </View>
+          <View style={styles.statItem}>
+            <Text style={styles.statValue}>{stats.totalAttempts}</Text>
+            <Text style={styles.statLabel}>Încercări</Text>
+          </View>
+          <View style={styles.statItem}>
+            <Text style={styles.statValue}>{stats.accuracy}%</Text>
+            <Text style={styles.statLabel}>Acuratețe</Text>
+          </View>
+          <View style={styles.statItem}>
+            <Text style={styles.statValue}>{stats.correctStreak}</Text>
+            <Text style={styles.statLabel}>Streak</Text>
+          </View>
         </View>
       </View>
 
+      {/* Recommendation */}
+      {recommendation ? (
+        <View style={styles.recommendCard}>
+          <View style={styles.recommendIcon}>
+            <Ionicons name="bulb-outline" size={16} color={TrainingColors.accentTeal} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.recommendEyebrow}>Recomandare</Text>
+            <Text style={styles.recommendText}>{recommendation.reason}</Text>
+            <Text style={styles.recommendMeta}>
+              {recommendation.attack_type} · {recommendation.difficulty}
+            </Text>
+          </View>
+        </View>
+      ) : null}
+
+      {/* Actions */}
       <View style={styles.actions}>
-        <Link href="/(tabs)/scenarios" asChild>
-          <Pressable style={({ pressed }) => [styles.primaryAction, pressed && styles.actionPressed]}>
-            <Text style={styles.primaryActionText}>Next scenario</Text>
+        {recommendation ? (
+          <Pressable
+            style={({ pressed }) => [styles.primaryAction, pressed && styles.actionPressed]}
+            onPress={() => {
+              router.push({
+                pathname: '/chat/[scenarioId]',
+                params: {
+                  scenarioId: `rec-${Date.now()}`,
+                  attackType: recommendation.attack_type,
+                  difficulty: recommendation.difficulty,
+                },
+              });
+            }}>
+            <Text style={styles.primaryActionText}>Scenariu recomandat</Text>
           </Pressable>
-        </Link>
-        <Link href={{ pathname: '/chat/[scenarioId]', params: { scenarioId } }} asChild>
-          <Pressable style={({ pressed }) => [styles.secondaryAction, pressed && styles.actionPressed]}>
-            <Text style={styles.secondaryActionText}>Retry simulation</Text>
+        ) : null}
+
+        <Pressable
+          style={({ pressed }) => [styles.secondaryAction, pressed && styles.actionPressed]}
+          onPress={() => {
+            router.push({
+              pathname: '/chat/[scenarioId]',
+              params: {
+                scenarioId: `retry-${Date.now()}`,
+                attackType: scenario?.attack_type ?? 'phishing',
+                difficulty: scenario?.difficulty ?? 'easy',
+              },
+            });
+          }}>
+          <Text style={styles.secondaryActionText}>Reîncearcă simularea</Text>
+        </Pressable>
+
+        <Link href="/(tabs)/scenarios" asChild>
+          <Pressable style={({ pressed }) => [styles.tertiaryAction, pressed && styles.actionPressed]}>
+            <Text style={styles.tertiaryActionText}>Înapoi la scenarii</Text>
           </Pressable>
         </Link>
       </View>
@@ -169,14 +235,51 @@ const styles = StyleSheet.create({
   flagHigh: { backgroundColor: 'rgba(245,197,107,0.2)' },
   flagMedium: { backgroundColor: 'rgba(69,224,177,0.15)' },
   flagLabel: { flex: 1, color: TrainingColors.textPrimary, fontSize: 13, fontWeight: '600' },
-  flagPill: {
-    borderRadius: 999,
+  statsCard: {
+    borderRadius: 18,
     borderWidth: 1,
-    borderColor: TrainingColors.borderStrong,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    borderColor: TrainingColors.border,
+    backgroundColor: TrainingColors.panel,
+    padding: 14,
+    gap: 10,
   },
-  flagPillText: { color: TrainingColors.textSecondary, textTransform: 'uppercase', fontSize: 9, letterSpacing: 0.8, fontWeight: '700' },
+  statsTitle: { color: TrainingColors.textPrimary, fontSize: 14, fontWeight: '800' },
+  statsGrid: { flexDirection: 'row', justifyContent: 'space-between' },
+  statItem: { alignItems: 'center', gap: 2 },
+  statValue: { color: TrainingColors.textPrimary, fontSize: 22, fontWeight: '800' },
+  statLabel: { color: TrainingColors.textMuted, fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.6 },
+  recommendCard: {
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(69,224,177,0.3)',
+    backgroundColor: 'rgba(69,224,177,0.08)',
+    padding: 14,
+    flexDirection: 'row',
+    gap: 10,
+  },
+  recommendIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 11,
+    backgroundColor: 'rgba(69,224,177,0.16)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  recommendEyebrow: {
+    color: TrainingColors.accentTeal,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  recommendText: { color: TrainingColors.textPrimary, fontSize: 13, lineHeight: 18, marginTop: 2 },
+  recommendMeta: {
+    color: TrainingColors.textMuted,
+    fontSize: 11,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    marginTop: 4,
+  },
   actions: { marginTop: 'auto', gap: 8, paddingTop: 10 },
   primaryAction: {
     borderRadius: 16,
@@ -196,5 +299,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   secondaryActionText: { color: TrainingColors.textPrimary, textAlign: 'center', fontSize: 14, fontWeight: '700' },
+  tertiaryAction: {
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  tertiaryActionText: { color: TrainingColors.textMuted, textAlign: 'center', fontSize: 13 },
   actionPressed: { opacity: 0.92 },
 });

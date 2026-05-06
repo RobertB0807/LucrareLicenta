@@ -1,94 +1,215 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
-import { useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import type { AttackType, DifficultyLevel } from '@/features/training/types';
 import { TrainingColors } from '@/features/training/ui-theme';
+import { useTrainingSession } from '@/features/training/useTrainingSession';
 
 type Msg =
   | { id: string; from: 'attacker'; kind: 'text'; text: string }
   | { id: string; from: 'attacker'; kind: 'link'; text: string; url: string }
-  | { id: string; from: 'user'; kind: 'text'; text: string };
+  | { id: string; from: 'user'; kind: 'text'; text: string }
+  | { id: string; from: 'system'; kind: 'text'; text: string };
 
-const initialScript: Msg[] = [
-  {
-    id: 'm1',
-    from: 'attacker',
-    kind: 'text',
-    text: "Hi! This is Mark from SecureBank Fraud Prevention. We've detected an unusual $842.00 charge on your account.",
-  },
-  {
-    id: 'm2',
-    from: 'attacker',
-    kind: 'text',
-    text: "We need to verify your identity within the next 10 minutes or we'll have to freeze your account for safety. ⏱️",
-  },
-  {
-    id: 'm3',
-    from: 'attacker',
-    kind: 'link',
-    text: 'Please confirm your details here:',
-    url: 'secur3-bank-verify.com/login',
-  },
-];
+const CHANNEL_CONFIG: Record<string, { name: string; icon: keyof typeof Ionicons.glyphMap; subtitle: string }> = {
+  email: { name: 'Email Suspect', icon: 'mail-outline', subtitle: 'inbox · simulare' },
+  sms: { name: 'SMS Suspect', icon: 'chatbubble-ellipses-outline', subtitle: 'mesaj · simulare' },
+  chat: { name: 'Chat Suspect', icon: 'chatbubbles-outline', subtitle: 'online · simulare' },
+  phone: { name: 'Apel Suspect', icon: 'call-outline', subtitle: 'apel · simulare' },
+};
 
-const choices = [
-  { id: 'c1', label: 'Click the link and log in', verdict: 'wrong' as const },
-  { id: 'c2', label: 'Ask for their employee ID', verdict: 'neutral' as const },
-  { id: 'c3', label: 'Hang up & call my bank directly', verdict: 'right' as const },
-];
+/** Split a long attacker message into multiple bubbles by sentence for a more natural chat feel. */
+function splitIntoBubbles(message: string): string[] {
+  // Split on ". " while keeping the period, but avoid splitting on short fragments
+  const sentences = message.split(/(?<=\.)\s+/);
+  const bubbles: string[] = [];
+  let current = '';
+
+  for (const sentence of sentences) {
+    if (current.length + sentence.length > 120 && current.length > 0) {
+      bubbles.push(current.trim());
+      current = sentence;
+    } else {
+      current = current ? `${current} ${sentence}` : sentence;
+    }
+  }
+  if (current.trim()) {
+    bubbles.push(current.trim());
+  }
+
+  return bubbles.length > 0 ? bubbles : [message];
+}
+
+/** Detect if a message contains a URL-like pattern and extract it */
+function extractUrl(text: string): { cleanText: string; url: string } | null {
+  const urlPattern = /\b([a-zA-Z0-9-]+\.[a-zA-Z0-9.-]+(?:\/[^\s]*)?)\b/;
+  const match = text.match(urlPattern);
+  if (match && match[1].includes('.') && !match[1].startsWith('Q') && match[1].length > 5) {
+    const url = match[1];
+    const cleanText = text.replace(url, '').trim().replace(/\s{2,}/g, ' ');
+    return { cleanText: cleanText || text, url };
+  }
+  return null;
+}
 
 export default function ChatScenarioScreen() {
-  const { scenarioId } = useLocalSearchParams<{ scenarioId: string }>();
+  const { attackType, difficulty } = useLocalSearchParams<{
+    scenarioId: string;
+    attackType?: string;
+    difficulty?: string;
+  }>();
+
+  const {
+    scenario,
+    isLoading,
+    error,
+    startSimulation,
+    evaluateWithOptionId,
+    evaluation,
+  } = useTrainingSession();
+
   const [messages, setMessages] = useState<Msg[]>([]);
-  const [typing, setTyping] = useState(true);
-  const [done, setDone] = useState(false);
-  const [draft, setDraft] = useState('');
+  const [typing, setTyping] = useState(false);
+  const [scriptDone, setScriptDone] = useState(false);
+  const [evaluating, setEvaluating] = useState(false);
+  const hasGeneratedRef = useRef(false);
+  const scrollRef = useRef<ScrollView>(null);
 
+  // Generate scenario on mount
   useEffect(() => {
-    let cancelled = false;
-    let i = 0;
+    if (hasGeneratedRef.current) return;
+    hasGeneratedRef.current = true;
 
-    const run = () => {
-      if (cancelled) return;
-      if (i >= initialScript.length) {
+    const at = (attackType as AttackType) || 'phishing';
+    const diff = (difficulty as DifficultyLevel) || 'easy';
+    startSimulation(at, diff);
+  }, []);
+
+  // When scenario arrives from backend, animate the attacker messages
+  useEffect(() => {
+    if (!scenario || messages.length > 0) return;
+
+    const bubbleTexts = splitIntoBubbles(scenario.attacker_message);
+    const attackerMessages: Msg[] = [];
+
+    for (let i = 0; i < bubbleTexts.length; i++) {
+      const text = bubbleTexts[i];
+      const urlData = extractUrl(text);
+
+      if (urlData) {
+        attackerMessages.push({
+          id: `atk-${i}`,
+          from: 'attacker',
+          kind: 'link',
+          text: urlData.cleanText,
+          url: urlData.url,
+        });
+      } else {
+        attackerMessages.push({
+          id: `atk-${i}`,
+          from: 'attacker',
+          kind: 'text',
+          text,
+        });
+      }
+    }
+
+    // Animate messages one by one
+    let cancelled = false;
+    let idx = 0;
+
+    const showNext = () => {
+      if (cancelled || idx >= attackerMessages.length) {
         setTyping(false);
-        setDone(true);
+        setScriptDone(true);
         return;
       }
       setTyping(true);
-      const delay = 1100 + Math.random() * 700;
+      const currentIdx = idx;
+      const delay = 900 + Math.random() * 600;
       setTimeout(() => {
         if (cancelled) return;
-        setMessages((m) => [...m, initialScript[i]]);
-        i += 1;
+        const msg = attackerMessages[currentIdx];
+        if (msg) {
+          setMessages((m) => [...m, msg]);
+        }
+        idx += 1;
         setTyping(false);
-        setTimeout(run, 450);
+        setTimeout(showNext, 350);
       }, delay);
     };
 
-    run();
+    showNext();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [scenario]);
 
-  const onChoice = (verdict: 'right' | 'wrong' | 'neutral', label: string) => {
+  // After evaluation completes, navigate to feedback
+  useEffect(() => {
+    if (evaluation && evaluating) {
+      setEvaluating(false);
+      setTimeout(() => {
+        router.push({
+          pathname: '/feedback/[scenarioId]',
+          params: { scenarioId: scenario?.scenario_id ?? 'unknown' },
+        });
+      }, 600);
+    }
+  }, [evaluation, evaluating]);
+
+  const onChoice = async (optionId: string, label: string) => {
+    // Add user message
     setMessages((m) => [...m, { id: `u-${Date.now()}`, from: 'user', kind: 'text', text: label }]);
-    setTimeout(() => {
-      router.push({
-        pathname: '/feedback/[scenarioId]',
-        params: { scenarioId: scenarioId ?? 'unknown', verdict },
-      });
-    }, 800);
+    setEvaluating(true);
+
+    // Evaluate via backend using the direct method
+    await evaluateWithOptionId(optionId);
   };
 
-  const send = () => {
-    const text = draft.trim();
-    if (!text) return;
-    setMessages((m) => [...m, { id: `u-${Date.now()}`, from: 'user', kind: 'text', text }]);
-    setDraft('');
-  };
+  const channelConfig = useMemo(() => {
+    const channel = scenario?.channel ?? 'email';
+    return CHANNEL_CONFIG[channel] ?? CHANNEL_CONFIG.email;
+  }, [scenario?.channel]);
+
+  // Scroll to bottom when messages change
+  useEffect(() => {
+    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
+  }, [messages, typing]);
+
+  // Loading state
+  if (isLoading && !scenario) {
+    return (
+      <View style={[styles.screen, styles.centered]}>
+        <ActivityIndicator size="large" color={TrainingColors.accentTeal} />
+        <Text style={styles.loadingText}>Se generează scenariul...</Text>
+      </View>
+    );
+  }
+
+  // Error state
+  if (error && !scenario) {
+    return (
+      <View style={[styles.screen, styles.centered]}>
+        <View style={styles.errorCard}>
+          <Ionicons name="alert-circle" size={32} color={TrainingColors.accentDanger} />
+          <Text style={styles.errorText}>{error}</Text>
+          <Pressable
+            style={styles.retryButton}
+            onPress={() => {
+              hasGeneratedRef.current = false;
+              const at = (attackType as AttackType) || 'phishing';
+              const diff = (difficulty as DifficultyLevel) || 'easy';
+              startSimulation(at, diff);
+            }}>
+            <Text style={styles.retryText}>Încearcă din nou</Text>
+          </Pressable>
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.screen}>
@@ -97,14 +218,14 @@ export default function ChatScenarioScreen() {
           <Ionicons name="arrow-back" size={18} color={TrainingColors.textPrimary} />
         </Pressable>
         <View style={styles.avatar}>
-          <Ionicons name="warning" size={18} color="#FDECEC" />
+          <Ionicons name={channelConfig.icon} size={18} color="#FDECEC" />
         </View>
         <View style={{ flex: 1 }}>
-          <Text style={styles.headerTitle}>SecureBank Support</Text>
-          <Text style={styles.headerSubtitle}>online · simulation</Text>
+          <Text style={styles.headerTitle}>{channelConfig.name}</Text>
+          <Text style={styles.headerSubtitle}>{channelConfig.subtitle}</Text>
         </View>
-        <View style={styles.headerButton}>
-          <Ionicons name="ellipsis-vertical" size={16} color={TrainingColors.textPrimary} />
+        <View style={styles.difficultyBadge}>
+          <Text style={styles.difficultyText}>{scenario?.difficulty ?? difficulty ?? '—'}</Text>
         </View>
       </View>
 
@@ -113,8 +234,8 @@ export default function ChatScenarioScreen() {
         <Text style={styles.bannerText}>AI Simulation · responses are not real</Text>
       </View>
 
-      <ScrollView style={styles.messages} contentContainerStyle={styles.messageContent}>
-        {messages.map((m) => (
+      <ScrollView ref={scrollRef} style={styles.messages} contentContainerStyle={styles.messageContent}>
+        {messages.filter(Boolean).map((m) => (
           <MessageBubble key={m.id} msg={m} />
         ))}
         {typing ? (
@@ -129,29 +250,27 @@ export default function ChatScenarioScreen() {
       </ScrollView>
 
       <View style={styles.composer}>
-        {done ? (
+        {evaluating || (evaluation && !evaluating) ? (
+          <View style={styles.evaluatingContainer}>
+            <ActivityIndicator size="small" color={TrainingColors.accentTeal} />
+            <Text style={styles.evaluatingText}>Se evaluează răspunsul...</Text>
+          </View>
+        ) : scriptDone && scenario ? (
           <View style={styles.choices}>
-            <Text style={styles.choicesLabel}>How do you respond?</Text>
-            {choices.map((choice) => (
-              <Pressable key={choice.id} onPress={() => onChoice(choice.verdict, choice.label)} style={styles.choiceButton}>
-                <Text style={styles.choiceText}>{choice.label}</Text>
+            <Text style={styles.choicesLabel}>Cum răspunzi?</Text>
+            {scenario.options.map((option) => (
+              <Pressable
+                key={option.id}
+                onPress={() => onChoice(option.id, option.text)}
+                style={({ pressed }) => [styles.choiceButton, pressed && styles.choicePressed]}>
+                <Text style={styles.choiceText}>{option.text}</Text>
                 <Ionicons name="send" size={13} color={TrainingColors.accentTeal} />
               </Pressable>
             ))}
           </View>
         ) : (
-          <View style={styles.inputRow}>
-            <TextInput
-              value={draft}
-              onChangeText={setDraft}
-              onSubmitEditing={send}
-              placeholder="Type a reply..."
-              placeholderTextColor={TrainingColors.textMuted}
-              style={styles.input}
-            />
-            <Pressable onPress={send} style={styles.sendButton}>
-              <Ionicons name="send" size={15} color="#EFF6FF" />
-            </Pressable>
+          <View style={styles.waitingContainer}>
+            <Text style={styles.waitingText}>Se încarcă mesajele...</Text>
           </View>
         )}
       </View>
@@ -166,6 +285,13 @@ function MessageBubble({ msg }: { msg: Msg }) {
         <View style={styles.userBubble}>
           <Text style={styles.userText}>{msg.text}</Text>
         </View>
+      </View>
+    );
+  }
+  if (msg.from === 'system') {
+    return (
+      <View style={styles.systemRow}>
+        <Text style={styles.systemText}>{msg.text}</Text>
       </View>
     );
   }
@@ -193,6 +319,27 @@ function MessageBubble({ msg }: { msg: Msg }) {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: TrainingColors.pageBase },
+  centered: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32 },
+  loadingText: { color: TrainingColors.textSecondary, marginTop: 14, fontSize: 14 },
+  errorCard: {
+    alignItems: 'center',
+    gap: 12,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: TrainingColors.border,
+    backgroundColor: TrainingColors.panel,
+    padding: 24,
+  },
+  errorText: { color: TrainingColors.textPrimary, fontSize: 13, textAlign: 'center', lineHeight: 19 },
+  retryButton: {
+    borderRadius: 12,
+    backgroundColor: TrainingColors.buttonPrimary,
+    borderWidth: 1,
+    borderColor: TrainingColors.buttonPrimaryBorder,
+    paddingHorizontal: 22,
+    paddingVertical: 11,
+  },
+  retryText: { color: '#EFF6FF', fontSize: 13, fontWeight: '700' },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -224,6 +371,21 @@ const styles = StyleSheet.create({
   },
   headerTitle: { color: TrainingColors.textPrimary, fontSize: 15, fontWeight: '700' },
   headerSubtitle: { color: TrainingColors.accentTeal, fontSize: 10 },
+  difficultyBadge: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: TrainingColors.border,
+    backgroundColor: TrainingColors.panelAlt,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  difficultyText: {
+    color: TrainingColors.accentAmber,
+    fontSize: 10,
+    textTransform: 'uppercase',
+    fontWeight: '700',
+    letterSpacing: 0.8,
+  },
   banner: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -274,6 +436,8 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   userText: { color: '#EFF6FF', fontSize: 14, lineHeight: 19 },
+  systemRow: { alignItems: 'center', paddingVertical: 4 },
+  systemText: { color: TrainingColors.textMuted, fontSize: 11, fontStyle: 'italic' },
   typingBubble: {
     borderRadius: 16,
     borderBottomLeftRadius: 7,
@@ -320,27 +484,16 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     gap: 8,
   },
+  choicePressed: { opacity: 0.85, borderColor: TrainingColors.accentTeal },
   choiceText: { color: TrainingColors.textPrimary, fontSize: 13, fontWeight: '700', flex: 1 },
-  inputRow: {
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: TrainingColors.border,
-    backgroundColor: TrainingColors.panelAlt,
+  evaluatingContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
-  input: { flex: 1, color: TrainingColors.textPrimary, fontSize: 14, paddingVertical: 6 },
-  sendButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 11,
-    backgroundColor: TrainingColors.buttonPrimary,
-    borderWidth: 1,
-    borderColor: TrainingColors.buttonPrimaryBorder,
-    alignItems: 'center',
     justifyContent: 'center',
+    gap: 10,
+    paddingVertical: 12,
   },
+  evaluatingText: { color: TrainingColors.textSecondary, fontSize: 13 },
+  waitingContainer: { alignItems: 'center', paddingVertical: 12 },
+  waitingText: { color: TrainingColors.textMuted, fontSize: 12 },
 });
