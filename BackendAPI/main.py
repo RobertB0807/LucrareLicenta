@@ -1,13 +1,23 @@
 from __future__ import annotations
 
-from typing import Literal
-from uuid import uuid4
-
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, NonNegativeInt
 
-app = FastAPI(title="CyberSecurity Training API", version="0.1.0")
+from db import init_db
+from scenario_models import AttackType, DifficultyLevel
+from training_service import (
+    EvaluateScenarioResponse,
+    GenerateScenarioResponse,
+    SessionEventsResponse,
+    SessionSnapshotResponse,
+    evaluate_scenario as evaluate_training_scenario,
+    generate_scenario as generate_training_scenario,
+    get_session_events as get_training_session_events,
+    get_session_snapshot as get_training_session_snapshot,
+)
+
+app = FastAPI(title="CyberSecurity Training API", version="0.2.0")
 
 # Keep CORS open for local MVP development.
 app.add_middleware(
@@ -18,27 +28,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-scenario_answers: dict[str, str] = {}
-
 
 class GenerateScenarioRequest(BaseModel):
-    attack_type: Literal["phishing", "smishing", "impersonation"] = "phishing"
-    difficulty: Literal["easy", "medium", "hard"] = "easy"
-
-
-class ScenarioOption(BaseModel):
-    id: str
-    text: str
-
-
-class GenerateScenarioResponse(BaseModel):
-    scenario_id: str
-    attack_type: str
-    difficulty: str
-    channel: str
-    attacker_message: str
-    options: list[ScenarioOption]
-    red_flags: list[str]
+    attack_type: AttackType = "phishing"
+    difficulty: DifficultyLevel = "easy"
+    session_id: str | None = None
 
 
 class EvaluateScenarioRequest(BaseModel):
@@ -46,10 +40,9 @@ class EvaluateScenarioRequest(BaseModel):
     selected_option_id: str = Field(..., min_length=1)
 
 
-class EvaluateScenarioResponse(BaseModel):
-    is_correct: bool
-    score_delta: int
-    explanation: str
+@app.on_event("startup")
+def on_startup() -> None:
+    init_db()
 
 
 @app.get("/health")
@@ -59,56 +52,40 @@ def health() -> dict[str, str]:
 
 @app.post("/scenario/generate", response_model=GenerateScenarioResponse)
 def generate_scenario(payload: GenerateScenarioRequest) -> GenerateScenarioResponse:
-    scenario_id = str(uuid4())
-
-    options = [
-        ScenarioOption(id="click", text="Dau click pe link si completez datele cerute."),
-        ScenarioOption(id="reply", text="Raspund la mesaj si cer mai multe detalii."),
-        ScenarioOption(id="report", text="Nu interactionez cu linkul si raportez mesajul."),
-    ]
-
-    scenario_answers[scenario_id] = "report"
-
-    return GenerateScenarioResponse(
-        scenario_id=scenario_id,
+    return generate_training_scenario(
         attack_type=payload.attack_type,
         difficulty=payload.difficulty,
-        channel="email",
-        attacker_message=(
-            "Subiect: Actiune urgenta: contul tau va fi suspendat in 30 de minute. "
-            "Acceseaza imediat secure-banking-check.com pentru verificare."
-        ),
-        options=options,
-        red_flags=[
-            "Urgenta artificiala (presiune de timp)",
-            "Domeniu suspect, diferit de cel oficial",
-            "Solicitare de verificare prin link extern",
-        ],
+        session_id=payload.session_id,
     )
 
 
 @app.post("/scenario/evaluate", response_model=EvaluateScenarioResponse)
 def evaluate_scenario(payload: EvaluateScenarioRequest) -> EvaluateScenarioResponse:
-    if payload.scenario_id not in scenario_answers:
-        raise HTTPException(status_code=404, detail="Scenario not found")
-
-    correct_option_id = scenario_answers[payload.scenario_id]
-    is_correct = payload.selected_option_id == correct_option_id
-
-    if is_correct:
-        return EvaluateScenarioResponse(
-            is_correct=True,
-            score_delta=10,
-            explanation=(
-                "Corect. Nu ai interactionat cu linkul suspect si ai ales raportarea mesajului."
-            ),
+    try:
+        return evaluate_training_scenario(
+            scenario_id=payload.scenario_id,
+            selected_option_id=payload.selected_option_id,
         )
+    except KeyError as exc:
+        detail = exc.args[0] if exc.args else "Scenario not found"
+        raise HTTPException(status_code=404, detail=detail) from exc
 
-    return EvaluateScenarioResponse(
-        is_correct=False,
-        score_delta=0,
-        explanation=(
-            "Alegerea nu este sigura. Mesajul foloseste tactici clasice de phishing: urgenta falsa "
-            "si link neoficial."
-        ),
-    )
+
+@app.get("/session/{session_id}", response_model=SessionSnapshotResponse)
+def get_session_snapshot(session_id: str) -> SessionSnapshotResponse:
+    snapshot = get_training_session_snapshot(session_id)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return snapshot
+
+
+@app.get("/session/{session_id}/events", response_model=SessionEventsResponse)
+def get_session_events(
+    session_id: str,
+    limit: int = Query(default=20, gt=0, le=100),
+    offset: NonNegativeInt = 0,
+) -> SessionEventsResponse:
+    events = get_training_session_events(session_id, limit=limit, offset=offset)
+    if events is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return events
