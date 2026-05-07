@@ -7,19 +7,19 @@ import { TrainingColors } from '@/features/training/ui-theme';
 type Msg = { id: string; role: 'user' | 'assistant'; text: string };
 
 const suggestions = [
-  'How do I spot a phishing email?',
-  "What's the difference between phishing and smishing?",
-  'Why are urgent messages dangerous?',
-  'How can I verify a suspicious caller?',
+  'Cum identific un email de phishing?',
+  'Care este diferența dintre phishing și smishing?',
+  'De ce sunt periculoase mesajele urgente?',
+  'Cum verific un apelant suspect?',
 ];
 
 export default function AssistantScreen() {
   const [messages, setMessages] = useState<Msg[]>([
-    {
-      id: 's1',
-      role: 'assistant',
-      text: "Hey 👋 I'm Sentinel, your AI defense coach. Ask me anything about phishing, smishing, vishing, or how to stay safe online.",
-    },
+      {
+        id: 's1',
+        role: 'assistant',
+        text: 'Salut 👋 Sunt Sentinel, coach-ul tău AI de apărare. Întreabă-mă orice despre phishing, smishing, vishing sau cum să rămâi în siguranță online.',
+      },
   ]);
   const [draft, setDraft] = useState('');
   const [thinking, setThinking] = useState(false);
@@ -38,7 +38,7 @@ export default function AssistantScreen() {
         {
           id: `a-${Date.now()}`,
           role: 'assistant',
-          text: 'Great question. Look for urgency, mismatched domains, generic greetings, and unusual sender addresses. When unsure - never click. Open the official app or website directly.',
+           text: 'Întrebare foarte bună. Urmărește urgența artificială, domenii care nu se potrivesc, formule generice de adresare și adrese neobișnuite ale expeditorului. Dacă ai dubii, nu da click. Intră direct în aplicația sau site-ul oficial.',
         },
       ]);
       setThinking(false);
@@ -52,8 +52,8 @@ export default function AssistantScreen() {
           <Ionicons name="sparkles" size={18} color="#EFF6FF" />
         </View>
         <View>
-          <Text style={styles.title}>Sentinel Assistant</Text>
-          <Text style={styles.subtitle}>Your always-on cyber coach</Text>
+          <Text style={styles.title}>Asistent Sentinel</Text>
+          <Text style={styles.subtitle}>Coach-ul tău cyber mereu activ</Text>
         </View>
       </View>
 
@@ -94,7 +94,7 @@ export default function AssistantScreen() {
 
         {messages.length <= 1 ? (
           <View style={styles.suggestions}>
-            <Text style={styles.suggestionsLabel}>Try asking</Text>
+            <Text style={styles.suggestionsLabel}>Încearcă să întrebi</Text>
             {suggestions.map((s) => (
               <Pressable key={s} onPress={() => send(s)} style={styles.suggestionCard}>
                 <Text style={styles.suggestionText}>{s}</Text>
@@ -110,7 +110,7 @@ export default function AssistantScreen() {
             value={draft}
             onChangeText={setDraft}
             onSubmitEditing={() => send(draft)}
-            placeholder="Ask about phishing, smishing..."
+             placeholder="Întreabă despre phishing, smishing..."
             placeholderTextColor={TrainingColors.textMuted}
             style={styles.input}
           />

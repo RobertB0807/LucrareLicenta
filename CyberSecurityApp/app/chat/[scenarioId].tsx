@@ -14,10 +14,16 @@ type Msg =
   | { id: string; from: 'system'; kind: 'text'; text: string };
 
 const CHANNEL_CONFIG: Record<string, { name: string; icon: keyof typeof Ionicons.glyphMap; subtitle: string }> = {
-  email: { name: 'Email Suspect', icon: 'mail-outline', subtitle: 'inbox · simulare' },
-  sms: { name: 'SMS Suspect', icon: 'chatbubble-ellipses-outline', subtitle: 'mesaj · simulare' },
-  chat: { name: 'Chat Suspect', icon: 'chatbubbles-outline', subtitle: 'online · simulare' },
-  phone: { name: 'Apel Suspect', icon: 'call-outline', subtitle: 'apel · simulare' },
+  email: { name: 'Email suspect', icon: 'mail-outline', subtitle: 'inbox · simulare' },
+  sms: { name: 'SMS suspect', icon: 'chatbubble-ellipses-outline', subtitle: 'mesaj · simulare' },
+  chat: { name: 'Chat suspect', icon: 'chatbubbles-outline', subtitle: 'online · simulare' },
+  phone: { name: 'Apel suspect', icon: 'call-outline', subtitle: 'apel · simulare' },
+};
+
+const DIFFICULTY_LABELS: Record<DifficultyLevel, string> = {
+  easy: 'ușor',
+  medium: 'mediu',
+  hard: 'greu',
 };
 
 /** Split a long attacker message into multiple bubbles by sentence for a more natural chat feel. */
@@ -55,10 +61,11 @@ function extractUrl(text: string): { cleanText: string; url: string } | null {
 }
 
 export default function ChatScenarioScreen() {
-  const { attackType, difficulty } = useLocalSearchParams<{
+  const { attackType, difficulty, sessionId: routeSessionId } = useLocalSearchParams<{
     scenarioId: string;
     attackType?: string;
     difficulty?: string;
+    sessionId?: string;
   }>();
 
   const {
@@ -68,6 +75,7 @@ export default function ChatScenarioScreen() {
     startSimulation,
     evaluateWithOptionId,
     evaluation,
+    sessionId,
   } = useTrainingSession();
 
   const [messages, setMessages] = useState<Msg[]>([]);
@@ -84,8 +92,8 @@ export default function ChatScenarioScreen() {
 
     const at = (attackType as AttackType) || 'phishing';
     const diff = (difficulty as DifficultyLevel) || 'easy';
-    startSimulation(at, diff);
-  }, []);
+    startSimulation(at, diff, routeSessionId ?? null);
+  }, [attackType, difficulty, routeSessionId, startSimulation]);
 
   // When scenario arrives from backend, animate the attacker messages
   useEffect(() => {
@@ -145,7 +153,7 @@ export default function ChatScenarioScreen() {
     return () => {
       cancelled = true;
     };
-  }, [scenario]);
+  }, [messages.length, scenario]);
 
   // After evaluation completes, navigate to feedback
   useEffect(() => {
@@ -154,11 +162,14 @@ export default function ChatScenarioScreen() {
       setTimeout(() => {
         router.push({
           pathname: '/feedback/[scenarioId]',
-          params: { scenarioId: scenario?.scenario_id ?? 'unknown' },
+          params: {
+            scenarioId: scenario?.scenario_id ?? 'unknown',
+            sessionId: sessionId ?? undefined,
+          },
         });
       }, 600);
     }
-  }, [evaluation, evaluating]);
+  }, [evaluation, evaluating, scenario?.scenario_id, sessionId]);
 
   const onChoice = async (optionId: string, label: string) => {
     // Add user message
@@ -202,7 +213,7 @@ export default function ChatScenarioScreen() {
               hasGeneratedRef.current = false;
               const at = (attackType as AttackType) || 'phishing';
               const diff = (difficulty as DifficultyLevel) || 'easy';
-              startSimulation(at, diff);
+              startSimulation(at, diff, routeSessionId ?? null);
             }}>
             <Text style={styles.retryText}>Încearcă din nou</Text>
           </Pressable>
@@ -225,13 +236,15 @@ export default function ChatScenarioScreen() {
           <Text style={styles.headerSubtitle}>{channelConfig.subtitle}</Text>
         </View>
         <View style={styles.difficultyBadge}>
-          <Text style={styles.difficultyText}>{scenario?.difficulty ?? difficulty ?? '—'}</Text>
+          <Text style={styles.difficultyText}>
+            {DIFFICULTY_LABELS[(scenario?.difficulty ?? difficulty ?? 'easy') as DifficultyLevel]}
+          </Text>
         </View>
       </View>
 
       <View style={styles.banner}>
         <Ionicons name="sparkles" size={13} color={TrainingColors.accentAmber} />
-        <Text style={styles.bannerText}>AI Simulation · responses are not real</Text>
+        <Text style={styles.bannerText}>Simulare AI · răspunsurile nu sunt reale</Text>
       </View>
 
       <ScrollView ref={scrollRef} style={styles.messages} contentContainerStyle={styles.messageContent}>

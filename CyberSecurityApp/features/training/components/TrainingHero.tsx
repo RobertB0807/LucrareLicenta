@@ -17,12 +17,12 @@ type TrainingHeroProps = {
 
 function getPosture(accuracy: number): { label: string; color: string } {
   if (accuracy >= 75) {
-    return { label: 'POSTURE: STABLE', color: TrainingColors.accentTeal };
+    return { label: 'POSTURĂ: STABILĂ', color: TrainingColors.accentTeal };
   }
   if (accuracy >= 45) {
-    return { label: 'POSTURE: WATCH', color: TrainingColors.accentAmber };
+    return { label: 'POSTURĂ: VIGILENȚĂ', color: TrainingColors.accentAmber };
   }
-  return { label: 'POSTURE: CRITICAL', color: TrainingColors.accentDanger };
+  return { label: 'POSTURĂ: CRITICĂ', color: TrainingColors.accentDanger };
 }
 
 export function TrainingHero({ sessionId, stats }: TrainingHeroProps) {
@@ -35,43 +35,43 @@ export function TrainingHero({ sessionId, stats }: TrainingHeroProps) {
 
         <View style={styles.heroHeaderRow}>
           <View>
-            <ThemedText style={styles.kicker}>SECURITY TRAINING CONSOLE</ThemedText>
+            <ThemedText style={styles.kicker}>CONSOLĂ DE ANTRENAMENT CYBER</ThemedText>
             <ThemedText type="title" style={styles.heroTitle}>
-              Cyber Shield Ops
+              Operațiunea Scutul Cyber
             </ThemedText>
           </View>
           <View style={styles.badgeWrap}>
-            <ThemedText style={styles.badgeText}>ADAPTIVE AI</ThemedText>
+            <ThemedText style={styles.badgeText}>AI ADAPTIV</ThemedText>
           </View>
         </View>
 
         <ThemedText style={styles.heroSubtitle}>
-          Simuleaza atacuri de social engineering si creste rezilienta operationala prin iteratii adaptive.
+          Simulează atacuri de inginerie socială și crește reziliența operațională prin iterații adaptive.
         </ThemedText>
 
         <View style={styles.heroMetaRow}>
           <ThemedText style={[styles.postureText, { color: posture.color }]}>{posture.label}</ThemedText>
           <ThemedText style={styles.heroSessionText}>
-            SESSION {sessionId ? sessionId.slice(0, 8).toUpperCase() : 'NEW'}
+            SESIUNE {sessionId ? sessionId.slice(0, 8).toUpperCase() : 'NOUĂ'}
           </ThemedText>
         </View>
       </View>
 
       <View style={styles.metricsGrid}>
         <View style={styles.metricTile}>
-          <ThemedText style={styles.metricLabel}>TOTAL SCORE</ThemedText>
+          <ThemedText style={styles.metricLabel}>SCOR TOTAL</ThemedText>
           <ThemedText style={styles.metricValue}>{stats.totalScore}</ThemedText>
         </View>
         <View style={styles.metricTile}>
-          <ThemedText style={styles.metricLabel}>ACCURACY</ThemedText>
+          <ThemedText style={styles.metricLabel}>ACURATEȚE</ThemedText>
           <ThemedText style={styles.metricValue}>{stats.accuracy}%</ThemedText>
         </View>
         <View style={styles.metricTile}>
-          <ThemedText style={styles.metricLabel}>SCENARIOS</ThemedText>
+          <ThemedText style={styles.metricLabel}>SCENARII</ThemedText>
           <ThemedText style={styles.metricValue}>{stats.totalAttempts}</ThemedText>
         </View>
         <View style={styles.metricTile}>
-          <ThemedText style={styles.metricLabel}>STREAK</ThemedText>
+          <ThemedText style={styles.metricLabel}>SERIE</ThemedText>
           <ThemedText style={styles.metricValue}>+{stats.correctStreak} / -{stats.incorrectStreak}</ThemedText>
         </View>
       </View>

@@ -1,12 +1,18 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Link, router } from 'expo-router';
+import { Link, router, useLocalSearchParams } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { TrainingColors } from '@/features/training/ui-theme';
 import { useTrainingSession } from '@/features/training/useTrainingSession';
 
 export default function FeedbackScreen() {
-  const { evaluation, scenario, stats } = useTrainingSession();
+  const { scenarioId: routeScenarioId, sessionId: routeSessionId } = useLocalSearchParams<{
+    scenarioId?: string;
+    sessionId?: string;
+  }>();
+  const { evaluation, scenario, stats, sessionId } = useTrainingSession();
+  const activeSessionId = sessionId ?? routeSessionId;
+  const activeScenarioId = scenario?.scenario_id ?? routeScenarioId ?? 'live-session';
 
   // Determine verdict from real evaluation
   const isCorrect = evaluation?.is_correct ?? false;
@@ -139,9 +145,10 @@ export default function FeedbackScreen() {
               router.push({
                 pathname: '/chat/[scenarioId]',
                 params: {
-                  scenarioId: `rec-${Date.now()}`,
+                  scenarioId: activeScenarioId,
                   attackType: recommendation.attack_type,
                   difficulty: recommendation.difficulty,
+                  sessionId: activeSessionId ?? undefined,
                 },
               });
             }}>
@@ -155,9 +162,10 @@ export default function FeedbackScreen() {
             router.push({
               pathname: '/chat/[scenarioId]',
               params: {
-                scenarioId: `retry-${Date.now()}`,
+                scenarioId: activeScenarioId,
                 attackType: scenario?.attack_type ?? 'phishing',
                 difficulty: scenario?.difficulty ?? 'easy',
+                sessionId: activeSessionId ?? undefined,
               },
             });
           }}>

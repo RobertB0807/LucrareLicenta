@@ -59,3 +59,19 @@ export type Evaluation = {
 export type GenerateScenarioApiResponse = Scenario & {
   session_id: string;
 };
+
+export type SessionSnapshotApiResponse = {
+  session_id: string;
+  session_stats: SessionStats;
+  generated_scenarios: number;
+  evaluated_scenarios: number;
+  last_updated_at: string | null;
+};
+
+export type SessionEventsApiResponse = {
+  session_id: string;
+  total: number;
+  limit: number;
+  offset: number;
+  events: SessionEvent[];
+};

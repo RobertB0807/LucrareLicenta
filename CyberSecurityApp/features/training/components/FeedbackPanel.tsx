@@ -24,7 +24,7 @@ export function FeedbackPanel({
   onRunCurrentSelection,
   onRunRecommendedScenario,
 }: FeedbackPanelProps) {
-  const resultLabel = evaluation.is_correct ? 'THREAT RESPONSE: SUCCESS' : 'THREAT RESPONSE: FAILED';
+  const resultLabel = evaluation.is_correct ? 'RĂSPUNS LA AMENINȚARE: REUȘIT' : 'RĂSPUNS LA AMENINȚARE: EȘUAT';
 
   return (
     <View style={styles.feedbackCard}>
@@ -34,7 +34,7 @@ export function FeedbackPanel({
           evaluation.is_correct ? styles.resultBannerSuccess : styles.resultBannerFail,
         ]}>
         <ThemedText style={styles.resultBannerText}>
-          {resultLabel} | SCORE DELTA {evaluation.score_delta > 0 ? `+${evaluation.score_delta}` : evaluation.score_delta}
+          {resultLabel} | DELTA SCOR {evaluation.score_delta > 0 ? `+${evaluation.score_delta}` : evaluation.score_delta}
         </ThemedText>
       </View>
 
@@ -42,17 +42,17 @@ export function FeedbackPanel({
 
       <View style={styles.recommendationCard}>
         <ThemedText type="defaultSemiBold" style={styles.blockTitle}>
-          Adaptive Directive
+          Directivă adaptivă
         </ThemedText>
         <ThemedText style={styles.recommendationMeta}>
-          NEXT MISSION: {evaluation.recommendation.attack_type.toUpperCase()} | {evaluation.recommendation.difficulty.toUpperCase()}
+          MISIUNEA URMĂTOARE: {evaluation.recommendation.attack_type.toUpperCase()} | {evaluation.recommendation.difficulty.toUpperCase()}
         </ThemedText>
         <ThemedText style={styles.recommendationReason}>{evaluation.recommendation.reason}</ThemedText>
       </View>
 
       <View style={styles.attackStatsCard}>
         <ThemedText type="defaultSemiBold" style={styles.blockTitle}>
-          Attack Surface Performance
+          Performanță pe suprafața de atac
         </ThemedText>
         {perAttackStats.map((item) => {
           const accuracy = item.value?.accuracy ?? 0;
@@ -63,7 +63,7 @@ export function FeedbackPanel({
               <View style={styles.attackRowHeader}>
                 <ThemedText style={styles.attackRowTitle}>{item.label}</ThemedText>
                 <ThemedText style={styles.attackRowValue}>
-                  {accuracy}% / {attempts} runs
+                  {accuracy}% / {attempts} rulări
                 </ThemedText>
               </View>
               <View style={styles.progressTrack}>
@@ -84,7 +84,7 @@ export function FeedbackPanel({
 
       <View style={styles.redFlagsCard}>
         <ThemedText type="defaultSemiBold" style={styles.blockTitle}>
-          Detected Red Flags
+          Red flags detectate
         </ThemedText>
         {scenario.red_flags.map((flag) => (
           <View key={flag} style={styles.redFlagItem}>
@@ -96,13 +96,13 @@ export function FeedbackPanel({
 
       <Pressable style={styles.secondaryButton} onPress={onRunCurrentSelection}>
         <ThemedText type="defaultSemiBold" style={styles.secondaryButtonText}>
-          Repeat Current Profile
+          Repetă profilul curent
         </ThemedText>
       </Pressable>
 
       <Pressable style={styles.secondaryButton} onPress={onRunRecommendedScenario}>
         <ThemedText type="defaultSemiBold" style={styles.secondaryButtonText}>
-          Run Recommended Profile
+          Rulează profilul recomandat
         </ThemedText>
       </Pressable>
     </View>

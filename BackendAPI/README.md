@@ -36,6 +36,17 @@ EXPO_PUBLIC_API_BASE_URL=http://192.168.1.XX:8000
 
 Inlocuieste `192.168.1.XX` cu IP-ul local real al laptop-ului.
 
+## 2.1 Migrations (Alembic)
+
+Schema DB este gestionata prin Alembic si se aplica automat la startup.
+
+Comenzi utile:
+
+```bash
+alembic upgrade head
+alembic downgrade -1
+```
+
 ## 3. Endpoint-uri MVP
 
 - `GET /health`
@@ -43,3 +54,9 @@ Inlocuieste `192.168.1.XX` cu IP-ul local real al laptop-ului.
 - `POST /scenario/evaluate`
 - `GET /session/{session_id}`
 - `GET /session/{session_id}/events?limit=20&offset=0`
+
+## 4. Rulare teste backend
+
+```bash
+python -m unittest discover -s tests -p "test_*.py" -q
+```

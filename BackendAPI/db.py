@@ -26,6 +26,16 @@ SessionLocal = sessionmaker(
 
 
 def init_db() -> None:
-    import persistence_models  # noqa: F401
+    try:
+        from alembic import command
+        from alembic.config import Config
+    except ModuleNotFoundError:
+        import persistence_models  # noqa: F401
 
-    Base.metadata.create_all(bind=engine)
+        Base.metadata.create_all(bind=engine)
+        return
+
+    config = Config(str(BASE_DIR / "alembic.ini"))
+    config.set_main_option("script_location", str(BASE_DIR / "migrations"))
+    config.set_main_option("sqlalchemy.url", DATABASE_URL)
+    command.upgrade(config, "head")

@@ -27,6 +27,8 @@ Backend lives in `BackendAPI/` and currently includes:
 - `persistence_repository.py` for persistence read/write operations
 - `scenario_library.py` for the scenario templates
 - `scenario_models.py` for shared models/types
+- Alembic migration setup (`alembic.ini`, `migrations/`, revision history in `migrations/versions/`)
+- backend API tests in `tests/test_api_endpoints.py`
 
 Backend features currently implemented:
 - `GET /health`
@@ -43,6 +45,7 @@ Backend features currently implemented:
 - recommendation logic for the next scenario
 - session event history (`recent_events`) with timestamp and tone metadata
 - SQLite persistence for sessions, attempts and events
+- startup DB bootstrap now applies Alembic migrations (`upgrade head`) when available, with a safe ORM `create_all` fallback if Alembic is missing
 
 ### Frontend status
 Frontend lives in `CyberSecurityApp/`.
@@ -61,9 +64,14 @@ Navigation updates:
 - `app/_layout.tsx` now includes stack routes for `chat/[scenarioId]` and `feedback/[scenarioId]`
 - `app/(tabs)/index.tsx` now redirects to `/(tabs)/dashboard`
 
-The existing `features/training/*` architecture is still present and reusable, but many of the new screens currently use mocked/static data for UI prototyping.
+The existing `features/training/*` architecture is still present and reusable.
 
-## Recent Progress (April 2026)
+Current integration level:
+- chat/feedback flow is now wired to real session continuity (`session_id` carried through routes)
+- analytics now consumes persisted backend session snapshot + recent events when a session is active
+- some product tabs still use mocked/static data for UI prototyping
+
+## Recent Progress (April-May 2026)
 - Backend refactor completed: service layer extracted from `main.py` into `training_service.py`.
 - Added session timeline events in backend for `scenario_generated` and `answer_evaluated`.
 - Extended API contract with `session_stats.recent_events`.
@@ -75,7 +83,31 @@ The existing `features/training/*` architecture is still present and reusable, b
 - Validated re-hydration behavior with a restart simulation test.
 - Added a new multi-tab UX shell (Home/Train/Learn/Assist/Stats) with cyber-themed styling.
 - Added a chat-based scenario flow (`/chat/[scenarioId]`) and a dedicated feedback/debrief screen (`/feedback/[scenarioId]`).
-- Reworked analytics into a richer dashboard-style presentation (charts, weak spots, badges) currently driven by local sample data.
+- Reworked analytics into a richer dashboard-style presentation (charts, weak spots, badges), now partially backed by real persisted session data.
+- Added session continuity across chat/feedback routes by forwarding and reusing `session_id`.
+- Extended `useTrainingSession.startSimulation(...)` with optional `nextSessionId` to explicitly resume an existing session.
+- Extended frontend API client with:
+  - `getSessionSnapshot(sessionId)` → `GET /session/{session_id}`
+  - `getSessionEvents(sessionId, {limit, offset})` → `GET /session/{session_id}/events`
+- Added typed API contracts for persisted reads:
+  - `SessionSnapshotApiResponse`
+  - `SessionEventsApiResponse`
+- Upgraded analytics screen to:
+  - fetch persisted snapshot/events for active session
+  - derive weak spots from real per-attack accuracy
+  - compute badges from real session stats
+  - show loading/error/empty states for persisted analytics
+- Added Alembic migration tooling in backend (`alembic.ini`, `migrations/env.py`, template, and initial schema revision).
+- Added initial migration revision for:
+  - `training_sessions`
+  - `scenario_attempts` (+ indexes)
+  - `session_events` (+ indexes)
+- Updated backend startup DB init to run migrations first, with fallback behavior for environments without Alembic installed.
+- Added backend endpoint test suite (`tests/test_api_endpoints.py`) covering:
+  - health endpoint
+  - generate -> evaluate -> session snapshot/events flow
+  - 404 behavior for unknown session/scenario
+- Updated backend README with migration commands and backend test command.
 
 ## What the App Already Does
 1. User selects attack type and difficulty.
@@ -86,7 +118,7 @@ The existing `features/training/*` architecture is still present and reusable, b
    - result
    - score delta
    - session stats
-  - recent event history in analytics
+   - recent event history in analytics
    - adaptive recommendation
    - red flags
 6. User can continue with current selection or recommended scenario.
@@ -106,6 +138,10 @@ The existing `features/training/*` architecture is still present and reusable, b
 - `BackendAPI/persistence_repository.py`
 - `BackendAPI/scenario_library.py`
 - `BackendAPI/scenario_models.py`
+- `BackendAPI/alembic.ini`
+- `BackendAPI/migrations/env.py`
+- `BackendAPI/migrations/versions/20260507_0001_initial_schema.py`
+- `BackendAPI/tests/test_api_endpoints.py`
 
 ### Frontend
 - `CyberSecurityApp/app/(tabs)/_layout.tsx`
@@ -119,7 +155,7 @@ The existing `features/training/*` architecture is still present and reusable, b
 - `CyberSecurityApp/app/feedback/[scenarioId].tsx`
 - `CyberSecurityApp/app/_layout.tsx`
 - `CyberSecurityApp/features/training/api.ts`
-- `CyberSecurityApp/features/training/useTrainingSession.ts`
+- `CyberSecurityApp/features/training/useTrainingSession.tsx`
 - `CyberSecurityApp/features/training/types.ts`
 - `CyberSecurityApp/features/training/options.ts`
 - `CyberSecurityApp/features/training/ui-theme.ts`
@@ -130,15 +166,16 @@ The existing `features/training/*` architecture is still present and reusable, b
 ## Remaining Tasks / Suggested Roadmap
 Priority order:
 
-### 1. Connect new UX flows to real backend/session state
+### 1. Finish wiring remaining tabs to real backend/session state
 Current gap:
-- new tab screens, chat simulation, and feedback are mostly mock-data driven
-- the older training/session logic in `features/training/` is not yet the source of truth for all new routes
+- analytics + chat/feedback are now partially integrated with real session data
+- `dashboard`, `scenarios`, `learn`, and `assistant` still need deeper data integration
+- the older training/session logic in `features/training/` is not yet the source of truth for all visible product routes
 
 Next integration step:
-- wire scenario list/generation/evaluation to backend endpoints
-- pass real `session_id`, scenario payload, and evaluation outputs through the chat + feedback route flow
-- make analytics consume persisted session/event data instead of local constants
+- make scenario catalog/dashboard cards pull from real session + backend signals
+- unify route-level state flow around shared `useTrainingSession` source of truth
+- reduce remaining local constants/sample placeholders across tabs
 
 ### 2. Add persistence layer hardening
 Status: implemented as MVP with SQLite + SQLAlchemy + repository + startup init.
@@ -148,9 +185,9 @@ Current approach:
 - existing `/scenario/generate` and `/scenario/evaluate` contracts preserved
 - persisted reads available via `/session/{session_id}` and `/session/{session_id}/events`
 - when a known `session_id` is reused after restart, in-memory state is restored from persisted snapshot before new updates
+- Alembic migration tooling is now in place and wired in startup flow
 
 Next persistence step:
-- add migration tooling (Alembic)
 - switch read path fully to DB after test coverage
 - optionally remove in-memory state
 
@@ -168,11 +205,15 @@ If needed:
 - move the scenario body into a dedicated component
 - move the stats section into a dashboard component
 
-### 5. Extend analytics with persisted trends
-Once persistence is available:
+### 5. Extend analytics with persisted trends (next step after current integration)
+Current baseline:
+- current analytics now reads persisted snapshot + paginated events for active session
+
+Next:
 - progression over time (score/accuracy evolution)
 - richer timeline queries (filters by attack type and date)
 - charts based on stored attempts
+- pagination/load-more behavior in UI for longer event history
 
 ### 6. Add LLM integration
 When ready:
@@ -182,9 +223,11 @@ When ready:
 
 ### 7. Add tests
 Recommended:
-- backend tests for generate/evaluate endpoints
-- backend tests for persistence repositories and timeline queries
-- integration tests for `/session/{session_id}` and `/session/{session_id}/events`
+- backend endpoint integration tests are now in place for:
+  - generate/evaluate flow
+  - `/session/{session_id}`
+  - `/session/{session_id}/events`
+- next: backend tests for persistence repositories and timeline queries
 - unit tests for session recommendation and score logic
 - basic UI smoke tests if needed
 
@@ -201,6 +244,13 @@ Recommended:
 cd /Users/robertbalasoiu/Robert/Licenta2026/LucrareLicenta/BackendAPI
 source .venv/bin/activate
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
+
+Backend tests:
+```bash
+cd /Users/robertbalasoiu/Robert/Licenta2026/LucrareLicenta/BackendAPI
+source .venv/bin/activate
+python -m unittest discover -s tests -p "test_*.py" -q
 ```
 
 ### Frontend

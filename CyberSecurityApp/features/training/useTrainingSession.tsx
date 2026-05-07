@@ -72,7 +72,8 @@ type TrainingSessionContextValue = {
   setDifficulty: (difficulty: DifficultyLevel) => void;
   startSimulation: (
     nextAttackType?: AttackType,
-    nextDifficulty?: DifficultyLevel
+    nextDifficulty?: DifficultyLevel,
+    nextSessionId?: string | null
   ) => Promise<void>;
   evaluateAnswer: () => Promise<void>;
   evaluateWithOptionId: (optionId: string) => Promise<void>;
@@ -148,18 +149,21 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
 
   const startSimulation = async (
     nextAttackType: AttackType = attackType,
-    nextDifficulty: DifficultyLevel = difficulty
+    nextDifficulty: DifficultyLevel = difficulty,
+    nextSessionId?: string | null
   ) => {
     setIsLoading(true);
     setError(null);
     setEvaluation(null);
     setSelectedOptionId(null);
 
+    const activeSessionId = nextSessionId ?? sessionId;
+
     try {
       const data = await generateScenario({
         attack_type: nextAttackType,
         difficulty: nextDifficulty,
-        session_id: sessionId,
+        session_id: activeSessionId,
       });
 
       setScenario(data);
@@ -167,8 +171,8 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
       setAttackType(nextAttackType);
       setDifficulty(nextDifficulty);
       pushActivity({
-        title: 'Scenario generated',
-        detail: `${nextAttackType} on ${nextDifficulty} difficulty is now active.`,
+        title: 'Scenariu generat',
+        detail: `Scenariul ${nextAttackType} la dificultatea ${nextDifficulty} este acum activ.`,
         tone: 'neutral',
       });
     } catch {
@@ -200,8 +204,8 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
         applyServerEvents(data.session_stats.recent_events);
       } else {
         pushActivity({
-          title: data.is_correct ? 'Answer marked correct' : 'Answer marked incorrect',
-          detail: `${data.score_delta >= 0 ? '+' : ''}${data.score_delta} points applied to the live score.`,
+          title: data.is_correct ? 'Răspuns corect' : 'Răspuns incorect',
+          detail: `${data.score_delta >= 0 ? '+' : ''}${data.score_delta} puncte aplicate scorului curent.`,
           tone: data.is_correct ? 'good' : 'warning',
         });
       }
@@ -233,8 +237,8 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
         applyServerEvents(data.session_stats.recent_events);
       } else {
         pushActivity({
-          title: data.is_correct ? 'Answer marked correct' : 'Answer marked incorrect',
-          detail: `${data.score_delta >= 0 ? '+' : ''}${data.score_delta} points applied to the live score.`,
+          title: data.is_correct ? 'Răspuns corect' : 'Răspuns incorect',
+          detail: `${data.score_delta >= 0 ? '+' : ''}${data.score_delta} puncte aplicate scorului curent.`,
           tone: data.is_correct ? 'good' : 'warning',
         });
       }

@@ -6,81 +6,81 @@ import { TrainingColors } from '@/features/training/ui-theme';
 
 type Lesson = {
   id: string;
-  category: 'Phishing' | 'Smishing' | 'Vishing' | 'Web Scams' | 'Account Safety' | 'Fundamentals';
+  category: 'Phishing' | 'Smishing' | 'Vishing' | 'Escrocherii web' | 'Siguranța contului' | 'Fundamente';
   title: string;
   summary: string;
   minutes: number;
-  level: 'Beginner' | 'Intermediate' | 'Advanced';
+  level: 'Începător' | 'Intermediar' | 'Avansat';
 };
 
 const lessons: Lesson[] = [
   {
     id: 'phishing-101',
-    category: 'Fundamentals',
-    title: 'Phishing 101: How attackers think',
-    summary: 'Understand the psychology behind phishing: urgency, authority, and curiosity.',
+    category: 'Fundamente',
+    title: 'Phishing 101: cum gândesc atacatorii',
+    summary: 'Înțelege psihologia din spatele phishing-ului: urgență, autoritate și curiozitate.',
     minutes: 4,
-    level: 'Beginner',
+    level: 'Începător',
   },
   {
     id: 'email-red-flags',
     category: 'Phishing',
-    title: 'Spotting email red flags',
-    summary: 'Look-alike domains, mismatched sender names, urgent CTAs, and weaponized attachments.',
+    title: 'Cum observi red flags în email',
+    summary: 'Domenii asemănătoare, nume de expeditor nepotrivite, CTA-uri urgente și atașamente malițioase.',
     minutes: 5,
-    level: 'Beginner',
+    level: 'Începător',
   },
   {
     id: 'smishing-deep-dive',
     category: 'Smishing',
-    title: 'SMS scams & fake delivery alerts',
-    summary: 'Why texts feel more trustworthy and how scammers exploit that bias.',
+    title: 'Escrocherii SMS și alerte false de livrare',
+    summary: 'De ce mesajele par mai credibile și cum exploatează atacatorii acest bias.',
     minutes: 4,
-    level: 'Beginner',
+    level: 'Începător',
   },
   {
     id: 'vishing-callbacks',
     category: 'Vishing',
-    title: 'Voice scams & deepfake callers',
-    summary: 'From impersonators to AI-cloned voices, verify before you trust.',
+    title: 'Fraude vocale și apeluri deepfake',
+    summary: 'De la impostori la voci clonate cu AI, verifică înainte să ai încredere.',
     minutes: 6,
-    level: 'Intermediate',
+    level: 'Intermediar',
   },
   {
     id: 'fake-websites',
-    category: 'Web Scams',
-    title: 'Fake login pages & typosquatting',
-    summary: 'Inspect URLs like a pro: homoglyphs, subdomains, and certificate tricks.',
+    category: 'Escrocherii web',
+    title: 'Pagini false de login și typosquatting',
+    summary: 'Analizează URL-urile ca un profesionist: homoglife, subdomenii și trucuri cu certificate.',
     minutes: 5,
-    level: 'Intermediate',
+    level: 'Intermediar',
   },
   {
     id: 'mfa-passwords',
-    category: 'Account Safety',
-    title: 'MFA, passkeys & password hygiene',
-    summary: 'Why SMS codes are not enough and how passkeys defeat phishing.',
+    category: 'Siguranța contului',
+    title: 'MFA, passkeys și igiena parolelor',
+    summary: 'De ce codurile SMS nu sunt suficiente și cum passkey-urile combat phishing-ul.',
     minutes: 5,
-    level: 'Intermediate',
+    level: 'Intermediar',
   },
   {
     id: 'social-engineering-advanced',
-    category: 'Fundamentals',
-    title: 'Advanced social engineering',
-    summary: 'Pretexting, spear-phishing, and business email compromise (BEC).',
+    category: 'Fundamente',
+    title: 'Social engineering avansat',
+    summary: 'Pretexting, spear-phishing și compromiterea emailului de business (BEC).',
     minutes: 7,
-    level: 'Advanced',
+    level: 'Avansat',
   },
 ];
 
-const categories = ['All', 'Fundamentals', 'Phishing', 'Smishing', 'Vishing', 'Web Scams', 'Account Safety'] as const;
+const categories = ['Toate', 'Fundamente', 'Phishing', 'Smishing', 'Vishing', 'Escrocherii web', 'Siguranța contului'] as const;
 
 export default function LearnScreen() {
-  const [activeCat, setActiveCat] = useState<(typeof categories)[number]>('All');
+  const [activeCat, setActiveCat] = useState<(typeof categories)[number]>('Toate');
   const [openLesson, setOpenLesson] = useState<Lesson | null>(null);
   const [input, setInput] = useState('');
 
   const filtered = useMemo(
-    () => (activeCat === 'All' ? lessons : lessons.filter((l) => l.category === activeCat)),
+    () => (activeCat === 'Toate' ? lessons : lessons.filter((l) => l.category === activeCat)),
     [activeCat]
   );
 
@@ -92,8 +92,8 @@ export default function LearnScreen() {
             <Ionicons name="book-outline" size={18} color="#EFF6FF" />
           </View>
           <View>
-            <Text style={styles.title}>Learn</Text>
-            <Text style={styles.subtitle}>Master the art of cyber defense</Text>
+            <Text style={styles.title}>Învață</Text>
+            <Text style={styles.subtitle}>Stăpânește arta apărării cibernetice</Text>
           </View>
         </View>
 
@@ -102,9 +102,9 @@ export default function LearnScreen() {
             <Ionicons name="sparkles" size={16} color={TrainingColors.accentTeal} />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.heroEyebrow}>AI tutor</Text>
+            <Text style={styles.heroEyebrow}>Tutor AI</Text>
             <Text style={styles.heroText}>
-              Tap any lesson and get an instant personalized explanation with red flags and defenses.
+              Deschide orice lecție și primești instant o explicație personalizată cu red flags și metode de apărare.
             </Text>
           </View>
         </View>
@@ -164,8 +164,8 @@ export default function LearnScreen() {
                 </View>
                 <View style={styles.botBubble}>
                   <Text style={styles.botText}>
-                    Focus on verification, suspicious urgency, and independent confirmation. Never
-                    use contact details from the suspicious message itself.
+                    Concentrează-te pe verificare, urgență suspectă și confirmare independentă. Nu
+                    folosi niciodată datele de contact din mesajul suspect.
                   </Text>
                 </View>
               </View>
@@ -175,7 +175,7 @@ export default function LearnScreen() {
               <TextInput
                 value={input}
                 onChangeText={setInput}
-                placeholder="Ask a follow-up..."
+                placeholder="Pune o întrebare de follow-up..."
                 placeholderTextColor={TrainingColors.textMuted}
                 style={styles.modalInput}
               />
