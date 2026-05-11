@@ -80,6 +80,9 @@ def record_generated_scenario(
     scenario_id: str,
     attack_type: str,
     difficulty: str,
+    correct_option_id: str,
+    correct_explanation: str,
+    incorrect_explanation: str,
 ) -> None:
     with session_scope() as db:
         existing = db.scalar(
@@ -93,8 +96,38 @@ def record_generated_scenario(
             session_id=session_id,
             attack_type=attack_type,
             difficulty=difficulty,
+            correct_option_id=correct_option_id,
+            correct_explanation=correct_explanation,
+            incorrect_explanation=incorrect_explanation,
         )
         db.add(row)
+
+
+def fetch_scenario_context(scenario_id: str) -> dict[str, str] | None:
+    db = SessionLocal()
+    try:
+        row = db.scalar(
+            select(ScenarioAttemptORM).where(ScenarioAttemptORM.scenario_id == scenario_id)
+        )
+        if row is None:
+            return None
+        if (
+            row.correct_option_id is None
+            or row.correct_explanation is None
+            or row.incorrect_explanation is None
+        ):
+            return None
+
+        return {
+            "session_id": row.session_id,
+            "attack_type": row.attack_type,
+            "difficulty": row.difficulty,
+            "correct_option_id": row.correct_option_id,
+            "correct_explanation": row.correct_explanation,
+            "incorrect_explanation": row.incorrect_explanation,
+        }
+    finally:
+        db.close()
 
 
 def record_scenario_evaluation(

@@ -1,48 +1,87 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { askAssistant } from '@/features/training/api';
 import { TrainingColors } from '@/features/training/ui-theme';
 
 type Msg = { id: string; role: 'user' | 'assistant'; text: string };
+const ASSISTANT_MESSAGES_STORAGE_KEY = 'assistant-messages-v1';
+
+const defaultMessages: Msg[] = [
+  {
+    id: 's1',
+    role: 'assistant',
+    text: 'Salut 👋 Sunt Sentinel, coach-ul tău AI de apărare. Întreabă-mă orice despre phishing, smishing, vishing sau cum să rămâi în siguranță online.',
+  },
+];
 
 const suggestions = [
-  'How do I spot a phishing email?',
-  "What's the difference between phishing and smishing?",
-  'Why are urgent messages dangerous?',
-  'How can I verify a suspicious caller?',
+  'Cum identific un email de phishing?',
+  'Care este diferența dintre phishing și smishing?',
+  'De ce sunt periculoase mesajele urgente?',
+  'Cum verific un apelant suspect?',
 ];
 
 export default function AssistantScreen() {
-  const [messages, setMessages] = useState<Msg[]>([
-    {
-      id: 's1',
-      role: 'assistant',
-      text: "Hey 👋 I'm Sentinel, your AI defense coach. Ask me anything about phishing, smishing, vishing, or how to stay safe online.",
-    },
-  ]);
+  const [messages, setMessages] = useState<Msg[]>(defaultMessages);
   const [draft, setDraft] = useState('');
   const [thinking, setThinking] = useState(false);
 
-  const send = (text: string) => {
+  useEffect(() => {
+    let cancelled = false;
+
+    const hydrate = async () => {
+      try {
+        const raw = await AsyncStorage.getItem(ASSISTANT_MESSAGES_STORAGE_KEY);
+        if (!raw || cancelled) {
+          return;
+        }
+        const parsed = JSON.parse(raw) as Msg[];
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setMessages(parsed.slice(-40));
+        }
+      } catch {
+        // Ignore local cache read errors.
+      }
+    };
+
+    void hydrate();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    void AsyncStorage.setItem(ASSISTANT_MESSAGES_STORAGE_KEY, JSON.stringify(messages.slice(-40)));
+  }, [messages]);
+
+  const send = async (text: string) => {
     const value = text.trim();
-    if (!value) return;
+    if (!value || thinking) return;
 
     setMessages((m) => [...m, { id: `u-${Date.now()}`, role: 'user', text: value }]);
     setDraft('');
     setThinking(true);
 
-    setTimeout(() => {
+    try {
+      const data = await askAssistant({ message: value });
+      const tipsText = data.quick_tips.map((tip, index) => `${index + 1}. ${tip}`).join('\n');
+      const assistantText = tipsText ? `${data.answer}\n\n${tipsText}` : data.answer;
+      setMessages((m) => [...m, { id: `a-${Date.now()}`, role: 'assistant', text: assistantText }]);
+    } catch {
       setMessages((m) => [
         ...m,
         {
           id: `a-${Date.now()}`,
           role: 'assistant',
-          text: 'Great question. Look for urgency, mismatched domains, generic greetings, and unusual sender addresses. When unsure - never click. Open the official app or website directly.',
+          text: 'Nu am putut contacta asistentul acum. Verifică backend-ul și încearcă din nou.',
         },
       ]);
+    } finally {
       setThinking(false);
-    }, 1200);
+    }
   };
 
   return (
@@ -52,8 +91,8 @@ export default function AssistantScreen() {
           <Ionicons name="sparkles" size={18} color="#EFF6FF" />
         </View>
         <View>
-          <Text style={styles.title}>Sentinel Assistant</Text>
-          <Text style={styles.subtitle}>Your always-on cyber coach</Text>
+          <Text style={styles.title}>Asistent Sentinel</Text>
+          <Text style={styles.subtitle}>Coach-ul tău cyber mereu activ</Text>
         </View>
       </View>
 
@@ -94,9 +133,9 @@ export default function AssistantScreen() {
 
         {messages.length <= 1 ? (
           <View style={styles.suggestions}>
-            <Text style={styles.suggestionsLabel}>Try asking</Text>
+            <Text style={styles.suggestionsLabel}>Încearcă să întrebi</Text>
             {suggestions.map((s) => (
-              <Pressable key={s} onPress={() => send(s)} style={styles.suggestionCard}>
+              <Pressable key={s} onPress={() => void send(s)} style={styles.suggestionCard}>
                 <Text style={styles.suggestionText}>{s}</Text>
               </Pressable>
             ))}
@@ -106,21 +145,21 @@ export default function AssistantScreen() {
 
       <View style={styles.composer}>
         <View style={styles.inputWrap}>
-          <TextInput
-            value={draft}
-            onChangeText={setDraft}
-            onSubmitEditing={() => send(draft)}
-            placeholder="Ask about phishing, smishing..."
-            placeholderTextColor={TrainingColors.textMuted}
-            style={styles.input}
-          />
-          <Pressable
-            onPress={() => send(draft)}
-            style={[styles.sendButton, !draft.trim() && styles.sendDisabled]}
-            disabled={!draft.trim()}>
-            <Ionicons name="send" size={15} color="#EFF6FF" />
-          </Pressable>
-        </View>
+            <TextInput
+              value={draft}
+              onChangeText={setDraft}
+              onSubmitEditing={() => void send(draft)}
+              placeholder="Întreabă despre phishing, smishing..."
+              placeholderTextColor={TrainingColors.textMuted}
+              style={styles.input}
+            />
+            <Pressable
+              onPress={() => void send(draft)}
+              style={[styles.sendButton, (!draft.trim() || thinking) && styles.sendDisabled]}
+              disabled={!draft.trim() || thinking}>
+              <Ionicons name="send" size={15} color="#EFF6FF" />
+            </Pressable>
+          </View>
       </View>
     </View>
   );

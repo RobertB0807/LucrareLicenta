@@ -39,28 +39,28 @@ export default function TabLayout() {
       <Tabs.Screen
         name="dashboard"
         options={{
-          title: 'Home',
+          title: 'Acasă',
           tabBarIcon: ({ color, size }) => <Ionicons size={size} name="home" color={color} />,
         }}
       />
       <Tabs.Screen
         name="scenarios"
         options={{
-          title: 'Train',
+          title: 'Antrenează',
           tabBarIcon: ({ color, size }) => <Ionicons size={size} name="shield-checkmark" color={color} />,
         }}
       />
       <Tabs.Screen
         name="learn"
         options={{
-          title: 'Learn',
+          title: 'Învață',
           tabBarIcon: ({ color, size }) => <Ionicons size={size} name="book" color={color} />,
         }}
       />
       <Tabs.Screen
         name="assistant"
         options={{
-          title: 'Assist',
+          title: 'Asistent',
           tabBarIcon: ({ color, size }) => <Ionicons size={size} name="sparkles" color={color} />,
         }}
       />
@@ -73,7 +73,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="analytics"
         options={{
-          title: 'Stats',
+          title: 'Statistici',
           tabBarIcon: ({ color, size }) => <Ionicons size={size} name="stats-chart" color={color} />,
         }}
       />

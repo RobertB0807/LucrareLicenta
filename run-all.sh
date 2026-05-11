@@ -5,13 +5,6 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="$ROOT_DIR/BackendAPI"
 MOBILE_DIR="$ROOT_DIR/CyberSecurityApp"
-WEB_DIR="$ROOT_DIR/interfata/cyber-sentinel"
-
-WITH_WEB=0
-
-if [[ "${1:-}" == "--with-web" ]]; then
-  WITH_WEB=1
-fi
 
 require_dir() {
   local path="$1"
@@ -47,10 +40,6 @@ if [[ ! -x "$BACKEND_PY" ]]; then
   exit 1
 fi
 
-if [[ "$WITH_WEB" -eq 1 ]]; then
-  require_dir "$WEB_DIR" "web interface"
-fi
-
 PIDS=()
 
 cleanup() {
@@ -82,15 +71,6 @@ echo "Starting Expo app ..."
   npm run start
 ) &
 PIDS+=("$!")
-
-if [[ "$WITH_WEB" -eq 1 ]]; then
-  echo "Starting web interface (Vite) ..."
-  (
-    cd "$WEB_DIR"
-    npm run dev
-  ) &
-  PIDS+=("$!")
-fi
 
 echo "All services started. Press Ctrl+C to stop everything."
 wait

@@ -1,4 +1,5 @@
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 
 import { evaluateScenario, generateScenario } from './api';
 import { ATTACK_TYPE_OPTIONS } from './options';
@@ -18,6 +19,17 @@ type ActivityItem = {
   detail: string;
   tone: 'neutral' | 'good' | 'warning';
   timeLabel?: string;
+};
+
+const TRAINING_SESSION_STORAGE_KEY = 'training-session-state-v1';
+
+type PersistedTrainingSessionState = {
+  sessionId: string | null;
+  sessionStats: SessionStats | null;
+  attackType: AttackType;
+  difficulty: DifficultyLevel;
+  evaluation: Evaluation | null;
+  activityLog: ActivityItem[];
 };
 
 function formatEventTime(isoTimestamp: string): string {
@@ -72,7 +84,8 @@ type TrainingSessionContextValue = {
   setDifficulty: (difficulty: DifficultyLevel) => void;
   startSimulation: (
     nextAttackType?: AttackType,
-    nextDifficulty?: DifficultyLevel
+    nextDifficulty?: DifficultyLevel,
+    nextSessionId?: string | null
   ) => Promise<void>;
   evaluateAnswer: () => Promise<void>;
   evaluateWithOptionId: (optionId: string) => Promise<void>;
@@ -94,6 +107,7 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activityLog, setActivityLog] = useState<ActivityItem[]>([]);
+  const [isHydrated, setIsHydrated] = useState(false);
 
   const pushActivity = useCallback(
     (entry: { title: string; detail: string; tone: 'neutral' | 'good' | 'warning' }) => {
@@ -146,20 +160,78 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
     [sessionStats]
   );
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const hydrate = async () => {
+      try {
+        const raw = await AsyncStorage.getItem(TRAINING_SESSION_STORAGE_KEY);
+        if (!raw || cancelled) {
+          return;
+        }
+        const parsed = JSON.parse(raw) as PersistedTrainingSessionState;
+
+        if (
+          parsed.attackType &&
+          parsed.difficulty &&
+          (parsed.sessionId === null || typeof parsed.sessionId === 'string')
+        ) {
+          setSessionId(parsed.sessionId);
+          setSessionStats(parsed.sessionStats ?? null);
+          setAttackType(parsed.attackType);
+          setDifficulty(parsed.difficulty);
+          setEvaluation(parsed.evaluation ?? null);
+          setActivityLog(Array.isArray(parsed.activityLog) ? parsed.activityLog.slice(0, 8) : []);
+        }
+      } catch {
+        // Ignore corrupt local cache and continue with defaults.
+      } finally {
+        if (!cancelled) {
+          setIsHydrated(true);
+        }
+      }
+    };
+
+    void hydrate();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isHydrated) {
+      return;
+    }
+
+    const stateToPersist: PersistedTrainingSessionState = {
+      sessionId,
+      sessionStats,
+      attackType,
+      difficulty,
+      evaluation,
+      activityLog: activityLog.slice(0, 8),
+    };
+
+    void AsyncStorage.setItem(TRAINING_SESSION_STORAGE_KEY, JSON.stringify(stateToPersist));
+  }, [activityLog, attackType, difficulty, evaluation, isHydrated, sessionId, sessionStats]);
+
   const startSimulation = async (
     nextAttackType: AttackType = attackType,
-    nextDifficulty: DifficultyLevel = difficulty
+    nextDifficulty: DifficultyLevel = difficulty,
+    nextSessionId?: string | null
   ) => {
     setIsLoading(true);
     setError(null);
     setEvaluation(null);
     setSelectedOptionId(null);
 
+    const activeSessionId = nextSessionId ?? sessionId;
+
     try {
       const data = await generateScenario({
         attack_type: nextAttackType,
         difficulty: nextDifficulty,
-        session_id: sessionId,
+        session_id: activeSessionId,
       });
 
       setScenario(data);
@@ -167,8 +239,8 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
       setAttackType(nextAttackType);
       setDifficulty(nextDifficulty);
       pushActivity({
-        title: 'Scenario generated',
-        detail: `${nextAttackType} on ${nextDifficulty} difficulty is now active.`,
+        title: 'Scenariu generat',
+        detail: `Scenariul ${nextAttackType} la dificultatea ${nextDifficulty} este acum activ.`,
         tone: 'neutral',
       });
     } catch {
@@ -200,8 +272,8 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
         applyServerEvents(data.session_stats.recent_events);
       } else {
         pushActivity({
-          title: data.is_correct ? 'Answer marked correct' : 'Answer marked incorrect',
-          detail: `${data.score_delta >= 0 ? '+' : ''}${data.score_delta} points applied to the live score.`,
+          title: data.is_correct ? 'Răspuns corect' : 'Răspuns incorect',
+          detail: `${data.score_delta >= 0 ? '+' : ''}${data.score_delta} puncte aplicate scorului curent.`,
           tone: data.is_correct ? 'good' : 'warning',
         });
       }
@@ -233,8 +305,8 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
         applyServerEvents(data.session_stats.recent_events);
       } else {
         pushActivity({
-          title: data.is_correct ? 'Answer marked correct' : 'Answer marked incorrect',
-          detail: `${data.score_delta >= 0 ? '+' : ''}${data.score_delta} points applied to the live score.`,
+          title: data.is_correct ? 'Răspuns corect' : 'Răspuns incorect',
+          detail: `${data.score_delta >= 0 ? '+' : ''}${data.score_delta} puncte aplicate scorului curent.`,
           tone: data.is_correct ? 'good' : 'warning',
         });
       }

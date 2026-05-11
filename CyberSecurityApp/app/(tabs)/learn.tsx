@@ -1,88 +1,230 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { askAssistant } from '@/features/training/api';
+import type { AttackType, DifficultyLevel } from '@/features/training/types';
 import { TrainingColors } from '@/features/training/ui-theme';
 
 type Lesson = {
   id: string;
-  category: 'Phishing' | 'Smishing' | 'Vishing' | 'Web Scams' | 'Account Safety' | 'Fundamentals';
+  category: 'Phishing' | 'Smishing' | 'Vishing' | 'Escrocherii web' | 'Siguranța contului' | 'Fundamente';
   title: string;
   summary: string;
   minutes: number;
-  level: 'Beginner' | 'Intermediate' | 'Advanced';
+  level: 'Începător' | 'Intermediar' | 'Avansat';
+};
+
+type LessonMessage = {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+};
+
+type ActiveCategory = 'Toate' | 'Fundamente' | 'Phishing' | 'Smishing' | 'Vishing' | 'Escrocherii web' | 'Siguranța contului';
+
+type PersistedLearnState = {
+  activeCat: ActiveCategory;
+  openLessonId: string | null;
+  lessonMessages: LessonMessage[];
 };
 
 const lessons: Lesson[] = [
   {
     id: 'phishing-101',
-    category: 'Fundamentals',
-    title: 'Phishing 101: How attackers think',
-    summary: 'Understand the psychology behind phishing: urgency, authority, and curiosity.',
+    category: 'Fundamente',
+    title: 'Phishing 101: cum gândesc atacatorii',
+    summary: 'Înțelege psihologia din spatele phishing-ului: urgență, autoritate și curiozitate.',
     minutes: 4,
-    level: 'Beginner',
+    level: 'Începător',
   },
   {
     id: 'email-red-flags',
     category: 'Phishing',
-    title: 'Spotting email red flags',
-    summary: 'Look-alike domains, mismatched sender names, urgent CTAs, and weaponized attachments.',
+    title: 'Cum observi red flags în email',
+    summary: 'Domenii asemănătoare, nume de expeditor nepotrivite, CTA-uri urgente și atașamente malițioase.',
     minutes: 5,
-    level: 'Beginner',
+    level: 'Începător',
   },
   {
     id: 'smishing-deep-dive',
     category: 'Smishing',
-    title: 'SMS scams & fake delivery alerts',
-    summary: 'Why texts feel more trustworthy and how scammers exploit that bias.',
+    title: 'Escrocherii SMS și alerte false de livrare',
+    summary: 'De ce mesajele par mai credibile și cum exploatează atacatorii acest bias.',
     minutes: 4,
-    level: 'Beginner',
+    level: 'Începător',
   },
   {
     id: 'vishing-callbacks',
     category: 'Vishing',
-    title: 'Voice scams & deepfake callers',
-    summary: 'From impersonators to AI-cloned voices, verify before you trust.',
+    title: 'Fraude vocale și apeluri deepfake',
+    summary: 'De la impostori la voci clonate cu AI, verifică înainte să ai încredere.',
     minutes: 6,
-    level: 'Intermediate',
+    level: 'Intermediar',
   },
   {
     id: 'fake-websites',
-    category: 'Web Scams',
-    title: 'Fake login pages & typosquatting',
-    summary: 'Inspect URLs like a pro: homoglyphs, subdomains, and certificate tricks.',
+    category: 'Escrocherii web',
+    title: 'Pagini false de login și typosquatting',
+    summary: 'Analizează URL-urile ca un profesionist: homoglife, subdomenii și trucuri cu certificate.',
     minutes: 5,
-    level: 'Intermediate',
+    level: 'Intermediar',
   },
   {
     id: 'mfa-passwords',
-    category: 'Account Safety',
-    title: 'MFA, passkeys & password hygiene',
-    summary: 'Why SMS codes are not enough and how passkeys defeat phishing.',
+    category: 'Siguranța contului',
+    title: 'MFA, passkeys și igiena parolelor',
+    summary: 'De ce codurile SMS nu sunt suficiente și cum passkey-urile combat phishing-ul.',
     minutes: 5,
-    level: 'Intermediate',
+    level: 'Intermediar',
   },
   {
     id: 'social-engineering-advanced',
-    category: 'Fundamentals',
-    title: 'Advanced social engineering',
-    summary: 'Pretexting, spear-phishing, and business email compromise (BEC).',
+    category: 'Fundamente',
+    title: 'Social engineering avansat',
+    summary: 'Pretexting, spear-phishing și compromiterea emailului de business (BEC).',
     minutes: 7,
-    level: 'Advanced',
+    level: 'Avansat',
   },
 ];
 
-const categories = ['All', 'Fundamentals', 'Phishing', 'Smishing', 'Vishing', 'Web Scams', 'Account Safety'] as const;
+const categories = ['Toate', 'Fundamente', 'Phishing', 'Smishing', 'Vishing', 'Escrocherii web', 'Siguranța contului'] as const;
+const LEARN_SCREEN_STORAGE_KEY = 'learn-screen-state-v1';
+
+function mapLessonCategoryToAttackType(
+  category: Lesson['category']
+): AttackType | undefined {
+  if (category === 'Phishing') return 'phishing';
+  if (category === 'Smishing') return 'smishing';
+  if (category === 'Vishing') return 'impersonation';
+  return undefined;
+}
+
+function mapLessonLevelToDifficulty(level: Lesson['level']): DifficultyLevel {
+  if (level === 'Avansat') return 'hard';
+  if (level === 'Intermediar') return 'medium';
+  return 'easy';
+}
 
 export default function LearnScreen() {
-  const [activeCat, setActiveCat] = useState<(typeof categories)[number]>('All');
+  const [activeCat, setActiveCat] = useState<ActiveCategory>('Toate');
   const [openLesson, setOpenLesson] = useState<Lesson | null>(null);
   const [input, setInput] = useState('');
+  const [lessonMessages, setLessonMessages] = useState<LessonMessage[]>([]);
+  const [isAsking, setIsAsking] = useState(false);
+  const [lessonError, setLessonError] = useState<string | null>(null);
+  const [isHydrated, setIsHydrated] = useState(false);
 
   const filtered = useMemo(
-    () => (activeCat === 'All' ? lessons : lessons.filter((l) => l.category === activeCat)),
+    () => (activeCat === 'Toate' ? lessons : lessons.filter((l) => l.category === activeCat)),
     [activeCat]
   );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const hydrate = async () => {
+      try {
+        const raw = await AsyncStorage.getItem(LEARN_SCREEN_STORAGE_KEY);
+        if (!raw || cancelled) {
+          return;
+        }
+
+        const parsed = JSON.parse(raw) as PersistedLearnState;
+        if (parsed.activeCat && categories.includes(parsed.activeCat)) {
+          setActiveCat(parsed.activeCat);
+        }
+
+        if (Array.isArray(parsed.lessonMessages) && parsed.lessonMessages.length > 0) {
+          setLessonMessages(parsed.lessonMessages.slice(-40));
+        }
+
+        if (typeof parsed.openLessonId === 'string' && parsed.openLessonId) {
+          const matchedLesson = lessons.find((lesson) => lesson.id === parsed.openLessonId);
+          if (matchedLesson) {
+            setOpenLesson(matchedLesson);
+          }
+        }
+      } catch {
+        // Ignore local cache read errors.
+      } finally {
+        if (!cancelled) {
+          setIsHydrated(true);
+        }
+      }
+    };
+
+    void hydrate();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isHydrated) {
+      return;
+    }
+    const stateToPersist: PersistedLearnState = {
+      activeCat,
+      openLessonId: openLesson?.id ?? null,
+      lessonMessages: lessonMessages.slice(-40),
+    };
+    void AsyncStorage.setItem(LEARN_SCREEN_STORAGE_KEY, JSON.stringify(stateToPersist));
+  }, [activeCat, isHydrated, lessonMessages, openLesson?.id]);
+
+  const openLessonModal = (lesson: Lesson) => {
+    setOpenLesson(lesson);
+    setInput('');
+    setLessonError(null);
+    setIsAsking(false);
+    setLessonMessages([
+      {
+        id: `a-${Date.now()}`,
+        role: 'assistant',
+        text: `Lecția „${lesson.title}”: ${lesson.summary}\n\nÎntreabă-mă orice și îți explic pas cu pas.`,
+      },
+    ]);
+  };
+
+  const closeLessonModal = () => {
+    setOpenLesson(null);
+    setInput('');
+    setLessonMessages([]);
+    setLessonError(null);
+    setIsAsking(false);
+  };
+
+  const sendFollowUp = async () => {
+    const value = input.trim();
+    if (!value || !openLesson || isAsking) {
+      return;
+    }
+
+    setLessonMessages((current) => [...current, { id: `u-${Date.now()}`, role: 'user', text: value }]);
+    setInput('');
+    setLessonError(null);
+    setIsAsking(true);
+
+    try {
+      const data = await askAssistant({
+        message: value,
+        attack_type: mapLessonCategoryToAttackType(openLesson.category),
+        difficulty: mapLessonLevelToDifficulty(openLesson.level),
+      });
+
+      const tipsText = data.quick_tips.map((tip, index) => `${index + 1}. ${tip}`).join('\n');
+      const assistantText = tipsText ? `${data.answer}\n\n${tipsText}` : data.answer;
+      setLessonMessages((current) => [
+        ...current,
+        { id: `a-${Date.now()}`, role: 'assistant', text: assistantText },
+      ]);
+    } catch {
+      setLessonError('Nu am putut contacta asistentul. Încearcă din nou.');
+    } finally {
+      setIsAsking(false);
+    }
+  };
 
   return (
     <View style={styles.screen}>
@@ -92,8 +234,8 @@ export default function LearnScreen() {
             <Ionicons name="book-outline" size={18} color="#EFF6FF" />
           </View>
           <View>
-            <Text style={styles.title}>Learn</Text>
-            <Text style={styles.subtitle}>Master the art of cyber defense</Text>
+            <Text style={styles.title}>Învață</Text>
+            <Text style={styles.subtitle}>Stăpânește arta apărării cibernetice</Text>
           </View>
         </View>
 
@@ -102,9 +244,9 @@ export default function LearnScreen() {
             <Ionicons name="sparkles" size={16} color={TrainingColors.accentTeal} />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.heroEyebrow}>AI tutor</Text>
+            <Text style={styles.heroEyebrow}>Tutor AI</Text>
             <Text style={styles.heroText}>
-              Tap any lesson and get an instant personalized explanation with red flags and defenses.
+              Deschide orice lecție și primești instant o explicație personalizată cu red flags și metode de apărare.
             </Text>
           </View>
         </View>
@@ -122,7 +264,7 @@ export default function LearnScreen() {
 
         <View style={styles.lessonList}>
           {filtered.map((lesson) => (
-            <Pressable key={lesson.id} onPress={() => setOpenLesson(lesson)} style={styles.lessonCard}>
+            <Pressable key={lesson.id} onPress={() => openLessonModal(lesson)} style={styles.lessonCard}>
               <View style={styles.lessonIcon}>
                 <Ionicons name="school-outline" size={18} color={TrainingColors.accentTeal} />
               </View>
@@ -142,7 +284,7 @@ export default function LearnScreen() {
         </View>
       </ScrollView>
 
-      <Modal visible={openLesson !== null} transparent animationType="slide" onRequestClose={() => setOpenLesson(null)}>
+      <Modal visible={openLesson !== null} transparent animationType="slide" onRequestClose={closeLessonModal}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
@@ -152,34 +294,62 @@ export default function LearnScreen() {
                 </Text>
                 <Text style={styles.modalTitle}>{openLesson?.title}</Text>
               </View>
-              <Pressable onPress={() => setOpenLesson(null)} style={styles.modalClose}>
+              <Pressable onPress={closeLessonModal} style={styles.modalClose}>
                 <Ionicons name="close" size={18} color={TrainingColors.textPrimary} />
               </Pressable>
             </View>
 
             <ScrollView style={styles.modalBody}>
-              <View style={styles.botRow}>
-                <View style={styles.botIcon}>
-                  <Ionicons name="sparkles" size={13} color={TrainingColors.accentTeal} />
+              {lessonMessages.map((message) =>
+                message.role === 'assistant' ? (
+                  <View key={message.id} style={styles.botRow}>
+                    <View style={styles.botIcon}>
+                      <Ionicons name="sparkles" size={13} color={TrainingColors.accentTeal} />
+                    </View>
+                    <View style={styles.botBubble}>
+                      <Text style={styles.botText}>{message.text}</Text>
+                    </View>
+                  </View>
+                ) : (
+                  <View key={message.id} style={styles.userRow}>
+                    <View style={styles.userBubble}>
+                      <Text style={styles.userText}>{message.text}</Text>
+                    </View>
+                  </View>
+                )
+              )}
+
+              {isAsking ? (
+                <View style={styles.botRow}>
+                  <View style={styles.botIcon}>
+                    <Ionicons name="sparkles" size={13} color={TrainingColors.accentTeal} />
+                  </View>
+                  <View style={styles.thinkingBubble}>
+                    <View style={styles.typingRow}>
+                      <View style={[styles.typingDot, { opacity: 0.45 }]} />
+                      <View style={[styles.typingDot, { opacity: 0.7 }]} />
+                      <View style={styles.typingDot} />
+                    </View>
+                  </View>
                 </View>
-                <View style={styles.botBubble}>
-                  <Text style={styles.botText}>
-                    Focus on verification, suspicious urgency, and independent confirmation. Never
-                    use contact details from the suspicious message itself.
-                  </Text>
-                </View>
-              </View>
+              ) : null}
+
+              {lessonError ? <Text style={styles.modalErrorText}>{lessonError}</Text> : null}
             </ScrollView>
 
             <View style={styles.modalComposer}>
               <TextInput
                 value={input}
                 onChangeText={setInput}
-                placeholder="Ask a follow-up..."
+                onSubmitEditing={() => void sendFollowUp()}
+                placeholder="Pune o întrebare de follow-up..."
                 placeholderTextColor={TrainingColors.textMuted}
                 style={styles.modalInput}
               />
-              <Pressable style={[styles.modalSend, !input.trim() && styles.modalSendDisabled]} disabled={!input.trim()}>
+              <Pressable
+                onPress={() => void sendFollowUp()}
+                style={[styles.modalSend, (!input.trim() || isAsking) && styles.modalSendDisabled]}
+                disabled={!input.trim() || isAsking}>
                 <Ionicons name="send" size={14} color="#EFF6FF" />
               </Pressable>
             </View>
@@ -311,6 +481,35 @@ const styles = StyleSheet.create({
     padding: 11,
   },
   botText: { color: TrainingColors.textPrimary, fontSize: 13, lineHeight: 18 },
+  userRow: { alignItems: 'flex-end', marginTop: 8 },
+  userBubble: {
+    maxWidth: '84%',
+    borderRadius: 14,
+    borderTopRightRadius: 6,
+    backgroundColor: TrainingColors.buttonPrimary,
+    borderWidth: 1,
+    borderColor: TrainingColors.buttonPrimaryBorder,
+    paddingHorizontal: 11,
+    paddingVertical: 9,
+  },
+  userText: { color: '#EFF6FF', fontSize: 13, lineHeight: 18 },
+  thinkingBubble: {
+    borderRadius: 14,
+    borderTopLeftRadius: 6,
+    borderWidth: 1,
+    borderColor: TrainingColors.border,
+    backgroundColor: TrainingColors.panelAlt,
+    paddingHorizontal: 11,
+    paddingVertical: 9,
+  },
+  typingRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  typingDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: TrainingColors.textMuted,
+  },
+  modalErrorText: { color: TrainingColors.accentDanger, fontSize: 12, marginTop: 10 },
   modalComposer: {
     flexDirection: 'row',
     alignItems: 'center',

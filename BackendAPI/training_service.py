@@ -8,6 +8,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from persistence_repository import (
+    fetch_scenario_context,
     fetch_session_events,
     fetch_session_snapshot,
     record_generated_scenario,
@@ -15,7 +16,7 @@ from persistence_repository import (
     record_session_event,
     upsert_session_progress,
 )
-from scenario_library import ALL_ATTACK_TYPES, get_scenario_template
+from scenario_library import ALL_ATTACK_TYPES, ALL_DIFFICULTIES, SCENARIO_LIBRARY, get_scenario_template
 from scenario_models import AttackType, DifficultyLevel, ScenarioOption, ScenarioRule
 
 DIFFICULTY_ORDER: tuple[DifficultyLevel, ...] = ("easy", "medium", "hard")
@@ -112,6 +113,19 @@ class SessionEventsResponse(BaseModel):
     limit: int
     offset: int
     events: list[SessionEvent]
+
+
+class ScenarioCatalogItemResponse(BaseModel):
+    id: str
+    attack_type: AttackType
+    difficulty: DifficultyLevel
+    channel: str
+    attacker_message_preview: str
+    red_flags: list[str]
+
+
+class ScenarioCatalogResponse(BaseModel):
+    items: list[ScenarioCatalogItemResponse]
 
 
 scenario_contexts: dict[str, ScenarioContext] = {}
@@ -234,6 +248,7 @@ def persist_generated_attempt(
     scenario_id: str,
     attack_type: AttackType,
     difficulty: DifficultyLevel,
+    rule: ScenarioRule,
 ) -> None:
     try:
         record_generated_scenario(
@@ -241,6 +256,9 @@ def persist_generated_attempt(
             scenario_id=scenario_id,
             attack_type=attack_type,
             difficulty=difficulty,
+            correct_option_id=rule.correct_option_id,
+            correct_explanation=rule.correct_explanation,
+            incorrect_explanation=rule.incorrect_explanation,
         )
     except Exception:
         logger.exception(
@@ -377,6 +395,7 @@ def generate_scenario(
         scenario_id=scenario_id,
         attack_type=attack_type,
         difficulty=difficulty,
+        rule=template.rule,
     )
     persist_event(current_session_id, event)
     persist_session_state(current_session_id, progress)
@@ -397,7 +416,21 @@ def evaluate_scenario(scenario_id: str, selected_option_id: str) -> EvaluateScen
     scenario_context = scenario_contexts.get(scenario_id)
 
     if scenario_context is None:
-        raise KeyError("Scenario not found")
+        persisted_scenario_context = fetch_scenario_context(scenario_id)
+        if persisted_scenario_context is None:
+            raise KeyError("Scenario not found")
+
+        scenario_context = ScenarioContext(
+            session_id=persisted_scenario_context["session_id"],
+            attack_type=cast(AttackType, persisted_scenario_context["attack_type"]),
+            difficulty=cast(DifficultyLevel, persisted_scenario_context["difficulty"]),
+            rule=ScenarioRule(
+                correct_option_id=persisted_scenario_context["correct_option_id"],
+                correct_explanation=persisted_scenario_context["correct_explanation"],
+                incorrect_explanation=persisted_scenario_context["incorrect_explanation"],
+            ),
+        )
+        scenario_contexts[scenario_id] = scenario_context
 
     progress = get_or_create_session(scenario_context.session_id)
 
@@ -487,3 +520,28 @@ def get_session_events(session_id: str, limit: int = 20, offset: int = 0) -> Ses
     if events is None:
         return None
     return SessionEventsResponse.model_validate(events)
+
+
+def get_scenario_catalog() -> ScenarioCatalogResponse:
+    items: list[ScenarioCatalogItemResponse] = []
+
+    for attack_type in ALL_ATTACK_TYPES:
+        for difficulty in ALL_DIFFICULTIES:
+            templates = SCENARIO_LIBRARY[(attack_type, difficulty)]
+            for index, template in enumerate(templates, start=1):
+                preview = template.attacker_message.strip()
+                if len(preview) > 160:
+                    preview = f"{preview[:157]}..."
+
+                items.append(
+                    ScenarioCatalogItemResponse(
+                        id=f"{attack_type}-{difficulty}-{index}",
+                        attack_type=attack_type,
+                        difficulty=difficulty,
+                        channel=template.channel,
+                        attacker_message_preview=preview,
+                        red_flags=template.red_flags[:3],
+                    )
+                )
+
+    return ScenarioCatalogResponse(items=items)

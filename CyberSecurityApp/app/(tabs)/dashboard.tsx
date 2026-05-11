@@ -1,57 +1,135 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Link } from 'expo-router';
+import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { getScenarioCatalog } from '@/features/training/api';
 import type { AttackType, DifficultyLevel } from '@/features/training/types';
 import { TrainingColors } from '@/features/training/ui-theme';
+import { useTrainingSession } from '@/features/training/useTrainingSession';
 
-const stats = [
-  {
-    label: 'Attacks detected',
-    value: '47',
-    icon: 'shield-checkmark' as keyof typeof Ionicons.glyphMap,
-    tone: 'success' as const,
-  },
-  {
-    label: 'Mistakes made',
-    value: '08',
-    icon: 'warning' as keyof typeof Ionicons.glyphMap,
-    tone: 'warning' as const,
-  },
-];
+type RiskLevel = 'Scăzut' | 'Mediu' | 'Ridicat' | 'Critic';
 
-const scenarios = [
-  {
-    id: 'phishing-easy',
-    type: 'Phishing Email',
-    title: 'Cont suspendat — link suspect',
-    risk: 'High' as const,
-    icon: 'mail-outline' as keyof typeof Ionicons.glyphMap,
-    attackType: 'phishing' as AttackType,
-    difficulty: 'easy' as DifficultyLevel,
-  },
-  {
-    id: 'smishing-easy',
-    type: 'SMS Scam',
-    title: 'Colet nelivrat — link de plată',
-    risk: 'Medium' as const,
-    icon: 'chatbubble-ellipses-outline' as keyof typeof Ionicons.glyphMap,
-    attackType: 'smishing' as AttackType,
-    difficulty: 'easy' as DifficultyLevel,
-  },
-  {
-    id: 'impersonation-medium',
-    type: 'Impersonare',
-    title: 'Manager fals — gift card-uri',
-    risk: 'Critical' as const,
-    icon: 'call-outline' as keyof typeof Ionicons.glyphMap,
-    attackType: 'impersonation' as AttackType,
-    difficulty: 'medium' as DifficultyLevel,
-  },
-];
+const ATTACK_LABELS: Record<AttackType, string> = {
+  phishing: 'Phishing prin email',
+  smishing: 'Escrocherie SMS',
+  impersonation: 'Impersonare',
+};
+
+const ATTACK_ICONS: Record<AttackType, keyof typeof Ionicons.glyphMap> = {
+  phishing: 'mail-outline',
+  smishing: 'chatbubble-ellipses-outline',
+  impersonation: 'call-outline',
+};
+
+const DIFFICULTY_LABELS: Record<DifficultyLevel, string> = {
+  easy: 'UȘOR',
+  medium: 'MEDIU',
+  hard: 'GREU',
+};
+
+function riskFromAccuracy(accuracy: number, attempts: number): RiskLevel {
+  if (attempts < 2) return 'Mediu';
+  if (accuracy <= 40) return 'Critic';
+  if (accuracy <= 65) return 'Ridicat';
+  if (accuracy <= 85) return 'Mediu';
+  return 'Scăzut';
+}
+
+function recommendedDifficulty(accuracy: number, attempts: number): DifficultyLevel {
+  if (attempts < 2) return 'easy';
+  if (accuracy < 50) return 'easy';
+  if (accuracy < 80) return 'medium';
+  return 'hard';
+}
 
 export default function DashboardScreen() {
-  const cyberScore = 78;
+  const { stats, perAttackStats, evaluation, sessionId } = useTrainingSession();
+  const [scenarioPreviewByKey, setScenarioPreviewByKey] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadCatalog = async () => {
+      try {
+        const data = await getScenarioCatalog();
+        if (cancelled) {
+          return;
+        }
+
+        const map: Record<string, string> = {};
+        for (const item of data.items) {
+          const key = `${item.attack_type}-${item.difficulty}`;
+          if (!map[key]) {
+            map[key] = item.attacker_message_preview;
+          }
+        }
+        setScenarioPreviewByKey(map);
+      } catch {
+        if (!cancelled) {
+          setScenarioPreviewByKey({});
+        }
+      }
+    };
+
+    void loadCatalog();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const cyberScore = Math.max(0, Math.min(100, stats.accuracy));
+  const estimatedDetected = Math.round((stats.totalAttempts * stats.accuracy) / 100);
+  const mistakes = Math.max(0, stats.totalAttempts - estimatedDetected);
+
+  const scenarioCards = useMemo(
+    () =>
+      perAttackStats
+        .map(({ id, value }) => {
+          const accuracy = value?.accuracy ?? 0;
+          const attempts = value?.attempts ?? 0;
+          const difficulty = recommendedDifficulty(accuracy, attempts);
+          const preview = scenarioPreviewByKey[`${id}-${difficulty}`];
+          const title = preview
+            ? preview.length > 58
+              ? `${preview.slice(0, 55)}...`
+              : preview
+            : `Exersează ${ATTACK_LABELS[id].toLowerCase()}`;
+          return {
+            id: `${id}-${difficulty}`,
+            type: ATTACK_LABELS[id],
+            title,
+            risk: riskFromAccuracy(accuracy, attempts),
+            icon: ATTACK_ICONS[id],
+            attackType: id,
+            difficulty,
+          };
+        })
+        .sort((a, b) => {
+          const aAccuracy = perAttackStats.find((item) => item.id === a.attackType)?.value?.accuracy ?? 0;
+          const bAccuracy = perAttackStats.find((item) => item.id === b.attackType)?.value?.accuracy ?? 0;
+          return aAccuracy - bAccuracy;
+        }),
+    [perAttackStats, scenarioPreviewByKey]
+  );
+
+  const challenge = useMemo(() => {
+    if (evaluation?.recommendation) {
+      const attack = evaluation.recommendation.attack_type;
+      return {
+      title: `Scenariu recomandat · ${ATTACK_LABELS[attack]}`,
+        difficulty: evaluation.recommendation.difficulty,
+        attackType: attack,
+      };
+    }
+
+    const fallback = scenarioCards[0];
+    return {
+      title: fallback ? `Zonă prioritară · ${fallback.type}` : 'Provocarea zilei',
+      difficulty: fallback?.difficulty ?? 'easy',
+      attackType: fallback?.attackType ?? 'phishing',
+    };
+  }, [evaluation?.recommendation, scenarioCards]);
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
@@ -61,8 +139,8 @@ export default function DashboardScreen() {
             <Ionicons name="shield-half" size={18} color="#EFF6FF" />
           </View>
           <View>
-            <Text style={styles.headerTitle}>Hey, Alex</Text>
-            <Text style={styles.headerSubtitle}>Stay sharp. Stay safe.</Text>
+            <Text style={styles.headerTitle}>Panou de antrenament</Text>
+            <Text style={styles.headerSubtitle}>Rămâi atent. Rămâi în siguranță.</Text>
           </View>
         </View>
         <View style={styles.bell}>
@@ -77,33 +155,56 @@ export default function DashboardScreen() {
           <Text style={styles.scoreRingText}>{cyberScore}</Text>
         </View>
         <View style={styles.scoreContent}>
-          <Text style={styles.eyebrow}>Cyber Score</Text>
+          <Text style={styles.eyebrow}>Scor de securitate</Text>
           <Text style={styles.scoreValue}>
             {cyberScore}
             <Text style={styles.scoreOutOf}> / 100</Text>
           </Text>
           <Text style={styles.scoreMeta}>
-            +6 this week · <Text style={styles.successText}>Vigilant</Text>
+            {stats.totalAttempts} încercări · <Text style={styles.successText}>Sesiune activă</Text>
           </Text>
         </View>
       </View>
 
-      <Link href={{ pathname: '/chat/[scenarioId]', params: { scenarioId: 'daily', attackType: 'impersonation', difficulty: 'hard' } }} asChild>
+      <Link
+        href={{
+          pathname: '/chat/[scenarioId]',
+          params: {
+            scenarioId: `daily-${challenge.attackType}-${challenge.difficulty}`,
+            attackType: challenge.attackType,
+            difficulty: challenge.difficulty,
+            sessionId: sessionId ?? undefined,
+          },
+        }}
+        asChild>
         <Pressable style={({ pressed }) => [styles.challengeCard, pressed && styles.pressableFeedback]}>
           <View style={styles.challengeIcon}>
             <Ionicons name="flame" size={22} color="#EFF6FF" />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.challengeEyebrow}>Daily challenge</Text>
-            <Text style={styles.challengeTitle}>Detectează impersonarea CFO</Text>
-            <Text style={styles.challengeMeta}>+10 puncte · 5 min</Text>
+            <Text style={styles.challengeEyebrow}>Provocarea zilei</Text>
+            <Text style={styles.challengeTitle}>{challenge.title}</Text>
+            <Text style={styles.challengeMeta}>{DIFFICULTY_LABELS[challenge.difficulty]} · sesiune activă</Text>
           </View>
           <Ionicons name="chevron-forward" size={18} color="#DCEBFF" />
         </Pressable>
       </Link>
 
       <View style={styles.metricGrid}>
-        {stats.map((s) => (
+        {[
+          {
+            label: 'Atacuri detectate',
+            value: `${estimatedDetected}`,
+            icon: 'shield-checkmark' as keyof typeof Ionicons.glyphMap,
+            tone: 'success' as const,
+          },
+          {
+            label: 'Greșeli făcute',
+            value: `${mistakes}`,
+            icon: 'warning' as keyof typeof Ionicons.glyphMap,
+            tone: 'warning' as const,
+          },
+        ].map((s) => (
           <View key={s.label} style={styles.metricCard}>
             <View style={styles.metricTop}>
               <Ionicons
@@ -111,7 +212,7 @@ export default function DashboardScreen() {
                 size={16}
                 color={s.tone === 'success' ? TrainingColors.accentTeal : TrainingColors.accentAmber}
               />
-              <Text style={styles.metricTime}>This month</Text>
+              <Text style={styles.metricTime}>Luna aceasta</Text>
             </View>
             <Text style={styles.metricValue}>{s.value}</Text>
             <Text style={styles.metricLabel}>{s.label}</Text>
@@ -120,17 +221,28 @@ export default function DashboardScreen() {
       </View>
 
       <View style={styles.sectionHeader}>
-        <Text style={styles.sectionTitle}>Continue training</Text>
+        <Text style={styles.sectionTitle}>Continuă antrenamentul</Text>
         <Link href="/(tabs)/scenarios" asChild>
           <Pressable style={({ pressed }) => [styles.sectionLinkRow, pressed && styles.pressableFeedback]}>
-            <Text style={styles.sectionLink}>View all</Text>
+            <Text style={styles.sectionLink}>Vezi toate</Text>
             <Ionicons name="chevron-forward" size={13} color={TrainingColors.accentTeal} />
           </Pressable>
         </Link>
       </View>
       <View style={styles.scenarioList}>
-        {scenarios.map((scenario) => (
-          <Link key={scenario.id} href={{ pathname: '/chat/[scenarioId]', params: { scenarioId: scenario.id, attackType: scenario.attackType, difficulty: scenario.difficulty } }} asChild>
+        {scenarioCards.map((scenario) => (
+          <Link
+            key={scenario.id}
+            href={{
+              pathname: '/chat/[scenarioId]',
+              params: {
+                scenarioId: scenario.id,
+                attackType: scenario.attackType,
+                difficulty: scenario.difficulty,
+                sessionId: sessionId ?? undefined,
+              },
+            }}
+            asChild>
             <Pressable style={({ pressed }) => [styles.scenarioCard, pressed && styles.pressableFeedback]}>
               <View style={styles.scenarioIcon}>
                 <Ionicons name={scenario.icon} size={18} color={TrainingColors.accentTeal} />
@@ -150,10 +262,10 @@ export default function DashboardScreen() {
           <Ionicons name="sparkles" size={15} color={TrainingColors.accentTeal} />
         </View>
         <View style={{ flex: 1 }}>
-          <Text style={styles.tipTitle}>Today&apos;s insight</Text>
+          <Text style={styles.tipTitle}>Insight-ul zilei</Text>
           <Text style={styles.tipText}>
-            Real banks never ask you to confirm credentials via SMS links. When in doubt, open the
-            app directly.
+            {evaluation?.recommendation?.reason ??
+              'Antrenează mai întâi categoria cu acuratețea cea mai mică, apoi crește gradual dificultatea.'}
           </Text>
         </View>
       </View>
@@ -164,8 +276,8 @@ export default function DashboardScreen() {
             <Ionicons name="book-outline" size={18} color={TrainingColors.accentTeal} />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.learnTitle}>Open the Learn library</Text>
-            <Text style={styles.learnText}>AI-tutored lessons on phishing, scams & more</Text>
+            <Text style={styles.learnTitle}>Deschide biblioteca de învățare</Text>
+            <Text style={styles.learnText}>Lecții ghidate de AI despre phishing, scam-uri și altele</Text>
           </View>
           <Ionicons name="chevron-forward" size={16} color={TrainingColors.textMuted} />
         </Pressable>
@@ -174,21 +286,21 @@ export default function DashboardScreen() {
   );
 }
 
-function RiskBadge({ level }: { level: (typeof scenarios)[number]['risk'] }) {
+function RiskBadge({ level }: { level: RiskLevel }) {
   const tone =
-    level === 'Critical'
+    level === 'Critic'
       ? styles.riskCritical
-      : level === 'High'
+      : level === 'Ridicat'
         ? styles.riskHigh
-        : level === 'Medium'
+        : level === 'Mediu'
           ? styles.riskMedium
           : styles.riskLow;
   const textTone =
-    level === 'Critical'
+    level === 'Critic'
       ? styles.riskTextCritical
-      : level === 'High'
+      : level === 'Ridicat'
         ? styles.riskTextHigh
-        : level === 'Medium'
+        : level === 'Mediu'
           ? styles.riskTextMedium
           : styles.riskTextLow;
   return (

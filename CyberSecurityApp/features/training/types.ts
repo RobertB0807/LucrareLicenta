@@ -59,3 +59,37 @@ export type Evaluation = {
 export type GenerateScenarioApiResponse = Scenario & {
   session_id: string;
 };
+
+export type SessionSnapshotApiResponse = {
+  session_id: string;
+  session_stats: SessionStats;
+  generated_scenarios: number;
+  evaluated_scenarios: number;
+  last_updated_at: string | null;
+};
+
+export type SessionEventsApiResponse = {
+  session_id: string;
+  total: number;
+  limit: number;
+  offset: number;
+  events: SessionEvent[];
+};
+
+export type AssistantAskApiResponse = {
+  answer: string;
+  quick_tips: string[];
+};
+
+export type ScenarioCatalogItemApiResponse = {
+  id: string;
+  attack_type: AttackType;
+  difficulty: DifficultyLevel;
+  channel: string;
+  attacker_message_preview: string;
+  red_flags: string[];
+};
+
+export type ScenarioCatalogApiResponse = {
+  items: ScenarioCatalogItemApiResponse[];
+};

@@ -2,10 +2,14 @@ import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 
 import type {
+  AssistantAskApiResponse,
   AttackType,
   DifficultyLevel,
   Evaluation,
   GenerateScenarioApiResponse,
+  ScenarioCatalogApiResponse,
+  SessionEventsApiResponse,
+  SessionSnapshotApiResponse,
 } from './types';
 
 type GenerateScenarioPayload = {
@@ -17,6 +21,13 @@ type GenerateScenarioPayload = {
 type EvaluateScenarioPayload = {
   scenario_id: string;
   selected_option_id: string;
+};
+
+type AssistantAskPayload = {
+  message: string;
+  session_id?: string;
+  attack_type?: AttackType;
+  difficulty?: DifficultyLevel;
 };
 
 const DEFAULT_API_BASE_URL =
@@ -79,6 +90,29 @@ async function postJson<TResponse>(path: string, payload: unknown, fallbackError
   throw lastError ?? new Error(fallbackError);
 }
 
+async function getJson<TResponse>(path: string, fallbackError: string): Promise<TResponse> {
+  let lastError: Error | null = null;
+
+  for (const baseUrl of API_BASE_URL_CANDIDATES) {
+    try {
+      const response = await fetch(`${baseUrl}${path}`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      if (!response.ok) {
+        throw new Error(fallbackError);
+      }
+
+      return (await response.json()) as TResponse;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(fallbackError);
+    }
+  }
+
+  throw lastError ?? new Error(fallbackError);
+}
+
 export async function generateScenario(
   payload: GenerateScenarioPayload
 ): Promise<GenerateScenarioApiResponse> {
@@ -91,4 +125,38 @@ export async function generateScenario(
 
 export async function evaluateScenario(payload: EvaluateScenarioPayload): Promise<Evaluation> {
   return postJson<Evaluation>('/scenario/evaluate', payload, 'Nu am putut evalua raspunsul.');
+}
+
+export async function getSessionSnapshot(sessionId: string): Promise<SessionSnapshotApiResponse> {
+  return getJson<SessionSnapshotApiResponse>(
+    `/session/${encodeURIComponent(sessionId)}`,
+    'Nu am putut incarca sumarul sesiunii.'
+  );
+}
+
+export async function getSessionEvents(
+  sessionId: string,
+  options: { limit?: number; offset?: number } = {}
+): Promise<SessionEventsApiResponse> {
+  const limit = options.limit ?? 20;
+  const offset = options.offset ?? 0;
+  return getJson<SessionEventsApiResponse>(
+    `/session/${encodeURIComponent(sessionId)}/events?limit=${limit}&offset=${offset}`,
+    'Nu am putut incarca evenimentele sesiunii.'
+  );
+}
+
+export async function getScenarioCatalog(): Promise<ScenarioCatalogApiResponse> {
+  return getJson<ScenarioCatalogApiResponse>(
+    '/scenario/catalog',
+    'Nu am putut incarca catalogul de scenarii.'
+  );
+}
+
+export async function askAssistant(payload: AssistantAskPayload): Promise<AssistantAskApiResponse> {
+  return postJson<AssistantAskApiResponse>(
+    '/assistant/ask',
+    payload,
+    'Nu am putut obtine raspunsul asistentului.'
+  );
 }

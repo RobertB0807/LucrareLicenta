@@ -1,149 +1,160 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Link } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { getScenarioCatalog } from '@/features/training/api';
+import { getDifficultyLabel } from '@/features/training/options';
 import type { AttackType, DifficultyLevel } from '@/features/training/types';
 import { TrainingColors } from '@/features/training/ui-theme';
+import { useTrainingSession } from '@/features/training/useTrainingSession';
 
 type Scenario = {
   id: string;
   type: string;
   title: string;
   description: string;
-  difficulty: 'Easy' | 'Medium' | 'Hard';
-  risk: 'Medium' | 'High' | 'Critical';
+  difficulty: 'Ușor' | 'Mediu' | 'Greu';
+  risk: 'Mediu' | 'Ridicat' | 'Critic';
   time: string;
   attackType: AttackType;
   backendDifficulty: DifficultyLevel;
-  channel: 'Email' | 'SMS' | 'Voice' | 'Web';
+  channel: 'Email' | 'SMS' | 'Vocal' | 'Web';
 };
 
-const scenarios: Scenario[] = [
-  {
-    id: 'phishing-easy',
-    type: 'Phishing Email',
-    title: 'Cont suspendat — link suspect',
-    description: 'Un email urgent care îți cere să verifici contul bancar prin link extern.',
-    difficulty: 'Easy',
-    risk: 'Medium',
-    time: '3 min',
-    attackType: 'phishing',
-    backendDifficulty: 'easy',
-    channel: 'Email',
-  },
-  {
-    id: 'phishing-medium',
-    type: 'Phishing Email',
-    title: 'Factură neachitată — portal fals',
-    description: 'Un email despre o factură restantă cu link de autentificare neoficial.',
-    difficulty: 'Medium',
-    risk: 'High',
-    time: '4 min',
-    attackType: 'phishing',
-    backendDifficulty: 'medium',
-    channel: 'Email',
-  },
-  {
-    id: 'phishing-hard',
-    type: 'Phishing Email',
-    title: 'Thread hijacking — document fals',
-    description: 'Un reply în conversație existentă cu un document SharePoint fals.',
-    difficulty: 'Hard',
-    risk: 'Critical',
-    time: '5 min',
-    attackType: 'phishing',
-    backendDifficulty: 'hard',
-    channel: 'Email',
-  },
-  {
-    id: 'smishing-easy',
-    type: 'SMS Scam',
-    title: 'Colet nelivrat — link de plată',
-    description: 'Un SMS de la un curier fals care cere plata unei taxe de redirectionare.',
-    difficulty: 'Easy',
-    risk: 'Medium',
-    time: '3 min',
-    attackType: 'smishing',
-    backendDifficulty: 'easy',
-    channel: 'SMS',
-  },
-  {
-    id: 'smishing-medium',
-    type: 'SMS Scam',
-    title: 'Rambursare ANAF — date personale',
-    description: 'Un SMS care promite o rambursare și solicită date bancare.',
-    difficulty: 'Medium',
-    risk: 'High',
-    time: '4 min',
-    attackType: 'smishing',
-    backendDifficulty: 'medium',
-    channel: 'SMS',
-  },
-  {
-    id: 'smishing-hard',
-    type: 'SMS Scam',
-    title: 'Alertă bancară — verificare identitate',
-    description: 'Un SMS urgent de la bancă despre o tranzacție blocată.',
-    difficulty: 'Hard',
-    risk: 'Critical',
-    time: '5 min',
-    attackType: 'smishing',
-    backendDifficulty: 'hard',
-    channel: 'SMS',
-  },
-  {
-    id: 'impersonation-easy',
-    type: 'Impersonare',
-    title: 'Suport IT fals — cod MFA',
-    description: 'Cineva din "IT" cere codul de verificare primit pe telefon.',
-    difficulty: 'Easy',
-    risk: 'Medium',
-    time: '3 min',
-    attackType: 'impersonation',
-    backendDifficulty: 'easy',
-    channel: 'Voice',
-  },
-  {
-    id: 'impersonation-medium',
-    type: 'Impersonare',
-    title: 'Manager fals — gift card-uri',
-    description: 'Un "manager" cere urgent cumpărarea de gift card-uri.',
-    difficulty: 'Medium',
-    risk: 'High',
-    time: '5 min',
-    attackType: 'impersonation',
-    backendDifficulty: 'medium',
-    channel: 'Voice',
-  },
-  {
-    id: 'impersonation-hard',
-    type: 'Impersonare',
-    title: 'CFO fals — transfer urgent',
-    description: 'Un apel de la "CFO" care cere un transfer bancar urgent și discret.',
-    difficulty: 'Hard',
-    risk: 'Critical',
-    time: '7 min',
-    attackType: 'impersonation',
-    backendDifficulty: 'hard',
-    channel: 'Voice',
-  },
-];
+type RiskLevel = Scenario['risk'];
 
-const filters = ['All', 'Email', 'SMS', 'Voice'] as const;
+const filters = ['Toate', 'Email', 'SMS', 'Vocal'] as const;
+const ATTACK_LABELS: Record<AttackType, string> = {
+  phishing: 'Phishing prin email',
+  smishing: 'Escrocherie SMS',
+  impersonation: 'Impersonare',
+};
+
+function channelLabel(channel: string): Scenario['channel'] {
+  if (channel === 'email') return 'Email';
+  if (channel === 'sms') return 'SMS';
+  if (channel === 'phone' || channel === 'call') return 'Vocal';
+  return 'Web';
+}
+
+function fallbackRiskByDifficulty(difficulty: DifficultyLevel): RiskLevel {
+  if (difficulty === 'hard') return 'Critic';
+  if (difficulty === 'medium') return 'Ridicat';
+  return 'Mediu';
+}
+
+function estimateTimeByDifficulty(difficulty: DifficultyLevel): string {
+  if (difficulty === 'hard') return '6 min';
+  if (difficulty === 'medium') return '4 min';
+  return '3 min';
+}
+
+function buildScenarioTitle(description: string, attackType: AttackType, difficulty: DifficultyLevel): string {
+  const firstSentence = description.split('.').map((item) => item.trim()).find(Boolean);
+  if (firstSentence) {
+    return firstSentence.length > 58 ? `${firstSentence.slice(0, 55)}...` : firstSentence;
+  }
+  return `${ATTACK_LABELS[attackType]} · ${getDifficultyLabel(difficulty)}`;
+}
+
+function riskFromStats(
+  fallbackRisk: RiskLevel,
+  value?: { attempts: number; accuracy: number }
+): RiskLevel {
+  if (!value || value.attempts < 2) {
+    return fallbackRisk;
+  }
+  if (value.accuracy <= 40) return 'Critic';
+  if (value.accuracy <= 65) return 'Ridicat';
+  return 'Mediu';
+}
 
 export default function ScenariosScreen() {
   const [query, setQuery] = useState('');
-  const [activeFilter, setActiveFilter] = useState<(typeof filters)[number]>('All');
+  const [activeFilter, setActiveFilter] = useState<(typeof filters)[number]>('Toate');
+  const [scenarios, setScenarios] = useState<Scenario[]>([]);
+  const [isLoadingCatalog, setIsLoadingCatalog] = useState(true);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const { sessionId, perAttackStats, evaluation } = useTrainingSession();
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadCatalog = async () => {
+      setIsLoadingCatalog(true);
+      setCatalogError(null);
+      try {
+        const data = await getScenarioCatalog();
+        if (cancelled) {
+          return;
+        }
+
+        const mapped: Scenario[] = data.items.map((item) => {
+          const description = item.attacker_message_preview;
+          return {
+            id: item.id,
+            type: ATTACK_LABELS[item.attack_type],
+            title: buildScenarioTitle(description, item.attack_type, item.difficulty),
+            description,
+            difficulty: getDifficultyLabel(item.difficulty) as Scenario['difficulty'],
+            risk: fallbackRiskByDifficulty(item.difficulty),
+            time: estimateTimeByDifficulty(item.difficulty),
+            attackType: item.attack_type,
+            backendDifficulty: item.difficulty,
+            channel: channelLabel(item.channel),
+          };
+        });
+        setScenarios(mapped);
+      } catch {
+        if (!cancelled) {
+          setCatalogError('Nu am putut încărca catalogul de scenarii.');
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingCatalog(false);
+        }
+      }
+    };
+
+    void loadCatalog();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const perAttackMap = useMemo(
+    () =>
+      Object.fromEntries(
+        perAttackStats.map((entry) => [entry.id, entry.value] as const)
+      ) as Partial<Record<AttackType, (typeof perAttackStats)[number]['value']>>,
+    [perAttackStats]
+  );
 
   const filtered = useMemo(() => {
     const q = query.toLowerCase().trim();
-    return scenarios.filter((scenario) => {
-      const matchesFilter = activeFilter === 'All' || scenario.channel === activeFilter;
-      const text = `${scenario.title} ${scenario.description} ${scenario.type}`.toLowerCase();
-      return matchesFilter && text.includes(q);
+    const enriched = scenarios
+      .map((scenario) => ({
+        ...scenario,
+        risk: riskFromStats(scenario.risk, perAttackMap[scenario.attackType]),
+      }))
+      .filter((scenario) => {
+        const matchesFilter = activeFilter === 'Toate' || scenario.channel === activeFilter;
+        const text = `${scenario.title} ${scenario.description} ${scenario.type}`.toLowerCase();
+        return matchesFilter && text.includes(q);
+      });
+
+    if (!evaluation?.recommendation) {
+      return enriched;
+    }
+
+    const rec = evaluation.recommendation;
+    return enriched.sort((a, b) => {
+      const aRecommended = a.attackType === rec.attack_type && a.backendDifficulty === rec.difficulty;
+      const bRecommended = b.attackType === rec.attack_type && b.backendDifficulty === rec.difficulty;
+      return Number(bRecommended) - Number(aRecommended);
     });
-  }, [query, activeFilter]);
+  }, [activeFilter, evaluation?.recommendation, perAttackMap, query, scenarios]);
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
@@ -152,8 +163,8 @@ export default function ScenariosScreen() {
           <Ionicons name="shield-checkmark-outline" size={19} color="#EFF6FF" />
         </View>
         <View>
-          <Text style={styles.title}>Training Lab</Text>
-          <Text style={styles.subtitle}>Pick a scenario, sharpen your defense</Text>
+          <Text style={styles.title}>Laborator de antrenament</Text>
+          <Text style={styles.subtitle}>Alege un scenariu și îți ascuți apărarea</Text>
         </View>
       </View>
 
@@ -162,7 +173,7 @@ export default function ScenariosScreen() {
         <TextInput
           value={query}
           onChangeText={setQuery}
-          placeholder="Search scenarios"
+          placeholder="Caută scenarii"
           placeholderTextColor={TrainingColors.textMuted}
           style={styles.searchInput}
         />
@@ -182,7 +193,34 @@ export default function ScenariosScreen() {
         })}
       </ScrollView>
 
+      {sessionId ? (
+        <View style={styles.sessionCard}>
+          <View style={styles.sessionIcon}>
+            <Ionicons name="sync-outline" size={14} color={TrainingColors.accentTeal} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.sessionTitle}>Sesiune activă conectată</Text>
+            <Text style={styles.sessionMeta}>Scenariile următoare vor continua sesiunea curentă.</Text>
+          </View>
+        </View>
+      ) : null}
+
       <View style={styles.list}>
+        {catalogError ? (
+          <View style={styles.sessionCard}>
+            <Text style={styles.sessionMeta}>{catalogError}</Text>
+          </View>
+        ) : null}
+        {isLoadingCatalog ? (
+          <View style={styles.sessionCard}>
+            <Text style={styles.sessionMeta}>Se încarcă scenariile...</Text>
+          </View>
+        ) : null}
+        {!isLoadingCatalog && filtered.length === 0 ? (
+          <View style={styles.sessionCard}>
+            <Text style={styles.sessionMeta}>Nu există scenarii pentru filtrul curent.</Text>
+          </View>
+        ) : null}
         {filtered.map((scenario) => (
           <Link
             key={scenario.id}
@@ -192,6 +230,7 @@ export default function ScenariosScreen() {
                 scenarioId: scenario.id,
                 attackType: scenario.attackType,
                 difficulty: scenario.backendDifficulty,
+                sessionId: sessionId ?? undefined,
               },
             }}
             asChild>
@@ -222,8 +261,8 @@ export default function ScenariosScreen() {
 }
 
 function RiskTag({ level }: { level: Scenario['risk'] }) {
-  const tone = level === 'Critical' ? styles.riskCritical : level === 'High' ? styles.riskHigh : styles.riskMedium;
-  const textTone = level === 'Critical' ? styles.riskTextCritical : level === 'High' ? styles.riskTextHigh : styles.riskTextMedium;
+  const tone = level === 'Critic' ? styles.riskCritical : level === 'Ridicat' ? styles.riskHigh : styles.riskMedium;
+  const textTone = level === 'Critic' ? styles.riskTextCritical : level === 'Ridicat' ? styles.riskTextHigh : styles.riskTextMedium;
   return (
     <View style={[styles.riskPill, tone]}>
       <Text style={[styles.riskText, textTone]}>{level}</Text>
@@ -272,6 +311,26 @@ const styles = StyleSheet.create({
   filterText: { color: TrainingColors.textSecondary, fontSize: 12, fontWeight: '700' },
   filterTextActive: { color: '#EEF6FF' },
   list: { gap: 10, marginTop: 2 },
+  sessionCard: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: TrainingColors.border,
+    backgroundColor: TrainingColors.panel,
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'center',
+    padding: 10,
+  },
+  sessionIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(69,224,177,0.12)',
+  },
+  sessionTitle: { color: TrainingColors.textPrimary, fontSize: 12, fontWeight: '700' },
+  sessionMeta: { color: TrainingColors.textSecondary, fontSize: 11, marginTop: 1 },
   card: {
     borderRadius: 20,
     borderWidth: 1,

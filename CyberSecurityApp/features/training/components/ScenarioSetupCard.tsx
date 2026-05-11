@@ -32,13 +32,13 @@ export function ScenarioSetupCard({
       <View style={styles.scanlineTop} />
 
       <ThemedText type="subtitle" style={styles.blockTitle}>
-        Mission Setup
+        Configurare misiune
       </ThemedText>
       <ThemedText style={styles.blockSubtitle}>
         Configureaza vectorul de atac si nivelul de dificultate pentru simularea curenta.
       </ThemedText>
 
-      <ThemedText style={styles.blockLabel}>ATTACK VECTOR</ThemedText>
+      <ThemedText style={styles.blockLabel}>VECTOR DE ATAC</ThemedText>
       <View style={styles.selectorRow}>
         {ATTACK_TYPE_OPTIONS.map((option) => {
           const isSelected = attackType === option.id;
@@ -61,7 +61,7 @@ export function ScenarioSetupCard({
         })}
       </View>
 
-      <ThemedText style={styles.blockLabel}>DIFFICULTY</ThemedText>
+      <ThemedText style={styles.blockLabel}>DIFICULTATE</ThemedText>
       <View style={styles.difficultyRow}>
         {DIFFICULTY_OPTIONS.map((option, index) => {
           const isSelected = difficulty === option.id;
@@ -95,7 +95,7 @@ export function ScenarioSetupCard({
 
       <Pressable style={styles.primaryButton} onPress={onGenerateScenario}>
         <ThemedText type="defaultSemiBold" style={styles.primaryButtonText}>
-          Launch Scenario
+          Pornește scenariul
         </ThemedText>
       </Pressable>
     </View>

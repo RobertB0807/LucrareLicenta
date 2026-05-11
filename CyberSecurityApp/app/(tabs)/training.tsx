@@ -42,9 +42,9 @@ export default function HomeScreen() {
           <View style={styles.headerGlowRight} />
           <View style={styles.headerCore}>
             <View style={styles.headerLine} />
-            <ThemedText style={styles.headerCoreTitle}>THREAT SIMULATION</ThemedText>
+            <ThemedText style={styles.headerCoreTitle}>SIMULARE AMENINȚARE</ThemedText>
             <ThemedText style={styles.headerCoreSubtitle}>
-              Observe, decide, defend.
+              Observă, decide, apără.
             </ThemedText>
           </View>
         </View>
@@ -64,7 +64,7 @@ export default function HomeScreen() {
           <View style={styles.scenarioCard}>
             <View style={styles.scenarioHeaderRow}>
               <ThemedText type="subtitle" style={styles.blockTitle}>
-                Threat Brief
+                Brief de amenințare
               </ThemedText>
               <View style={styles.metadataGroup}>
                 <View style={styles.metaPill}>
