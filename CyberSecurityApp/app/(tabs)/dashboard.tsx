@@ -1,8 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Link } from 'expo-router';
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { getScenarioCatalog } from '@/features/training/api';
 import type { AttackType, DifficultyLevel } from '@/features/training/types';
 import { TrainingColors } from '@/features/training/ui-theme';
 import { useTrainingSession } from '@/features/training/useTrainingSession';
@@ -13,12 +14,6 @@ const ATTACK_LABELS: Record<AttackType, string> = {
   phishing: 'Phishing prin email',
   smishing: 'Escrocherie SMS',
   impersonation: 'Impersonare',
-};
-
-const ATTACK_TITLES: Record<AttackType, string> = {
-  phishing: 'Detectează emailul fraudulos',
-  smishing: 'Identifică SMS-ul capcană',
-  impersonation: 'Blochează impersonarea urgentă',
 };
 
 const ATTACK_ICONS: Record<AttackType, keyof typeof Ionicons.glyphMap> = {
@@ -50,6 +45,38 @@ function recommendedDifficulty(accuracy: number, attempts: number): DifficultyLe
 
 export default function DashboardScreen() {
   const { stats, perAttackStats, evaluation, sessionId } = useTrainingSession();
+  const [scenarioPreviewByKey, setScenarioPreviewByKey] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadCatalog = async () => {
+      try {
+        const data = await getScenarioCatalog();
+        if (cancelled) {
+          return;
+        }
+
+        const map: Record<string, string> = {};
+        for (const item of data.items) {
+          const key = `${item.attack_type}-${item.difficulty}`;
+          if (!map[key]) {
+            map[key] = item.attacker_message_preview;
+          }
+        }
+        setScenarioPreviewByKey(map);
+      } catch {
+        if (!cancelled) {
+          setScenarioPreviewByKey({});
+        }
+      }
+    };
+
+    void loadCatalog();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const cyberScore = Math.max(0, Math.min(100, stats.accuracy));
   const estimatedDetected = Math.round((stats.totalAttempts * stats.accuracy) / 100);
@@ -62,10 +89,16 @@ export default function DashboardScreen() {
           const accuracy = value?.accuracy ?? 0;
           const attempts = value?.attempts ?? 0;
           const difficulty = recommendedDifficulty(accuracy, attempts);
+          const preview = scenarioPreviewByKey[`${id}-${difficulty}`];
+          const title = preview
+            ? preview.length > 58
+              ? `${preview.slice(0, 55)}...`
+              : preview
+            : `Exersează ${ATTACK_LABELS[id].toLowerCase()}`;
           return {
             id: `${id}-${difficulty}`,
             type: ATTACK_LABELS[id],
-            title: ATTACK_TITLES[id],
+            title,
             risk: riskFromAccuracy(accuracy, attempts),
             icon: ATTACK_ICONS[id],
             attackType: id,
@@ -77,7 +110,7 @@ export default function DashboardScreen() {
           const bAccuracy = perAttackStats.find((item) => item.id === b.attackType)?.value?.accuracy ?? 0;
           return aAccuracy - bAccuracy;
         }),
-    [perAttackStats]
+    [perAttackStats, scenarioPreviewByKey]
   );
 
   const challenge = useMemo(() => {
@@ -106,7 +139,7 @@ export default function DashboardScreen() {
             <Ionicons name="shield-half" size={18} color="#EFF6FF" />
           </View>
           <View>
-            <Text style={styles.headerTitle}>Salut, Alex</Text>
+            <Text style={styles.headerTitle}>Panou de antrenament</Text>
             <Text style={styles.headerSubtitle}>Rămâi atent. Rămâi în siguranță.</Text>
           </View>
         </View>

@@ -1,10 +1,21 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { askAssistant } from '@/features/training/api';
 import { TrainingColors } from '@/features/training/ui-theme';
 
 type Msg = { id: string; role: 'user' | 'assistant'; text: string };
+const ASSISTANT_MESSAGES_STORAGE_KEY = 'assistant-messages-v1';
+
+const defaultMessages: Msg[] = [
+  {
+    id: 's1',
+    role: 'assistant',
+    text: 'Salut 👋 Sunt Sentinel, coach-ul tău AI de apărare. Întreabă-mă orice despre phishing, smishing, vishing sau cum să rămâi în siguranță online.',
+  },
+];
 
 const suggestions = [
   'Cum identific un email de phishing?',
@@ -14,35 +25,63 @@ const suggestions = [
 ];
 
 export default function AssistantScreen() {
-  const [messages, setMessages] = useState<Msg[]>([
-      {
-        id: 's1',
-        role: 'assistant',
-        text: 'Salut 👋 Sunt Sentinel, coach-ul tău AI de apărare. Întreabă-mă orice despre phishing, smishing, vishing sau cum să rămâi în siguranță online.',
-      },
-  ]);
+  const [messages, setMessages] = useState<Msg[]>(defaultMessages);
   const [draft, setDraft] = useState('');
   const [thinking, setThinking] = useState(false);
 
-  const send = (text: string) => {
+  useEffect(() => {
+    let cancelled = false;
+
+    const hydrate = async () => {
+      try {
+        const raw = await AsyncStorage.getItem(ASSISTANT_MESSAGES_STORAGE_KEY);
+        if (!raw || cancelled) {
+          return;
+        }
+        const parsed = JSON.parse(raw) as Msg[];
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setMessages(parsed.slice(-40));
+        }
+      } catch {
+        // Ignore local cache read errors.
+      }
+    };
+
+    void hydrate();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    void AsyncStorage.setItem(ASSISTANT_MESSAGES_STORAGE_KEY, JSON.stringify(messages.slice(-40)));
+  }, [messages]);
+
+  const send = async (text: string) => {
     const value = text.trim();
-    if (!value) return;
+    if (!value || thinking) return;
 
     setMessages((m) => [...m, { id: `u-${Date.now()}`, role: 'user', text: value }]);
     setDraft('');
     setThinking(true);
 
-    setTimeout(() => {
+    try {
+      const data = await askAssistant({ message: value });
+      const tipsText = data.quick_tips.map((tip, index) => `${index + 1}. ${tip}`).join('\n');
+      const assistantText = tipsText ? `${data.answer}\n\n${tipsText}` : data.answer;
+      setMessages((m) => [...m, { id: `a-${Date.now()}`, role: 'assistant', text: assistantText }]);
+    } catch {
       setMessages((m) => [
         ...m,
         {
           id: `a-${Date.now()}`,
           role: 'assistant',
-           text: 'Întrebare foarte bună. Urmărește urgența artificială, domenii care nu se potrivesc, formule generice de adresare și adrese neobișnuite ale expeditorului. Dacă ai dubii, nu da click. Intră direct în aplicația sau site-ul oficial.',
+          text: 'Nu am putut contacta asistentul acum. Verifică backend-ul și încearcă din nou.',
         },
       ]);
+    } finally {
       setThinking(false);
-    }, 1200);
+    }
   };
 
   return (
@@ -96,7 +135,7 @@ export default function AssistantScreen() {
           <View style={styles.suggestions}>
             <Text style={styles.suggestionsLabel}>Încearcă să întrebi</Text>
             {suggestions.map((s) => (
-              <Pressable key={s} onPress={() => send(s)} style={styles.suggestionCard}>
+              <Pressable key={s} onPress={() => void send(s)} style={styles.suggestionCard}>
                 <Text style={styles.suggestionText}>{s}</Text>
               </Pressable>
             ))}
@@ -106,21 +145,21 @@ export default function AssistantScreen() {
 
       <View style={styles.composer}>
         <View style={styles.inputWrap}>
-          <TextInput
-            value={draft}
-            onChangeText={setDraft}
-            onSubmitEditing={() => send(draft)}
-             placeholder="Întreabă despre phishing, smishing..."
-            placeholderTextColor={TrainingColors.textMuted}
-            style={styles.input}
-          />
-          <Pressable
-            onPress={() => send(draft)}
-            style={[styles.sendButton, !draft.trim() && styles.sendDisabled]}
-            disabled={!draft.trim()}>
-            <Ionicons name="send" size={15} color="#EFF6FF" />
-          </Pressable>
-        </View>
+            <TextInput
+              value={draft}
+              onChangeText={setDraft}
+              onSubmitEditing={() => void send(draft)}
+              placeholder="Întreabă despre phishing, smishing..."
+              placeholderTextColor={TrainingColors.textMuted}
+              style={styles.input}
+            />
+            <Pressable
+              onPress={() => void send(draft)}
+              style={[styles.sendButton, (!draft.trim() || thinking) && styles.sendDisabled]}
+              disabled={!draft.trim() || thinking}>
+              <Ionicons name="send" size={15} color="#EFF6FF" />
+            </Pressable>
+          </View>
       </View>
     </View>
   );

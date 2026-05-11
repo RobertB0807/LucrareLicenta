@@ -1,7 +1,10 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { askAssistant } from '@/features/training/api';
+import type { AttackType, DifficultyLevel } from '@/features/training/types';
 import { TrainingColors } from '@/features/training/ui-theme';
 
 type Lesson = {
@@ -11,6 +14,20 @@ type Lesson = {
   summary: string;
   minutes: number;
   level: 'Începător' | 'Intermediar' | 'Avansat';
+};
+
+type LessonMessage = {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+};
+
+type ActiveCategory = 'Toate' | 'Fundamente' | 'Phishing' | 'Smishing' | 'Vishing' | 'Escrocherii web' | 'Siguranța contului';
+
+type PersistedLearnState = {
+  activeCat: ActiveCategory;
+  openLessonId: string | null;
+  lessonMessages: LessonMessage[];
 };
 
 const lessons: Lesson[] = [
@@ -73,16 +90,141 @@ const lessons: Lesson[] = [
 ];
 
 const categories = ['Toate', 'Fundamente', 'Phishing', 'Smishing', 'Vishing', 'Escrocherii web', 'Siguranța contului'] as const;
+const LEARN_SCREEN_STORAGE_KEY = 'learn-screen-state-v1';
+
+function mapLessonCategoryToAttackType(
+  category: Lesson['category']
+): AttackType | undefined {
+  if (category === 'Phishing') return 'phishing';
+  if (category === 'Smishing') return 'smishing';
+  if (category === 'Vishing') return 'impersonation';
+  return undefined;
+}
+
+function mapLessonLevelToDifficulty(level: Lesson['level']): DifficultyLevel {
+  if (level === 'Avansat') return 'hard';
+  if (level === 'Intermediar') return 'medium';
+  return 'easy';
+}
 
 export default function LearnScreen() {
-  const [activeCat, setActiveCat] = useState<(typeof categories)[number]>('Toate');
+  const [activeCat, setActiveCat] = useState<ActiveCategory>('Toate');
   const [openLesson, setOpenLesson] = useState<Lesson | null>(null);
   const [input, setInput] = useState('');
+  const [lessonMessages, setLessonMessages] = useState<LessonMessage[]>([]);
+  const [isAsking, setIsAsking] = useState(false);
+  const [lessonError, setLessonError] = useState<string | null>(null);
+  const [isHydrated, setIsHydrated] = useState(false);
 
   const filtered = useMemo(
     () => (activeCat === 'Toate' ? lessons : lessons.filter((l) => l.category === activeCat)),
     [activeCat]
   );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const hydrate = async () => {
+      try {
+        const raw = await AsyncStorage.getItem(LEARN_SCREEN_STORAGE_KEY);
+        if (!raw || cancelled) {
+          return;
+        }
+
+        const parsed = JSON.parse(raw) as PersistedLearnState;
+        if (parsed.activeCat && categories.includes(parsed.activeCat)) {
+          setActiveCat(parsed.activeCat);
+        }
+
+        if (Array.isArray(parsed.lessonMessages) && parsed.lessonMessages.length > 0) {
+          setLessonMessages(parsed.lessonMessages.slice(-40));
+        }
+
+        if (typeof parsed.openLessonId === 'string' && parsed.openLessonId) {
+          const matchedLesson = lessons.find((lesson) => lesson.id === parsed.openLessonId);
+          if (matchedLesson) {
+            setOpenLesson(matchedLesson);
+          }
+        }
+      } catch {
+        // Ignore local cache read errors.
+      } finally {
+        if (!cancelled) {
+          setIsHydrated(true);
+        }
+      }
+    };
+
+    void hydrate();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isHydrated) {
+      return;
+    }
+    const stateToPersist: PersistedLearnState = {
+      activeCat,
+      openLessonId: openLesson?.id ?? null,
+      lessonMessages: lessonMessages.slice(-40),
+    };
+    void AsyncStorage.setItem(LEARN_SCREEN_STORAGE_KEY, JSON.stringify(stateToPersist));
+  }, [activeCat, isHydrated, lessonMessages, openLesson?.id]);
+
+  const openLessonModal = (lesson: Lesson) => {
+    setOpenLesson(lesson);
+    setInput('');
+    setLessonError(null);
+    setIsAsking(false);
+    setLessonMessages([
+      {
+        id: `a-${Date.now()}`,
+        role: 'assistant',
+        text: `Lecția „${lesson.title}”: ${lesson.summary}\n\nÎntreabă-mă orice și îți explic pas cu pas.`,
+      },
+    ]);
+  };
+
+  const closeLessonModal = () => {
+    setOpenLesson(null);
+    setInput('');
+    setLessonMessages([]);
+    setLessonError(null);
+    setIsAsking(false);
+  };
+
+  const sendFollowUp = async () => {
+    const value = input.trim();
+    if (!value || !openLesson || isAsking) {
+      return;
+    }
+
+    setLessonMessages((current) => [...current, { id: `u-${Date.now()}`, role: 'user', text: value }]);
+    setInput('');
+    setLessonError(null);
+    setIsAsking(true);
+
+    try {
+      const data = await askAssistant({
+        message: value,
+        attack_type: mapLessonCategoryToAttackType(openLesson.category),
+        difficulty: mapLessonLevelToDifficulty(openLesson.level),
+      });
+
+      const tipsText = data.quick_tips.map((tip, index) => `${index + 1}. ${tip}`).join('\n');
+      const assistantText = tipsText ? `${data.answer}\n\n${tipsText}` : data.answer;
+      setLessonMessages((current) => [
+        ...current,
+        { id: `a-${Date.now()}`, role: 'assistant', text: assistantText },
+      ]);
+    } catch {
+      setLessonError('Nu am putut contacta asistentul. Încearcă din nou.');
+    } finally {
+      setIsAsking(false);
+    }
+  };
 
   return (
     <View style={styles.screen}>
@@ -122,7 +264,7 @@ export default function LearnScreen() {
 
         <View style={styles.lessonList}>
           {filtered.map((lesson) => (
-            <Pressable key={lesson.id} onPress={() => setOpenLesson(lesson)} style={styles.lessonCard}>
+            <Pressable key={lesson.id} onPress={() => openLessonModal(lesson)} style={styles.lessonCard}>
               <View style={styles.lessonIcon}>
                 <Ionicons name="school-outline" size={18} color={TrainingColors.accentTeal} />
               </View>
@@ -142,7 +284,7 @@ export default function LearnScreen() {
         </View>
       </ScrollView>
 
-      <Modal visible={openLesson !== null} transparent animationType="slide" onRequestClose={() => setOpenLesson(null)}>
+      <Modal visible={openLesson !== null} transparent animationType="slide" onRequestClose={closeLessonModal}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
@@ -152,34 +294,62 @@ export default function LearnScreen() {
                 </Text>
                 <Text style={styles.modalTitle}>{openLesson?.title}</Text>
               </View>
-              <Pressable onPress={() => setOpenLesson(null)} style={styles.modalClose}>
+              <Pressable onPress={closeLessonModal} style={styles.modalClose}>
                 <Ionicons name="close" size={18} color={TrainingColors.textPrimary} />
               </Pressable>
             </View>
 
             <ScrollView style={styles.modalBody}>
-              <View style={styles.botRow}>
-                <View style={styles.botIcon}>
-                  <Ionicons name="sparkles" size={13} color={TrainingColors.accentTeal} />
+              {lessonMessages.map((message) =>
+                message.role === 'assistant' ? (
+                  <View key={message.id} style={styles.botRow}>
+                    <View style={styles.botIcon}>
+                      <Ionicons name="sparkles" size={13} color={TrainingColors.accentTeal} />
+                    </View>
+                    <View style={styles.botBubble}>
+                      <Text style={styles.botText}>{message.text}</Text>
+                    </View>
+                  </View>
+                ) : (
+                  <View key={message.id} style={styles.userRow}>
+                    <View style={styles.userBubble}>
+                      <Text style={styles.userText}>{message.text}</Text>
+                    </View>
+                  </View>
+                )
+              )}
+
+              {isAsking ? (
+                <View style={styles.botRow}>
+                  <View style={styles.botIcon}>
+                    <Ionicons name="sparkles" size={13} color={TrainingColors.accentTeal} />
+                  </View>
+                  <View style={styles.thinkingBubble}>
+                    <View style={styles.typingRow}>
+                      <View style={[styles.typingDot, { opacity: 0.45 }]} />
+                      <View style={[styles.typingDot, { opacity: 0.7 }]} />
+                      <View style={styles.typingDot} />
+                    </View>
+                  </View>
                 </View>
-                <View style={styles.botBubble}>
-                  <Text style={styles.botText}>
-                    Concentrează-te pe verificare, urgență suspectă și confirmare independentă. Nu
-                    folosi niciodată datele de contact din mesajul suspect.
-                  </Text>
-                </View>
-              </View>
+              ) : null}
+
+              {lessonError ? <Text style={styles.modalErrorText}>{lessonError}</Text> : null}
             </ScrollView>
 
             <View style={styles.modalComposer}>
               <TextInput
                 value={input}
                 onChangeText={setInput}
+                onSubmitEditing={() => void sendFollowUp()}
                 placeholder="Pune o întrebare de follow-up..."
                 placeholderTextColor={TrainingColors.textMuted}
                 style={styles.modalInput}
               />
-              <Pressable style={[styles.modalSend, !input.trim() && styles.modalSendDisabled]} disabled={!input.trim()}>
+              <Pressable
+                onPress={() => void sendFollowUp()}
+                style={[styles.modalSend, (!input.trim() || isAsking) && styles.modalSendDisabled]}
+                disabled={!input.trim() || isAsking}>
                 <Ionicons name="send" size={14} color="#EFF6FF" />
               </Pressable>
             </View>
@@ -311,6 +481,35 @@ const styles = StyleSheet.create({
     padding: 11,
   },
   botText: { color: TrainingColors.textPrimary, fontSize: 13, lineHeight: 18 },
+  userRow: { alignItems: 'flex-end', marginTop: 8 },
+  userBubble: {
+    maxWidth: '84%',
+    borderRadius: 14,
+    borderTopRightRadius: 6,
+    backgroundColor: TrainingColors.buttonPrimary,
+    borderWidth: 1,
+    borderColor: TrainingColors.buttonPrimaryBorder,
+    paddingHorizontal: 11,
+    paddingVertical: 9,
+  },
+  userText: { color: '#EFF6FF', fontSize: 13, lineHeight: 18 },
+  thinkingBubble: {
+    borderRadius: 14,
+    borderTopLeftRadius: 6,
+    borderWidth: 1,
+    borderColor: TrainingColors.border,
+    backgroundColor: TrainingColors.panelAlt,
+    paddingHorizontal: 11,
+    paddingVertical: 9,
+  },
+  typingRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  typingDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: TrainingColors.textMuted,
+  },
+  modalErrorText: { color: TrainingColors.accentDanger, fontSize: 12, marginTop: 10 },
   modalComposer: {
     flexDirection: 'row',
     alignItems: 'center',

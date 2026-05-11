@@ -2,10 +2,12 @@ import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 
 import type {
+  AssistantAskApiResponse,
   AttackType,
   DifficultyLevel,
   Evaluation,
   GenerateScenarioApiResponse,
+  ScenarioCatalogApiResponse,
   SessionEventsApiResponse,
   SessionSnapshotApiResponse,
 } from './types';
@@ -19,6 +21,13 @@ type GenerateScenarioPayload = {
 type EvaluateScenarioPayload = {
   scenario_id: string;
   selected_option_id: string;
+};
+
+type AssistantAskPayload = {
+  message: string;
+  session_id?: string;
+  attack_type?: AttackType;
+  difficulty?: DifficultyLevel;
 };
 
 const DEFAULT_API_BASE_URL =
@@ -134,5 +143,20 @@ export async function getSessionEvents(
   return getJson<SessionEventsApiResponse>(
     `/session/${encodeURIComponent(sessionId)}/events?limit=${limit}&offset=${offset}`,
     'Nu am putut incarca evenimentele sesiunii.'
+  );
+}
+
+export async function getScenarioCatalog(): Promise<ScenarioCatalogApiResponse> {
+  return getJson<ScenarioCatalogApiResponse>(
+    '/scenario/catalog',
+    'Nu am putut incarca catalogul de scenarii.'
+  );
+}
+
+export async function askAssistant(payload: AssistantAskPayload): Promise<AssistantAskApiResponse> {
+  return postJson<AssistantAskApiResponse>(
+    '/assistant/ask',
+    payload,
+    'Nu am putut obtine raspunsul asistentului.'
   );
 }

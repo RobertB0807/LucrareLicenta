@@ -75,3 +75,21 @@ export type SessionEventsApiResponse = {
   offset: number;
   events: SessionEvent[];
 };
+
+export type AssistantAskApiResponse = {
+  answer: string;
+  quick_tips: string[];
+};
+
+export type ScenarioCatalogItemApiResponse = {
+  id: string;
+  attack_type: AttackType;
+  difficulty: DifficultyLevel;
+  channel: string;
+  attacker_message_preview: string;
+  red_flags: string[];
+};
+
+export type ScenarioCatalogApiResponse = {
+  items: ScenarioCatalogItemApiResponse[];
+};

@@ -13,7 +13,7 @@ The goal is educational: users interact with scenarios, choose a response, recei
 ## Current Tech Stack
 - Frontend: React Native + Expo
 - Backend: FastAPI (Python)
-- AI: planned LLM integration later
+- AI: rule-based assistant endpoint implemented, LLM integration planned later
 
 ## Current State
 The project is already functional as a vertical MVP slice.
@@ -32,10 +32,17 @@ Backend lives in `BackendAPI/` and currently includes:
 
 Backend features currently implemented:
 - `GET /health`
+- `GET /scenario/catalog`
 - `POST /scenario/generate`
 - `POST /scenario/evaluate`
+- `POST /assistant/ask`
 - `GET /session/{session_id}`
 - `GET /session/{session_id}/events`
+- endpoint-level sliding-window rate limiting:
+  - `/scenario/generate`: 30 requests / 60 seconds / client
+  - `/scenario/evaluate`: 60 requests / 60 seconds / client
+  - `/assistant/ask`: 60 requests / 60 seconds / client
+- strict identifier validation on API inputs (`session_id`, `scenario_id`, `selected_option_id`)
 - scenario templates for all combinations of:
   - attack type: phishing, smishing, impersonation
   - difficulty: easy, medium, hard
@@ -46,6 +53,7 @@ Backend features currently implemented:
 - session event history (`recent_events`) with timestamp and tone metadata
 - SQLite persistence for sessions, attempts and events
 - startup DB bootstrap now applies Alembic migrations (`upgrade head`) when available, with a safe ORM `create_all` fallback if Alembic is missing
+- scenario evaluation is restart-safe: when in-memory scenario context is missing, backend restores rule context from persisted `scenario_attempts` data
 
 ### Frontend status
 Frontend lives in `CyberSecurityApp/`.
@@ -69,7 +77,9 @@ The existing `features/training/*` architecture is still present and reusable.
 Current integration level:
 - chat/feedback flow is now wired to real session continuity (`session_id` carried through routes)
 - analytics now consumes persisted backend session snapshot + recent events when a session is active
-- some product tabs still use mocked/static data for UI prototyping
+- assistant and learn tabs now use real backend AI responses via `POST /assistant/ask`
+- dashboard and scenarios now consume backend scenario catalog (`GET /scenario/catalog`)
+- local continuity is enabled via AsyncStorage for training session state and assistant/learn conversations
 
 ## Recent Progress (April-May 2026)
 - Backend refactor completed: service layer extracted from `main.py` into `training_service.py`.
@@ -107,7 +117,45 @@ Current integration level:
   - health endpoint
   - generate -> evaluate -> session snapshot/events flow
   - 404 behavior for unknown session/scenario
+- Added backend security hardening:
+  - sliding-window rate limiter middleware with `429` + `Retry-After`
+  - strict identifier validation for session/scenario/option IDs
+- Added endpoint tests for:
+  - request validation failures (`422`) on invalid identifiers
+  - rate limit behavior (`429`) after threshold is exceeded
+- Updated backend dependencies to remediate a known vulnerability:
+  - upgraded `fastapi` to `0.136.1`
+  - pinned `starlette` to `0.49.1` (CVE fix line)
 - Updated backend README with migration commands and backend test command.
+- Added Alembic migration `20260511_0002` to persist scenario rule fields needed for restart-safe evaluation:
+  - `correct_option_id`
+  - `correct_explanation`
+  - `incorrect_explanation`
+- Extended generation/evaluation persistence flow so rule context is saved on generate and reused on evaluate after process restart.
+- Added backend regression test validating evaluate flow after in-memory scenario cache reset.
+- Added backend assistant service (`assistant_service.py`) and endpoint:
+  - `POST /assistant/ask`
+  - deterministic coaching response (`answer` + `quick_tips`)
+  - optional context (`attack_type`, `difficulty`, `session_id`)
+- Added endpoint tests for assistant ask success and validation failure (empty message).
+- Added frontend API contract + client for assistant:
+  - `AssistantAskApiResponse` type
+  - `askAssistant(...)` in `features/training/api.ts`
+- Replaced mocked `setTimeout` assistant replies in `app/(tabs)/assistant.tsx` with real backend calls, loading state, and error handling.
+- Wired `app/(tabs)/learn.tsx` lesson modal composer to real backend assistant calls, including contextual `attack_type`/`difficulty`, message thread rendering, loading state, and errors.
+- Added backend scenario catalog endpoint:
+  - `GET /scenario/catalog`
+  - backed by `SCENARIO_LIBRARY` templates in `training_service.py`
+  - test coverage added in `tests/test_api_endpoints.py`
+- Added frontend scenario catalog integration:
+  - `getScenarioCatalog()` API client + typed contracts
+  - `app/(tabs)/scenarios.tsx` now loads catalog from backend (with loading/error/empty states)
+  - `app/(tabs)/dashboard.tsx` now uses catalog previews for scenario cards
+- Added AsyncStorage-based continuity on frontend:
+  - persisted/rehydrated training session state in `useTrainingSession.tsx`
+  - persisted/rehydrated assistant chat history in `app/(tabs)/assistant.tsx`
+  - persisted/rehydrated learn tab state (active category, open lesson, lesson messages) in `app/(tabs)/learn.tsx`
+  - added dependency `@react-native-async-storage/async-storage`
 
 ## What the App Already Does
 1. User selects attack type and difficulty.
@@ -132,6 +180,7 @@ Current integration level:
 ## Main Files to Know
 ### Backend
 - `BackendAPI/main.py`
+- `BackendAPI/assistant_service.py`
 - `BackendAPI/training_service.py`
 - `BackendAPI/db.py`
 - `BackendAPI/persistence_models.py`
@@ -141,6 +190,7 @@ Current integration level:
 - `BackendAPI/alembic.ini`
 - `BackendAPI/migrations/env.py`
 - `BackendAPI/migrations/versions/20260507_0001_initial_schema.py`
+- `BackendAPI/migrations/versions/20260511_0002_persist_scenario_rule.py`
 - `BackendAPI/tests/test_api_endpoints.py`
 
 ### Frontend
@@ -162,6 +212,7 @@ Current integration level:
 - `CyberSecurityApp/features/training/components/TrainingHero.tsx`
 - `CyberSecurityApp/features/training/components/ScenarioSetupCard.tsx`
 - `CyberSecurityApp/features/training/components/FeedbackPanel.tsx`
+- `CyberSecurityApp/package.json` (AsyncStorage dependency)
 
 ## Remaining Tasks / Suggested Roadmap
 Priority order:
@@ -169,7 +220,7 @@ Priority order:
 ### 1. Finish wiring remaining tabs to real backend/session state
 Current gap:
 - analytics + chat/feedback are now partially integrated with real session data
-- `dashboard`, `scenarios`, `learn`, and `assistant` still need deeper data integration
+- `dashboard` and `scenarios` now use backend catalog, but still rely on simplified local derivations in parts of the UI
 - the older training/session logic in `features/training/` is not yet the source of truth for all visible product routes
 
 Next integration step:
@@ -191,7 +242,15 @@ Next persistence step:
 - switch read path fully to DB after test coverage
 - optionally remove in-memory state
 
-### 3. Add more UI polish
+### 3. Expand persistent frontend continuity (AsyncStorage)
+Current baseline:
+- training session state, assistant chat, and learn state are persisted/restored
+
+Next step:
+- persist in-progress chat scenario state (`/chat/[scenarioId]`) and feedback transition context
+- add retention/cleanup policy for stored conversation history
+
+### 4. Add more UI polish
 Possible improvements:
 - cyber background pattern / grid
 - animated transitions for cards
@@ -199,13 +258,13 @@ Possible improvements:
 - richer scenario visuals
 - better mobile spacing for smaller screens
 
-### 4. Extract reusable hooks or subcomponents further
+### 5. Extract reusable hooks or subcomponents further
 If needed:
 - split `index.tsx` even more
 - move the scenario body into a dedicated component
 - move the stats section into a dashboard component
 
-### 5. Extend analytics with persisted trends (next step after current integration)
+### 6. Extend analytics with persisted trends (next step after current integration)
 Current baseline:
 - current analytics now reads persisted snapshot + paginated events for active session
 
@@ -215,18 +274,20 @@ Next:
 - charts based on stored attempts
 - pagination/load-more behavior in UI for longer event history
 
-### 6. Add LLM integration
+### 7. Add LLM integration
 When ready:
 - use an LLM for generating scenario text
 - validate the output shape strictly
 - keep a rule-based fallback if AI output fails
 
-### 7. Add tests
+### 8. Add tests
 Recommended:
 - backend endpoint integration tests are now in place for:
   - generate/evaluate flow
   - `/session/{session_id}`
   - `/session/{session_id}/events`
+  - validation edge cases (invalid IDs)
+  - rate limit enforcement
 - next: backend tests for persistence repositories and timeline queries
 - unit tests for session recommendation and score logic
 - basic UI smoke tests if needed
@@ -263,9 +324,9 @@ npx expo start
 Focus on incremental improvements only.
 
 Good next tasks:
-- connect new tab/chat/feedback UX to backend data and shared session state
-- add migration tooling + DB-focused tests
-- switch read path fully to DB
+- continue connecting remaining tab UX to backend data and shared session state
+- extend AsyncStorage continuity to scenario chat/feedback flow
+- switch read path fully to DB as source of truth
 - extend analytics from persisted events/attempts
 - then iterate on UI polish and LLM integration with fallback
 

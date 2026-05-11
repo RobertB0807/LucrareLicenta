@@ -52,6 +52,8 @@ alembic downgrade -1
 - `GET /health`
 - `POST /scenario/generate`
 - `POST /scenario/evaluate`
+- `GET /scenario/catalog`
+- `POST /assistant/ask`
 - `GET /session/{session_id}`
 - `GET /session/{session_id}/events?limit=20&offset=0`
 
@@ -60,3 +62,12 @@ alembic downgrade -1
 ```bash
 python -m unittest discover -s tests -p "test_*.py" -q
 ```
+
+## 5. Security hardening (MVP)
+
+- Rate limiting pentru endpoint-urile sensibile:
+  - `POST /scenario/generate`: max. 30 cereri / 60 secunde / client
+  - `POST /scenario/evaluate`: max. 60 cereri / 60 secunde / client
+  - `POST /assistant/ask`: max. 60 cereri / 60 secunde / client
+- Validare stricta pentru identificatori (`session_id`, `scenario_id`, `selected_option_id`) cu pattern controlat.
+- Cand limita este depasita, API-ul raspunde cu `429 Too Many Requests` si header `Retry-After`.

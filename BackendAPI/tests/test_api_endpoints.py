@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -38,10 +39,19 @@ class ApiEndpointsTestCase(unittest.TestCase):
         training_service.scenario_contexts.clear()
 
         db.init_db()
+        main.rate_limiter.reset()
+        self.client = TestClient(main.app)
 
         def restore_state() -> None:
             training_service.session_progress.clear()
             training_service.scenario_contexts.clear()
+            main.rate_limiter.configure_limits(
+                {
+                    "/scenario/generate": (30, 60),
+                    "/scenario/evaluate": (60, 60),
+                    "/assistant/ask": (60, 60),
+                }
+            )
             db.DATABASE_URL = self.original_database_url
             db.engine = self.original_engine
             db.SessionLocal = self.original_session_local
@@ -96,6 +106,26 @@ class ApiEndpointsTestCase(unittest.TestCase):
         self.assertGreaterEqual(events_payload["total"], 1)
         self.assertGreaterEqual(len(events_payload["events"]), 1)
 
+    def test_evaluate_after_context_cache_reset_uses_persisted_rule(self) -> None:
+        generated = main.generate_scenario(
+            main.GenerateScenarioRequest(attack_type="smishing", difficulty="medium")
+        )
+        generated_payload = generated.model_dump()
+        scenario_id = generated_payload["scenario_id"]
+        options = generated_payload["options"]
+
+        training_service.scenario_contexts.clear()
+
+        evaluated = main.evaluate_scenario(
+            main.EvaluateScenarioRequest(
+                scenario_id=scenario_id,
+                selected_option_id=options[0]["id"],
+            )
+        )
+        evaluated_payload = evaluated.model_dump()
+        self.assertIn("is_correct", evaluated_payload)
+        self.assertIn(evaluated_payload["score_delta"], {-5, 0, 10})
+
     def test_unknown_session_endpoints_return_404(self) -> None:
         with self.assertRaises(HTTPException) as snapshot_exc:
             main.get_session_snapshot("does-not-exist")
@@ -117,6 +147,72 @@ class ApiEndpointsTestCase(unittest.TestCase):
             )
         self.assertEqual(evaluation_exc.exception.status_code, 404)
         self.assertEqual(evaluation_exc.exception.detail, "Scenario not found")
+
+    def test_assistant_ask_returns_guidance(self) -> None:
+        response = self.client.post(
+            "/assistant/ask",
+            json={
+                "message": "Cum identific un email de phishing?",
+                "attack_type": "phishing",
+                "difficulty": "easy",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(isinstance(payload.get("answer"), str) and payload["answer"])
+        self.assertTrue(isinstance(payload.get("quick_tips"), list))
+        self.assertGreaterEqual(len(payload["quick_tips"]), 3)
+
+    def test_scenario_catalog_returns_items(self) -> None:
+        response = self.client.get("/scenario/catalog")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIn("items", payload)
+        self.assertTrue(isinstance(payload["items"], list))
+        self.assertGreater(len(payload["items"]), 0)
+
+        first_item = payload["items"][0]
+        self.assertIn("id", first_item)
+        self.assertIn("attack_type", first_item)
+        self.assertIn("difficulty", first_item)
+        self.assertIn("channel", first_item)
+        self.assertIn("attacker_message_preview", first_item)
+
+    def test_assistant_ask_rejects_empty_message(self) -> None:
+        response = self.client.post(
+            "/assistant/ask",
+            json={"message": "   "},
+        )
+        self.assertEqual(response.status_code, 422)
+
+    def test_request_validation_rejects_invalid_identifiers(self) -> None:
+        response = self.client.post(
+            "/scenario/evaluate",
+            json={
+                "scenario_id": "invalid id with spaces",
+                "selected_option_id": "click",
+            },
+        )
+        self.assertEqual(response.status_code, 422)
+
+        response = self.client.get("/session/invalid id with spaces")
+        self.assertEqual(response.status_code, 422)
+
+    def test_rate_limiting_blocks_excessive_requests(self) -> None:
+        original_limits = main.rate_limiter.snapshot_limits()
+        self.addCleanup(main.rate_limiter.configure_limits, original_limits)
+
+        main.rate_limiter.configure_limits({"/health": (2, 60)})
+
+        headers = {"x-forwarded-for": "198.51.100.25"}
+        first = self.client.get("/health", headers=headers)
+        second = self.client.get("/health", headers=headers)
+        third = self.client.get("/health", headers=headers)
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(third.status_code, 429)
+        self.assertIn("Retry-After", third.headers)
 
 
 if __name__ == "__main__":
