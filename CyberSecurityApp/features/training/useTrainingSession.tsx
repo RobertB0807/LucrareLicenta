@@ -1,13 +1,14 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 
-import { evaluateScenario, generateScenario } from './api';
+import { evaluateScenario, generateScenario, getScenarioCatalog, getSessionSnapshot } from './api';
 import { ATTACK_TYPE_OPTIONS } from './options';
 import type {
   AttackStats,
   AttackType,
   DifficultyLevel,
   Evaluation,
+  ScenarioCatalogItemApiResponse,
   SessionEvent,
   Scenario,
   SessionStats,
@@ -29,6 +30,8 @@ type PersistedTrainingSessionState = {
   attackType: AttackType;
   difficulty: DifficultyLevel;
   evaluation: Evaluation | null;
+  scenario: Scenario | null;
+  selectedOptionId: string | null;
   activityLog: ActivityItem[];
 };
 
@@ -79,6 +82,10 @@ type TrainingSessionContextValue = {
     label: string;
     value?: AttackStats;
   }>;
+  scenarioCatalog: ScenarioCatalogItemApiResponse[];
+  isLoadingCatalog: boolean;
+  catalogError: string | null;
+  refreshScenarioCatalog: () => Promise<void>;
   setSelectedOptionId: (optionId: string | null) => void;
   setAttackType: (attackType: AttackType) => void;
   setDifficulty: (difficulty: DifficultyLevel) => void;
@@ -108,6 +115,9 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [activityLog, setActivityLog] = useState<ActivityItem[]>([]);
   const [isHydrated, setIsHydrated] = useState(false);
+  const [scenarioCatalog, setScenarioCatalog] = useState<ScenarioCatalogItemApiResponse[]>([]);
+  const [isLoadingCatalog, setIsLoadingCatalog] = useState(true);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
 
   const pushActivity = useCallback(
     (entry: { title: string; detail: string; tone: 'neutral' | 'good' | 'warning' }) => {
@@ -181,6 +191,12 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
           setAttackType(parsed.attackType);
           setDifficulty(parsed.difficulty);
           setEvaluation(parsed.evaluation ?? null);
+          setScenario(parsed.scenario ?? null);
+          setSelectedOptionId(
+            parsed.selectedOptionId === null || typeof parsed.selectedOptionId === 'string'
+              ? parsed.selectedOptionId
+              : null
+          );
           setActivityLog(Array.isArray(parsed.activityLog) ? parsed.activityLog.slice(0, 8) : []);
         }
       } catch {
@@ -209,11 +225,68 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
       attackType,
       difficulty,
       evaluation,
+      scenario,
+      selectedOptionId,
       activityLog: activityLog.slice(0, 8),
     };
 
     void AsyncStorage.setItem(TRAINING_SESSION_STORAGE_KEY, JSON.stringify(stateToPersist));
-  }, [activityLog, attackType, difficulty, evaluation, isHydrated, sessionId, sessionStats]);
+  }, [
+    activityLog,
+    attackType,
+    difficulty,
+    evaluation,
+    isHydrated,
+    scenario,
+    selectedOptionId,
+    sessionId,
+    sessionStats,
+  ]);
+
+  const refreshScenarioCatalog = useCallback(async () => {
+    setIsLoadingCatalog(true);
+    setCatalogError(null);
+    try {
+      const data = await getScenarioCatalog();
+      setScenarioCatalog(data.items);
+    } catch {
+      setCatalogError('Nu am putut încărca catalogul de scenarii.');
+      setScenarioCatalog([]);
+    } finally {
+      setIsLoadingCatalog(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshScenarioCatalog();
+  }, [refreshScenarioCatalog]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const syncSessionFromBackend = async () => {
+      if (!isHydrated || !sessionId) {
+        return;
+      }
+
+      try {
+        const snapshot = await getSessionSnapshot(sessionId);
+        if (cancelled) {
+          return;
+        }
+
+        setSessionStats(snapshot.session_stats);
+        applyServerEvents(snapshot.session_stats.recent_events);
+      } catch {
+        // Keep locally available state when backend snapshot cannot be fetched.
+      }
+    };
+
+    void syncSessionFromBackend();
+    return () => {
+      cancelled = true;
+    };
+  }, [applyServerEvents, isHydrated, sessionId]);
 
   const startSimulation = async (
     nextAttackType: AttackType = attackType,
@@ -355,6 +428,10 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
     activityLog,
     stats,
     perAttackStats,
+    scenarioCatalog,
+    isLoadingCatalog,
+    catalogError,
+    refreshScenarioCatalog,
     setSelectedOptionId,
     setAttackType,
     setDifficulty,

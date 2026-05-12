@@ -2,8 +2,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { getSessionEvents, getSessionSnapshot } from '@/features/training/api';
-import type { AttackType, SessionEvent, SessionStats } from '@/features/training/types';
+import { getSessionEvents, getSessionSnapshot, getSessionTrends } from '@/features/training/api';
+import type { AttackType, SessionEvent, SessionStats, SessionTrendPointApiResponse } from '@/features/training/types';
 import { TrainingColors } from '@/features/training/ui-theme';
 import { useTrainingSession } from '@/features/training/useTrainingSession';
 
@@ -14,6 +14,9 @@ type WeakSpot = {
   tone: 'danger' | 'warning';
   icon: keyof typeof Ionicons.glyphMap;
 };
+
+type TrendAttackFilter = 'all' | AttackType;
+type DateRangeFilter = '7d' | '30d' | 'all';
 
 const ATTACK_LABELS: Record<AttackType, string> = {
   phishing: 'Phishing',
@@ -37,8 +40,28 @@ export default function AnalyticsScreen() {
   const { sessionId, stats, perAttackStats } = useTrainingSession();
   const [serverStats, setServerStats] = useState<SessionStats | null>(null);
   const [serverEvents, setServerEvents] = useState<SessionEvent[]>([]);
+  const [serverTrends, setServerTrends] = useState<SessionTrendPointApiResponse[]>([]);
+  const [serverEventsTotal, setServerEventsTotal] = useState(0);
+  const [eventsLimit, setEventsLimit] = useState(12);
+  const [trendAttackFilter, setTrendAttackFilter] = useState<TrendAttackFilter>('all');
+  const [dateRangeFilter, setDateRangeFilter] = useState<DateRangeFilter>('30d');
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+
+  useEffect(() => {
+    setEventsLimit(12);
+  }, [dateRangeFilter]);
+
+  const rangeSince = useMemo(() => {
+    if (dateRangeFilter === 'all') {
+      return undefined;
+    }
+
+    const days = dateRangeFilter === '7d' ? 7 : 30;
+    const date = new Date();
+    date.setDate(date.getDate() - days);
+    return date.toISOString();
+  }, [dateRangeFilter]);
 
   useEffect(() => {
     let cancelled = false;
@@ -47,6 +70,8 @@ export default function AnalyticsScreen() {
       if (!sessionId) {
         setServerStats(null);
         setServerEvents([]);
+        setServerTrends([]);
+        setServerEventsTotal(0);
         setFetchError(null);
         return;
       }
@@ -55,9 +80,15 @@ export default function AnalyticsScreen() {
       setFetchError(null);
 
       try {
-        const [snapshot, events] = await Promise.all([
+        const [snapshot, events, trends] = await Promise.all([
           getSessionSnapshot(sessionId),
-          getSessionEvents(sessionId, { limit: 12, offset: 0 }),
+          getSessionEvents(sessionId, { limit: eventsLimit, offset: 0, since: rangeSince }),
+          getSessionTrends(sessionId, {
+            limit: 120,
+            offset: 0,
+            attackType: trendAttackFilter === 'all' ? undefined : trendAttackFilter,
+            since: rangeSince,
+          }),
         ]);
 
         if (cancelled) {
@@ -66,6 +97,8 @@ export default function AnalyticsScreen() {
 
         setServerStats(snapshot.session_stats);
         setServerEvents(events.events);
+        setServerEventsTotal(events.total);
+        setServerTrends(trends.points);
       } catch {
         if (!cancelled) {
           setFetchError('Nu am putut incarca datele salvate ale sesiunii.');
@@ -81,7 +114,7 @@ export default function AnalyticsScreen() {
     return () => {
       cancelled = true;
     };
-  }, [sessionId]);
+  }, [eventsLimit, rangeSince, sessionId, trendAttackFilter]);
 
   const effectiveStats = serverStats ?? {
     total_score: stats.totalScore,
@@ -136,6 +169,11 @@ export default function AnalyticsScreen() {
   );
 
   const activityFeed = serverEvents.length > 0 ? serverEvents : effectiveStats.recent_events;
+  const trendSlice = serverTrends.slice(-10);
+  const trendStart = trendSlice[0];
+  const trendEnd = trendSlice[trendSlice.length - 1];
+  const scoreTrendDelta =
+    trendStart && trendEnd ? trendEnd.score_after - trendStart.score_after : (trendEnd?.score_after ?? 0);
 
   const badges = [
     { name: 'Prima detectare', earned: effectiveStats.total_correct > 0 },
@@ -208,6 +246,88 @@ export default function AnalyticsScreen() {
             <Text style={styles.negative}>{effectiveStats.total_attempts}</Text>
           </Text>
         </View>
+      </View>
+
+      <View style={styles.filtersCard}>
+        <Text style={styles.filtersLabel}>Filtru trend atac</Text>
+        <View style={styles.filtersRow}>
+          {(['all', 'phishing', 'smishing', 'impersonation'] as const).map((value) => {
+            const active = trendAttackFilter === value;
+            const label =
+              value === 'all'
+                ? 'Toate'
+                : value === 'phishing'
+                  ? 'Phishing'
+                  : value === 'smishing'
+                    ? 'Smishing'
+                    : 'Impersonare';
+            return (
+              <Text
+                key={value}
+                onPress={() => setTrendAttackFilter(value)}
+                style={[styles.filterChip, active ? styles.filterChipActive : null]}>
+                {label}
+              </Text>
+            );
+          })}
+        </View>
+        <Text style={styles.filtersLabel}>Interval</Text>
+        <View style={styles.filtersRow}>
+          {(['7d', '30d', 'all'] as const).map((value) => {
+            const active = dateRangeFilter === value;
+            const label = value === '7d' ? '7 zile' : value === '30d' ? '30 zile' : 'Tot';
+            return (
+              <Text
+                key={value}
+                onPress={() => setDateRangeFilter(value)}
+                style={[styles.filterChip, active ? styles.filterChipActive : null]}>
+                {label}
+              </Text>
+            );
+          })}
+        </View>
+      </View>
+
+      <View style={styles.chartCard}>
+        <View style={styles.chartHeader}>
+          <View>
+            <Text style={styles.chartEyebrow}>Evoluție sesiune</Text>
+            <Text style={styles.chartScore}>{trendEnd?.score_after ?? effectiveStats.total_score}</Text>
+          </View>
+          <View style={styles.trendPill}>
+            <Ionicons
+              name={scoreTrendDelta >= 0 ? 'trending-up-outline' : 'trending-down-outline'}
+              size={12}
+              color={scoreTrendDelta >= 0 ? TrainingColors.accentTeal : TrainingColors.accentDanger}
+            />
+            <Text style={styles.trendText}>
+              {scoreTrendDelta >= 0 ? '+' : ''}
+              {scoreTrendDelta} scor
+            </Text>
+          </View>
+        </View>
+        {trendSlice.length > 0 ? (
+          <View style={styles.bars}>
+            {trendSlice.map((point) => (
+              <View key={`${point.attempt_index}-${point.timestamp}`} style={styles.barColumn}>
+                <View style={styles.barTrack}>
+                  <View
+                    style={[
+                      styles.barFill,
+                      point.is_correct ? styles.barFillActive : styles.barFillMuted,
+                      { height: `${Math.max(8, Math.min(100, point.accuracy_after))}%` },
+                    ]}
+                  />
+                </View>
+                <Text style={styles.barLabel}>{point.attempt_index}</Text>
+              </View>
+            ))}
+          </View>
+        ) : (
+          <View style={styles.activityEmptyCard}>
+            <Text style={styles.activityEmptyText}>Trendul va apărea după primele răspunsuri evaluate.</Text>
+          </View>
+        )}
       </View>
 
       <View style={styles.chartCard}>
@@ -291,6 +411,11 @@ export default function AnalyticsScreen() {
             </View>
           ))
         )}
+        {serverEventsTotal > serverEvents.length ? (
+          <Text onPress={() => setEventsLimit((current) => current + 12)} style={styles.loadMoreText}>
+            Încarcă mai multă activitate
+          </Text>
+        ) : null}
       </View>
 
       <Text style={styles.sectionTitle}>Insigne</Text>
@@ -373,6 +498,33 @@ const styles = StyleSheet.create({
   summaryText: { color: TrainingColors.textPrimary, fontSize: 13, lineHeight: 18, marginTop: 2 },
   positive: { color: TrainingColors.accentTeal, fontWeight: '700' },
   negative: { color: TrainingColors.accentAmber, fontWeight: '700' },
+  filtersCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: TrainingColors.border,
+    backgroundColor: TrainingColors.panel,
+    padding: 12,
+    gap: 6,
+  },
+  filtersLabel: { color: TrainingColors.textMuted, fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.8 },
+  filtersRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  filterChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: TrainingColors.border,
+    backgroundColor: TrainingColors.panelAlt,
+    color: TrainingColors.textSecondary,
+    fontSize: 11,
+    fontWeight: '700',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    overflow: 'hidden',
+  },
+  filterChipActive: {
+    borderColor: TrainingColors.buttonPrimaryBorder,
+    backgroundColor: TrainingColors.buttonPrimary,
+    color: '#EFF6FF',
+  },
   chartCard: {
     borderRadius: 22,
     borderWidth: 1,
@@ -450,6 +602,13 @@ const styles = StyleSheet.create({
     padding: 10,
   },
   activityEmptyText: { color: TrainingColors.textMuted, fontSize: 12 },
+  loadMoreText: {
+    color: TrainingColors.accentTeal,
+    fontSize: 12,
+    fontWeight: '700',
+    textAlign: 'center',
+    paddingVertical: 6,
+  },
   badgesGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   badgeCard: {
     width: '31.8%',

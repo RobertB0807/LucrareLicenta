@@ -268,22 +268,35 @@ def fetch_session_snapshot(session_id: str, event_limit: int = 12) -> dict[str, 
         db.close()
 
 
-def fetch_session_events(session_id: str, limit: int = 20, offset: int = 0) -> dict[str, Any] | None:
+def fetch_session_events(
+    session_id: str,
+    limit: int = 20,
+    offset: int = 0,
+    *,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> dict[str, Any] | None:
     db = SessionLocal()
     try:
         row = db.get(TrainingSessionORM, session_id)
         if row is None:
             return None
 
+        filters = [SessionEventORM.session_id == session_id]
+        if since is not None:
+            filters.append(SessionEventORM.timestamp >= since)
+        if until is not None:
+            filters.append(SessionEventORM.timestamp <= until)
+
         total = db.scalar(
             select(func.count())
             .select_from(SessionEventORM)
-            .where(SessionEventORM.session_id == session_id)
+            .where(*filters)
         )
 
         events = db.execute(
             select(SessionEventORM)
-            .where(SessionEventORM.session_id == session_id)
+            .where(*filters)
             .order_by(SessionEventORM.timestamp.desc())
             .offset(offset)
             .limit(limit)
@@ -305,6 +318,77 @@ def fetch_session_events(session_id: str, limit: int = 20, offset: int = 0) -> d
                 }
                 for event in events
             ],
+        }
+    finally:
+        db.close()
+
+
+def fetch_session_trends(
+    session_id: str,
+    limit: int = 30,
+    offset: int = 0,
+    *,
+    attack_type: str | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> dict[str, Any] | None:
+    db = SessionLocal()
+    try:
+        row = db.get(TrainingSessionORM, session_id)
+        if row is None:
+            return None
+
+        filters = [
+            ScenarioAttemptORM.session_id == session_id,
+            ScenarioAttemptORM.evaluated_at.is_not(None),
+        ]
+        if attack_type is not None:
+            filters.append(ScenarioAttemptORM.attack_type == attack_type)
+        if since is not None:
+            filters.append(ScenarioAttemptORM.evaluated_at >= since)
+        if until is not None:
+            filters.append(ScenarioAttemptORM.evaluated_at <= until)
+
+        attempts = db.execute(
+            select(ScenarioAttemptORM)
+            .where(*filters)
+            .order_by(ScenarioAttemptORM.evaluated_at.asc(), ScenarioAttemptORM.id.asc())
+        ).scalars().all()
+
+        trend_points: list[dict[str, Any]] = []
+        running_score = 0
+        running_attempts = 0
+        running_correct = 0
+
+        for attempt in attempts:
+            running_attempts += 1
+            running_score += int(attempt.score_delta or 0)
+            if attempt.is_correct:
+                running_correct += 1
+            accuracy = round((running_correct / running_attempts) * 100, 1) if running_attempts else 0.0
+
+            trend_points.append(
+                {
+                    "timestamp": attempt.evaluated_at.isoformat() if attempt.evaluated_at else "",
+                    "attack_type": attempt.attack_type,
+                    "difficulty": attempt.difficulty,
+                    "is_correct": bool(attempt.is_correct),
+                    "score_delta": int(attempt.score_delta or 0),
+                    "score_after": running_score,
+                    "accuracy_after": accuracy,
+                    "attempt_index": running_attempts,
+                }
+            )
+
+        total_points = len(trend_points)
+        paged_points = trend_points[offset : offset + limit]
+
+        return {
+            "session_id": session_id,
+            "total": total_points,
+            "limit": limit,
+            "offset": offset,
+            "points": paged_points,
         }
     finally:
         db.close()

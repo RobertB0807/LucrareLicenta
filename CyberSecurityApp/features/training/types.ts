@@ -76,6 +76,25 @@ export type SessionEventsApiResponse = {
   events: SessionEvent[];
 };
 
+export type SessionTrendPointApiResponse = {
+  timestamp: string;
+  attack_type: AttackType;
+  difficulty: DifficultyLevel;
+  is_correct: boolean;
+  score_delta: number;
+  score_after: number;
+  accuracy_after: number;
+  attempt_index: number;
+};
+
+export type SessionTrendsApiResponse = {
+  session_id: string;
+  total: number;
+  limit: number;
+  offset: number;
+  points: SessionTrendPointApiResponse[];
+};
+
 export type AssistantAskApiResponse = {
   answer: string;
   quick_tips: string[];

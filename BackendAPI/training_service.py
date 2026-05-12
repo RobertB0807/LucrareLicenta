@@ -11,6 +11,7 @@ from persistence_repository import (
     fetch_scenario_context,
     fetch_session_events,
     fetch_session_snapshot,
+    fetch_session_trends,
     record_generated_scenario,
     record_scenario_evaluation,
     record_session_event,
@@ -115,6 +116,25 @@ class SessionEventsResponse(BaseModel):
     events: list[SessionEvent]
 
 
+class SessionTrendPointResponse(BaseModel):
+    timestamp: str
+    attack_type: AttackType
+    difficulty: DifficultyLevel
+    is_correct: bool
+    score_delta: int
+    score_after: int
+    accuracy_after: float
+    attempt_index: int
+
+
+class SessionTrendsResponse(BaseModel):
+    session_id: str
+    total: int
+    limit: int
+    offset: int
+    points: list[SessionTrendPointResponse]
+
+
 class ScenarioCatalogItemResponse(BaseModel):
     id: str
     attack_type: AttackType
@@ -129,7 +149,6 @@ class ScenarioCatalogResponse(BaseModel):
 
 
 scenario_contexts: dict[str, ScenarioContext] = {}
-session_progress: dict[str, SessionProgress] = {}
 
 
 def to_int(value: object, default: int = 0) -> int:
@@ -188,10 +207,9 @@ def restore_session_from_persistence(current_session_id: str) -> SessionProgress
 
 
 def get_or_create_session(current_session_id: str) -> SessionProgress:
-    if current_session_id not in session_progress:
-        restored_progress = restore_session_from_persistence(current_session_id)
-        session_progress[current_session_id] = restored_progress or SessionProgress()
-    return session_progress[current_session_id]
+    # Read session state from persistence on each access so DB remains the source of truth.
+    restored_progress = restore_session_from_persistence(current_session_id)
+    return restored_progress or SessionProgress()
 
 
 def calculate_score_delta(is_correct: bool, selected_option_id: str) -> int:
@@ -515,11 +533,40 @@ def get_session_snapshot(session_id: str) -> SessionSnapshotResponse | None:
     return SessionSnapshotResponse.model_validate(snapshot)
 
 
-def get_session_events(session_id: str, limit: int = 20, offset: int = 0) -> SessionEventsResponse | None:
-    events = fetch_session_events(session_id, limit=limit, offset=offset)
+def get_session_events(
+    session_id: str,
+    limit: int = 20,
+    offset: int = 0,
+    *,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> SessionEventsResponse | None:
+    events = fetch_session_events(session_id, limit=limit, offset=offset, since=since, until=until)
     if events is None:
         return None
     return SessionEventsResponse.model_validate(events)
+
+
+def get_session_trends(
+    session_id: str,
+    limit: int = 30,
+    offset: int = 0,
+    *,
+    attack_type: AttackType | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> SessionTrendsResponse | None:
+    trends = fetch_session_trends(
+        session_id,
+        limit=limit,
+        offset=offset,
+        attack_type=attack_type,
+        since=since,
+        until=until,
+    )
+    if trends is None:
+        return None
+    return SessionTrendsResponse.model_validate(trends)
 
 
 def get_scenario_catalog() -> ScenarioCatalogResponse:

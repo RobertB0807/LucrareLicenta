@@ -38,6 +38,7 @@ Backend features currently implemented:
 - `POST /assistant/ask`
 - `GET /session/{session_id}`
 - `GET /session/{session_id}/events`
+- `GET /session/{session_id}/trends`
 - endpoint-level sliding-window rate limiting:
   - `/scenario/generate`: 30 requests / 60 seconds / client
   - `/scenario/evaluate`: 60 requests / 60 seconds / client
@@ -78,8 +79,8 @@ Current integration level:
 - chat/feedback flow is now wired to real session continuity (`session_id` carried through routes)
 - analytics now consumes persisted backend session snapshot + recent events when a session is active
 - assistant and learn tabs now use real backend AI responses via `POST /assistant/ask`
-- dashboard and scenarios now consume backend scenario catalog (`GET /scenario/catalog`)
-- local continuity is enabled via AsyncStorage for training session state and assistant/learn conversations
+- dashboard and scenarios now consume backend scenario catalog (`GET /scenario/catalog`) through shared `useTrainingSession` state
+- local continuity is enabled via AsyncStorage for training session state, assistant/learn conversations, and in-progress chat/feedback continuity
 
 ## Recent Progress (April-May 2026)
 - Backend refactor completed: service layer extracted from `main.py` into `training_service.py`.
@@ -156,6 +157,36 @@ Current integration level:
   - persisted/rehydrated assistant chat history in `app/(tabs)/assistant.tsx`
   - persisted/rehydrated learn tab state (active category, open lesson, lesson messages) in `app/(tabs)/learn.tsx`
   - added dependency `@react-native-async-storage/async-storage`
+- Unified `dashboard` and `scenarios` route-level data flow around `useTrainingSession`:
+  - shared scenario catalog state moved into provider (`scenarioCatalog`, `isLoadingCatalog`, `catalogError`)
+  - removed duplicate catalog-fetch logic from `dashboard.tsx` and `scenarios.tsx`
+  - added provider-side session snapshot refresh from backend (`GET /session/{session_id}`) after hydration
+- Extended frontend continuity for simulation flow:
+  - `chat/[scenarioId]` now persists/restores in-progress chat state (`messages`, script completion) via AsyncStorage
+  - chat -> feedback transition now persists a dedicated feedback context payload (scenario/session IDs, verdict, explanation, recommendation, red flags)
+  - `feedback/[scenarioId]` now falls back to persisted context when in-memory evaluation/scenario state is unavailable
+- Added retention and cleanup policy for frontend continuity storage:
+  - chat progress keys use TTL (7 days) and max-entry cap to prevent unbounded growth
+  - feedback context uses TTL validation and expired payload cleanup
+- Backend session reads now use DB as source of truth for session progress:
+  - removed in-memory `session_progress` cache dependency for reads
+  - session state is restored from persisted snapshot on each access
+  - added regression coverage to ensure mutated in-memory objects do not affect persisted session totals
+- Added persisted analytics trends capability:
+  - backend endpoint `GET /session/{session_id}/trends` (paginated)
+  - trend points include running score/accuracy per evaluated attempt
+  - frontend analytics now fetches and displays session evolution trend card
+  - typed API contracts added for trends payloads
+- Extended analytics queries with persisted filters:
+  - backend `events` endpoint now supports `since`/`until`
+  - backend `trends` endpoint now supports `attack_type` + `since`/`until`
+  - frontend analytics now exposes attack-type and date-range filters
+  - frontend activity feed now supports incremental load-more pagination
+- Added dedicated repository test coverage (`tests/test_persistence_repository.py`) for:
+  - trends/events pagination and ordering
+  - `since`/`until` filter behavior
+  - `attack_type` trend filtering
+  - unknown-session and offset edge cases
 
 ## What the App Already Does
 1. User selects attack type and difficulty.
@@ -192,6 +223,7 @@ Current integration level:
 - `BackendAPI/migrations/versions/20260507_0001_initial_schema.py`
 - `BackendAPI/migrations/versions/20260511_0002_persist_scenario_rule.py`
 - `BackendAPI/tests/test_api_endpoints.py`
+- `BackendAPI/tests/test_persistence_repository.py`
 
 ### Frontend
 - `CyberSecurityApp/app/(tabs)/_layout.tsx`
@@ -218,15 +250,15 @@ Current integration level:
 Priority order:
 
 ### 1. Finish wiring remaining tabs to real backend/session state
-Current gap:
-- analytics + chat/feedback are now partially integrated with real session data
-- `dashboard` and `scenarios` now use backend catalog, but still rely on simplified local derivations in parts of the UI
-- the older training/session logic in `features/training/` is not yet the source of truth for all visible product routes
+Status: major wiring completed.
+
+Current state:
+- `dashboard`, `scenarios`, chat/feedback and analytics now share provider-level training state + backend signals
+- scenario catalog fetching is centralized in `useTrainingSession`
 
 Next integration step:
-- make scenario catalog/dashboard cards pull from real session + backend signals
-- unify route-level state flow around shared `useTrainingSession` source of truth
-- reduce remaining local constants/sample placeholders across tabs
+- reduce remaining UI-only heuristics/placeholders (e.g., estimated duration/risk derivations) where backend-backed signals are preferable
+- continue consolidating route behavior around provider actions where duplication still exists
 
 ### 2. Add persistence layer hardening
 Status: implemented as MVP with SQLite + SQLAlchemy + repository + startup init.
@@ -234,21 +266,24 @@ Status: implemented as MVP with SQLite + SQLAlchemy + repository + startup init.
 Current approach:
 - dual-write mode (existing in-memory flow + DB writes)
 - existing `/scenario/generate` and `/scenario/evaluate` contracts preserved
-- persisted reads available via `/session/{session_id}` and `/session/{session_id}/events`
+- persisted reads available via `/session/{session_id}`, `/session/{session_id}/events`, and `/session/{session_id}/trends`
 - when a known `session_id` is reused after restart, in-memory state is restored from persisted snapshot before new updates
 - Alembic migration tooling is now in place and wired in startup flow
+- session progress reads now use persisted state as source of truth (no in-memory progress cache)
 
 Next persistence step:
-- switch read path fully to DB after test coverage
-- optionally remove in-memory state
+- reduce remaining transient in-memory dependencies (primarily scenario context lifecycle) where practical
+- expand repository-level tests for trend/event query behavior and pagination edge cases
 
 ### 3. Expand persistent frontend continuity (AsyncStorage)
 Current baseline:
 - training session state, assistant chat, and learn state are persisted/restored
+- in-progress chat scenario state (`/chat/[scenarioId]`) and feedback transition context are now persisted/restored
+- retention policy is applied to chat/feedback continuity keys (TTL + capped entries)
 
 Next step:
-- persist in-progress chat scenario state (`/chat/[scenarioId]`) and feedback transition context
-- add retention/cleanup policy for stored conversation history
+- apply similar retention limits to assistant/learn histories
+- add explicit UX affordance for clearing local training history/cache
 
 ### 4. Add more UI polish
 Possible improvements:
@@ -266,13 +301,12 @@ If needed:
 
 ### 6. Extend analytics with persisted trends (next step after current integration)
 Current baseline:
-- current analytics now reads persisted snapshot + paginated events for active session
+- analytics now reads persisted snapshot + paginated events + persisted trends for active session
+- analytics supports persisted attack-type/date-range filters and load-more activity pagination
 
 Next:
-- progression over time (score/accuracy evolution)
-- richer timeline queries (filters by attack type and date)
-- charts based on stored attempts
-- pagination/load-more behavior in UI for longer event history
+- richer chart variants based on stored attempts (e.g., moving average / per-attack trend lines)
+- server-side aggregation options for trend summaries (e.g., grouped by day/attack)
 
 ### 7. Add LLM integration
 When ready:
@@ -288,7 +322,7 @@ Recommended:
   - `/session/{session_id}/events`
   - validation edge cases (invalid IDs)
   - rate limit enforcement
-- next: backend tests for persistence repositories and timeline queries
+- backend repository tests now cover persistence timeline filters and pagination edge cases
 - unit tests for session recommendation and score logic
 - basic UI smoke tests if needed
 
@@ -324,10 +358,9 @@ npx expo start
 Focus on incremental improvements only.
 
 Good next tasks:
-- continue connecting remaining tab UX to backend data and shared session state
-- extend AsyncStorage continuity to scenario chat/feedback flow
-- switch read path fully to DB as source of truth
-- extend analytics from persisted events/attempts
+- apply retention/cleanup policy to assistant/learn local history keys
+- add richer analytics trend visualizations (moving averages / per-attack lines)
+- add backend trend aggregation endpoints for chart-friendly grouped data
 - then iterate on UI polish and LLM integration with fallback
 
 Avoid large rewrites unless necessary.

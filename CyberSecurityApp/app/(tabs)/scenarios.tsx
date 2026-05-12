@@ -1,9 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Link } from 'expo-router';
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
-import { getScenarioCatalog } from '@/features/training/api';
 import { getDifficultyLabel } from '@/features/training/options';
 import type { AttackType, DifficultyLevel } from '@/features/training/types';
 import { TrainingColors } from '@/features/training/ui-theme';
@@ -73,55 +72,28 @@ function riskFromStats(
 export default function ScenariosScreen() {
   const [query, setQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState<(typeof filters)[number]>('Toate');
-  const [scenarios, setScenarios] = useState<Scenario[]>([]);
-  const [isLoadingCatalog, setIsLoadingCatalog] = useState(true);
-  const [catalogError, setCatalogError] = useState<string | null>(null);
-  const { sessionId, perAttackStats, evaluation } = useTrainingSession();
+  const { sessionId, perAttackStats, evaluation, scenarioCatalog, isLoadingCatalog, catalogError } =
+    useTrainingSession();
 
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadCatalog = async () => {
-      setIsLoadingCatalog(true);
-      setCatalogError(null);
-      try {
-        const data = await getScenarioCatalog();
-        if (cancelled) {
-          return;
-        }
-
-        const mapped: Scenario[] = data.items.map((item) => {
-          const description = item.attacker_message_preview;
-          return {
-            id: item.id,
-            type: ATTACK_LABELS[item.attack_type],
-            title: buildScenarioTitle(description, item.attack_type, item.difficulty),
-            description,
-            difficulty: getDifficultyLabel(item.difficulty) as Scenario['difficulty'],
-            risk: fallbackRiskByDifficulty(item.difficulty),
-            time: estimateTimeByDifficulty(item.difficulty),
-            attackType: item.attack_type,
-            backendDifficulty: item.difficulty,
-            channel: channelLabel(item.channel),
-          };
-        });
-        setScenarios(mapped);
-      } catch {
-        if (!cancelled) {
-          setCatalogError('Nu am putut încărca catalogul de scenarii.');
-        }
-      } finally {
-        if (!cancelled) {
-          setIsLoadingCatalog(false);
-        }
-      }
-    };
-
-    void loadCatalog();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const scenarios = useMemo<Scenario[]>(
+    () =>
+      scenarioCatalog.map((item) => {
+        const description = item.attacker_message_preview;
+        return {
+          id: item.id,
+          type: ATTACK_LABELS[item.attack_type],
+          title: buildScenarioTitle(description, item.attack_type, item.difficulty),
+          description,
+          difficulty: getDifficultyLabel(item.difficulty) as Scenario['difficulty'],
+          risk: fallbackRiskByDifficulty(item.difficulty),
+          time: estimateTimeByDifficulty(item.difficulty),
+          attackType: item.attack_type,
+          backendDifficulty: item.difficulty,
+          channel: channelLabel(item.channel),
+        };
+      }),
+    [scenarioCatalog]
+  );
 
   const perAttackMap = useMemo(
     () =>

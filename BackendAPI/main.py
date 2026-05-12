@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict, deque
+from datetime import datetime
 from math import ceil
 from threading import Lock
 from time import monotonic
@@ -20,11 +21,13 @@ from training_service import (
     ScenarioCatalogResponse,
     SessionEventsResponse,
     SessionSnapshotResponse,
+    SessionTrendsResponse,
     get_scenario_catalog as get_training_scenario_catalog,
     evaluate_scenario as evaluate_training_scenario,
     generate_scenario as generate_training_scenario,
     get_session_events as get_training_session_events,
     get_session_snapshot as get_training_session_snapshot,
+    get_session_trends as get_training_session_trends,
 )
 
 app = FastAPI(title="CyberSecurity Training API", version="0.2.0")
@@ -217,8 +220,38 @@ def get_session_events(
     session_id: Annotated[str, Path(min_length=1, max_length=128, pattern=ID_PATTERN)],
     limit: int = Query(default=20, gt=0, le=100),
     offset: NonNegativeInt = 0,
+    since: datetime | None = None,
+    until: datetime | None = None,
 ) -> SessionEventsResponse:
-    events = get_training_session_events(session_id, limit=limit, offset=offset)
+    events = get_training_session_events(
+        session_id,
+        limit=limit,
+        offset=offset,
+        since=since,
+        until=until,
+    )
     if events is None:
         raise HTTPException(status_code=404, detail="Session not found")
     return events
+
+
+@app.get("/session/{session_id}/trends", response_model=SessionTrendsResponse)
+def get_session_trends(
+    session_id: Annotated[str, Path(min_length=1, max_length=128, pattern=ID_PATTERN)],
+    limit: int = Query(default=30, gt=0, le=200),
+    offset: NonNegativeInt = 0,
+    attack_type: AttackType | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> SessionTrendsResponse:
+    trends = get_training_session_trends(
+        session_id,
+        limit=limit,
+        offset=offset,
+        attack_type=attack_type,
+        since=since,
+        until=until,
+    )
+    if trends is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return trends

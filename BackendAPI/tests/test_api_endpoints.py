@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -35,7 +36,6 @@ class ApiEndpointsTestCase(unittest.TestCase):
         db.SessionLocal = testing_session_local
         persistence_repository.SessionLocal = testing_session_local
 
-        training_service.session_progress.clear()
         training_service.scenario_contexts.clear()
 
         db.init_db()
@@ -43,7 +43,6 @@ class ApiEndpointsTestCase(unittest.TestCase):
         self.client = TestClient(main.app)
 
         def restore_state() -> None:
-            training_service.session_progress.clear()
             training_service.scenario_contexts.clear()
             main.rate_limiter.configure_limits(
                 {
@@ -106,6 +105,33 @@ class ApiEndpointsTestCase(unittest.TestCase):
         self.assertGreaterEqual(events_payload["total"], 1)
         self.assertGreaterEqual(len(events_payload["events"]), 1)
 
+        trends = main.get_session_trends(session_id=session_id, limit=10, offset=0)
+        trends_payload = trends.model_dump()
+        self.assertEqual(trends_payload["session_id"], session_id)
+        self.assertEqual(trends_payload["limit"], 10)
+        self.assertEqual(trends_payload["offset"], 0)
+        self.assertGreaterEqual(trends_payload["total"], 1)
+        self.assertGreaterEqual(len(trends_payload["points"]), 1)
+        self.assertIn("score_after", trends_payload["points"][0])
+        self.assertIn("accuracy_after", trends_payload["points"][0])
+
+        filtered_trends = main.get_session_trends(
+            session_id=session_id,
+            limit=10,
+            offset=0,
+            attack_type="phishing",
+        ).model_dump()
+        self.assertTrue(all(point["attack_type"] == "phishing" for point in filtered_trends["points"]))
+
+        future_since = datetime.now(timezone.utc) + timedelta(days=1)
+        empty_trends = main.get_session_trends(
+            session_id=session_id,
+            limit=10,
+            offset=0,
+            since=future_since,
+        ).model_dump()
+        self.assertEqual(empty_trends["total"], 0)
+
     def test_evaluate_after_context_cache_reset_uses_persisted_rule(self) -> None:
         generated = main.generate_scenario(
             main.GenerateScenarioRequest(attack_type="smishing", difficulty="medium")
@@ -126,6 +152,43 @@ class ApiEndpointsTestCase(unittest.TestCase):
         self.assertIn("is_correct", evaluated_payload)
         self.assertIn(evaluated_payload["score_delta"], {-5, 0, 10})
 
+    def test_session_reads_do_not_depend_on_mutated_in_memory_progress(self) -> None:
+        first_generated = main.generate_scenario(
+            main.GenerateScenarioRequest(attack_type="phishing", difficulty="easy")
+        )
+        first_payload = first_generated.model_dump()
+        session_id = first_payload["session_id"]
+
+        main.evaluate_scenario(
+            main.EvaluateScenarioRequest(
+                scenario_id=first_payload["scenario_id"],
+                selected_option_id=first_payload["options"][0]["id"],
+            )
+        )
+
+        tampered = training_service.get_or_create_session(session_id)
+        tampered.total_attempts = 999
+        tampered.total_score = 999
+
+        second_generated = main.generate_scenario(
+            main.GenerateScenarioRequest(
+                attack_type="smishing",
+                difficulty="medium",
+                session_id=session_id,
+            )
+        )
+        second_payload = second_generated.model_dump()
+        main.evaluate_scenario(
+            main.EvaluateScenarioRequest(
+                scenario_id=second_payload["scenario_id"],
+                selected_option_id=second_payload["options"][0]["id"],
+            )
+        )
+
+        snapshot = main.get_session_snapshot(session_id).model_dump()
+        self.assertEqual(snapshot["session_stats"]["total_attempts"], 2)
+        self.assertLess(snapshot["session_stats"]["total_score"], 100)
+
     def test_unknown_session_endpoints_return_404(self) -> None:
         with self.assertRaises(HTTPException) as snapshot_exc:
             main.get_session_snapshot("does-not-exist")
@@ -136,6 +199,11 @@ class ApiEndpointsTestCase(unittest.TestCase):
             main.get_session_events(session_id="does-not-exist", limit=20, offset=0)
         self.assertEqual(events_exc.exception.status_code, 404)
         self.assertEqual(events_exc.exception.detail, "Session not found")
+
+        with self.assertRaises(HTTPException) as trends_exc:
+            main.get_session_trends(session_id="does-not-exist", limit=20, offset=0)
+        self.assertEqual(trends_exc.exception.status_code, 404)
+        self.assertEqual(trends_exc.exception.detail, "Session not found")
 
     def test_evaluate_unknown_scenario_returns_404(self) -> None:
         with self.assertRaises(HTTPException) as evaluation_exc:

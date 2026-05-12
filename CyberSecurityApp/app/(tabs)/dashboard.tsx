@@ -1,9 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Link } from 'expo-router';
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { getScenarioCatalog } from '@/features/training/api';
 import type { AttackType, DifficultyLevel } from '@/features/training/types';
 import { TrainingColors } from '@/features/training/ui-theme';
 import { useTrainingSession } from '@/features/training/useTrainingSession';
@@ -44,39 +43,18 @@ function recommendedDifficulty(accuracy: number, attempts: number): DifficultyLe
 }
 
 export default function DashboardScreen() {
-  const { stats, perAttackStats, evaluation, sessionId } = useTrainingSession();
-  const [scenarioPreviewByKey, setScenarioPreviewByKey] = useState<Record<string, string>>({});
+  const { stats, perAttackStats, evaluation, sessionId, scenarioCatalog } = useTrainingSession();
 
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadCatalog = async () => {
-      try {
-        const data = await getScenarioCatalog();
-        if (cancelled) {
-          return;
-        }
-
-        const map: Record<string, string> = {};
-        for (const item of data.items) {
-          const key = `${item.attack_type}-${item.difficulty}`;
-          if (!map[key]) {
-            map[key] = item.attacker_message_preview;
-          }
-        }
-        setScenarioPreviewByKey(map);
-      } catch {
-        if (!cancelled) {
-          setScenarioPreviewByKey({});
-        }
+  const scenarioPreviewByKey = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const item of scenarioCatalog) {
+      const key = `${item.attack_type}-${item.difficulty}`;
+      if (!map[key]) {
+        map[key] = item.attacker_message_preview;
       }
-    };
-
-    void loadCatalog();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    }
+    return map;
+  }, [scenarioCatalog]);
 
   const cyberScore = Math.max(0, Math.min(100, stats.accuracy));
   const estimatedDetected = Math.round((stats.totalAttempts * stats.accuracy) / 100);
@@ -117,7 +95,7 @@ export default function DashboardScreen() {
     if (evaluation?.recommendation) {
       const attack = evaluation.recommendation.attack_type;
       return {
-      title: `Scenariu recomandat · ${ATTACK_LABELS[attack]}`,
+        title: `Scenariu recomandat · ${ATTACK_LABELS[attack]}`,
         difficulty: evaluation.recommendation.difficulty,
         attackType: attack,
       };

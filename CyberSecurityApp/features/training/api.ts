@@ -10,6 +10,7 @@ import type {
   ScenarioCatalogApiResponse,
   SessionEventsApiResponse,
   SessionSnapshotApiResponse,
+  SessionTrendsApiResponse,
 } from './types';
 
 type GenerateScenarioPayload = {
@@ -136,13 +137,48 @@ export async function getSessionSnapshot(sessionId: string): Promise<SessionSnap
 
 export async function getSessionEvents(
   sessionId: string,
-  options: { limit?: number; offset?: number } = {}
+  options: { limit?: number; offset?: number; since?: string; until?: string } = {}
 ): Promise<SessionEventsApiResponse> {
   const limit = options.limit ?? 20;
   const offset = options.offset ?? 0;
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
+  if (options.since) {
+    params.set('since', options.since);
+  }
+  if (options.until) {
+    params.set('until', options.until);
+  }
   return getJson<SessionEventsApiResponse>(
-    `/session/${encodeURIComponent(sessionId)}/events?limit=${limit}&offset=${offset}`,
+    `/session/${encodeURIComponent(sessionId)}/events?${params.toString()}`,
     'Nu am putut incarca evenimentele sesiunii.'
+  );
+}
+
+export async function getSessionTrends(
+  sessionId: string,
+  options: { limit?: number; offset?: number; attackType?: AttackType; since?: string; until?: string } = {}
+): Promise<SessionTrendsApiResponse> {
+  const limit = options.limit ?? 30;
+  const offset = options.offset ?? 0;
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
+  if (options.attackType) {
+    params.set('attack_type', options.attackType);
+  }
+  if (options.since) {
+    params.set('since', options.since);
+  }
+  if (options.until) {
+    params.set('until', options.until);
+  }
+  return getJson<SessionTrendsApiResponse>(
+    `/session/${encodeURIComponent(sessionId)}/trends?${params.toString()}`,
+    'Nu am putut incarca trendurile sesiunii.'
   );
 }
 
