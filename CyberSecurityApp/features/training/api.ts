@@ -10,8 +10,23 @@ import type {
   ScenarioCatalogApiResponse,
   SessionEventsApiResponse,
   SessionSnapshotApiResponse,
+  SessionTrendAggregatesApiResponse,
   SessionTrendsApiResponse,
 } from './types';
+
+// ── Auth token injection ───────────────────────────────────────────────────────
+// The auth context calls setAuthTokenAccessor on mount so that all protected
+// API calls automatically include the Bearer token header.
+let _tokenAccessor: (() => string | null) | null = null;
+
+export function setAuthTokenAccessor(accessor: () => string | null): void {
+  _tokenAccessor = accessor;
+}
+
+function getAuthHeaders(): Record<string, string> {
+  const token = _tokenAccessor?.();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
 type GenerateScenarioPayload = {
   attack_type: AttackType;
@@ -57,9 +72,27 @@ function getExpoLocalApiBaseUrl(): string | null {
   return `http://${host}:8000`;
 }
 
+function getWebApiBaseUrl(): string | null {
+  if (Platform.OS !== 'web') {
+    return null;
+  }
+
+  const host = globalThis.location?.hostname;
+  if (!host) {
+    return null;
+  }
+
+  if (host === 'localhost' || host === '127.0.0.1') {
+    return 'http://127.0.0.1:8000';
+  }
+
+  return null;
+}
+
 const API_BASE_URL_CANDIDATES = Array.from(
   new Set(
     [
+      getWebApiBaseUrl(),
       process.env.EXPO_PUBLIC_API_BASE_URL?.trim(),
       getExpoLocalApiBaseUrl(),
       DEFAULT_API_BASE_URL,
@@ -74,7 +107,7 @@ async function postJson<TResponse>(path: string, payload: unknown, fallbackError
     try {
       const response = await fetch(`${baseUrl}${path}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify(payload),
       });
 
@@ -98,7 +131,7 @@ async function getJson<TResponse>(path: string, fallbackError: string): Promise<
     try {
       const response = await fetch(`${baseUrl}${path}`, {
         method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       });
 
       if (!response.ok) {
@@ -179,6 +212,29 @@ export async function getSessionTrends(
   return getJson<SessionTrendsApiResponse>(
     `/session/${encodeURIComponent(sessionId)}/trends?${params.toString()}`,
     'Nu am putut incarca trendurile sesiunii.'
+  );
+}
+
+export async function getSessionTrendAggregates(
+  sessionId: string,
+  options: { attackType?: AttackType; since?: string; until?: string } = {}
+): Promise<SessionTrendAggregatesApiResponse> {
+  const params = new URLSearchParams();
+  if (options.attackType) {
+    params.set('attack_type', options.attackType);
+  }
+  if (options.since) {
+    params.set('since', options.since);
+  }
+  if (options.until) {
+    params.set('until', options.until);
+  }
+
+  const query = params.toString();
+  const path = `/session/${encodeURIComponent(sessionId)}/trends/aggregate${query ? `?${query}` : ''}`;
+  return getJson<SessionTrendAggregatesApiResponse>(
+    path,
+    'Nu am putut incarca sumarul agregat al trendurilor.'
   );
 }
 

@@ -11,6 +11,7 @@ from persistence_repository import (
     fetch_scenario_context,
     fetch_session_events,
     fetch_session_snapshot,
+    fetch_session_trend_aggregates,
     fetch_session_trends,
     record_generated_scenario,
     record_scenario_evaluation,
@@ -135,6 +136,31 @@ class SessionTrendsResponse(BaseModel):
     points: list[SessionTrendPointResponse]
 
 
+class SessionTrendByDayResponse(BaseModel):
+    day: str
+    attempts: int
+    correct: int
+    accuracy: float
+    score_delta_total: int
+    cumulative_score_after: int
+
+
+class SessionTrendByAttackResponse(BaseModel):
+    attack_type: AttackType
+    attempts: int
+    correct: int
+    accuracy: float
+    score_delta_total: int
+    average_score_delta: float
+
+
+class SessionTrendAggregatesResponse(BaseModel):
+    session_id: str
+    total_attempts: int
+    by_day: list[SessionTrendByDayResponse]
+    by_attack: list[SessionTrendByAttackResponse]
+
+
 class ScenarioCatalogItemResponse(BaseModel):
     id: str
     attack_type: AttackType
@@ -220,7 +246,12 @@ def calculate_score_delta(is_correct: bool, selected_option_id: str) -> int:
     return 0
 
 
-def persist_session_state(session_id: str, progress: SessionProgress) -> None:
+def persist_session_state(
+    session_id: str,
+    progress: SessionProgress,
+    *,
+    owner_user_id: str | None = None,
+) -> None:
     per_attack_stats = {
         attack_type: {
             "attempts": progress.by_attack[attack_type].attempts,
@@ -238,6 +269,7 @@ def persist_session_state(session_id: str, progress: SessionProgress) -> None:
             correct_streak=progress.correct_streak,
             incorrect_streak=progress.incorrect_streak,
             per_attack_stats=per_attack_stats,
+            owner_user_id=owner_user_id,
         )
     except Exception:
         logger.exception("Failed to persist session state", extra={"session_id": session_id})
@@ -385,7 +417,10 @@ def build_recommendation(
 
 
 def generate_scenario(
-    attack_type: AttackType, difficulty: DifficultyLevel, session_id: str | None = None
+    attack_type: AttackType,
+    difficulty: DifficultyLevel,
+    session_id: str | None = None,
+    owner_user_id: str | None = None,
 ) -> GenerateScenarioResponse:
     current_session_id = session_id or str(uuid4())
     progress = get_or_create_session(current_session_id)
@@ -416,7 +451,7 @@ def generate_scenario(
         rule=template.rule,
     )
     persist_event(current_session_id, event)
-    persist_session_state(current_session_id, progress)
+    persist_session_state(current_session_id, progress, owner_user_id=owner_user_id)
 
     return GenerateScenarioResponse(
         session_id=current_session_id,
@@ -567,6 +602,24 @@ def get_session_trends(
     if trends is None:
         return None
     return SessionTrendsResponse.model_validate(trends)
+
+
+def get_session_trend_aggregates(
+    session_id: str,
+    *,
+    attack_type: AttackType | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> SessionTrendAggregatesResponse | None:
+    aggregates = fetch_session_trend_aggregates(
+        session_id,
+        attack_type=attack_type,
+        since=since,
+        until=until,
+    )
+    if aggregates is None:
+        return None
+    return SessionTrendAggregatesResponse.model_validate(aggregates)
 
 
 def get_scenario_catalog() -> ScenarioCatalogResponse:

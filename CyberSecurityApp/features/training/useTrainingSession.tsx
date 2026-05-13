@@ -3,6 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 
 import { evaluateScenario, generateScenario, getScenarioCatalog, getSessionSnapshot } from './api';
 import { ATTACK_TYPE_OPTIONS } from './options';
+import { useAuth } from '../auth/auth-context';
 import type {
   AttackStats,
   AttackType,
@@ -118,6 +119,12 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
   const [scenarioCatalog, setScenarioCatalog] = useState<ScenarioCatalogItemApiResponse[]>([]);
   const [isLoadingCatalog, setIsLoadingCatalog] = useState(true);
   const [catalogError, setCatalogError] = useState<string | null>(null);
+  const { isAuthenticated, user } = useAuth();
+
+  // Per-user storage key so each account gets its own training state.
+  const userStorageKey = user
+    ? `${TRAINING_SESSION_STORAGE_KEY}:${user.id}`
+    : TRAINING_SESSION_STORAGE_KEY;
 
   const pushActivity = useCallback(
     (entry: { title: string; detail: string; tone: 'neutral' | 'good' | 'warning' }) => {
@@ -174,8 +181,14 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
 
     const hydrate = async () => {
+      // Don't hydrate until we know who the user is.
+      if (!user) {
+        setIsHydrated(true);
+        return;
+      }
+
       try {
-        const raw = await AsyncStorage.getItem(TRAINING_SESSION_STORAGE_KEY);
+        const raw = await AsyncStorage.getItem(userStorageKey);
         if (!raw || cancelled) {
           return;
         }
@@ -208,11 +221,23 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
       }
     };
 
+    // Reset in-memory state when user changes before hydrating new data.
+    setScenario(null);
+    setEvaluation(null);
+    setSessionId(null);
+    setSessionStats(null);
+    setSelectedOptionId(null);
+    setError(null);
+    setAttackType('phishing');
+    setDifficulty('easy');
+    setActivityLog([]);
+    setIsHydrated(false);
+
     void hydrate();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [userStorageKey, user]);
 
   useEffect(() => {
     if (!isHydrated) {
@@ -230,7 +255,7 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
       activityLog: activityLog.slice(0, 8),
     };
 
-    void AsyncStorage.setItem(TRAINING_SESSION_STORAGE_KEY, JSON.stringify(stateToPersist));
+    void AsyncStorage.setItem(userStorageKey, JSON.stringify(stateToPersist));
   }, [
     activityLog,
     attackType,
@@ -241,6 +266,7 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
     selectedOptionId,
     sessionId,
     sessionStats,
+    userStorageKey,
   ]);
 
   const refreshScenarioCatalog = useCallback(async () => {
@@ -258,14 +284,17 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    if (!isAuthenticated) {
+      return;
+    }
     void refreshScenarioCatalog();
-  }, [refreshScenarioCatalog]);
+  }, [isAuthenticated, refreshScenarioCatalog]);
 
   useEffect(() => {
     let cancelled = false;
 
     const syncSessionFromBackend = async () => {
-      if (!isHydrated || !sessionId) {
+      if (!isHydrated || !sessionId || !isAuthenticated) {
         return;
       }
 
@@ -286,7 +315,7 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [applyServerEvents, isHydrated, sessionId]);
+  }, [applyServerEvents, isAuthenticated, isHydrated, sessionId]);
 
   const startSimulation = async (
     nextAttackType: AttackType = attackType,

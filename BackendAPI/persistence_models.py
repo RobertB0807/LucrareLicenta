@@ -16,6 +16,9 @@ class TrainingSessionORM(Base):
     __tablename__ = "training_sessions"
 
     session_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True, index=True
+    )
     total_score: Mapped[int] = mapped_column(Integer, default=0)
     total_attempts: Mapped[int] = mapped_column(Integer, default=0)
     total_correct: Mapped[int] = mapped_column(Integer, default=0)
@@ -37,6 +40,25 @@ class TrainingSessionORM(Base):
         back_populates="session",
         cascade="all, delete-orphan",
     )
+    owner: Mapped["UserORM | None"] = relationship(back_populates="sessions")
+
+
+class UserORM(Base):
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    email: Mapped[str] = mapped_column(String(254), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(Text)
+    display_name: Mapped[str] = mapped_column(String(64))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+    sessions: Mapped[list[TrainingSessionORM]] = relationship(back_populates="owner")
 
 
 class ScenarioAttemptORM(Base):

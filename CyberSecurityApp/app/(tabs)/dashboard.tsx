@@ -3,6 +3,7 @@ import { Link } from 'expo-router';
 import { useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { useAuth } from '@/features/auth/auth-context';
 import type { AttackType, DifficultyLevel } from '@/features/training/types';
 import { TrainingColors } from '@/features/training/ui-theme';
 import { useTrainingSession } from '@/features/training/useTrainingSession';
@@ -44,6 +45,7 @@ function recommendedDifficulty(accuracy: number, attempts: number): DifficultyLe
 
 export default function DashboardScreen() {
   const { stats, perAttackStats, evaluation, sessionId, scenarioCatalog } = useTrainingSession();
+  const { user, logout } = useAuth();
 
   const scenarioPreviewByKey = useMemo(() => {
     const map: Record<string, string> = {};
@@ -117,14 +119,18 @@ export default function DashboardScreen() {
             <Ionicons name="shield-half" size={18} color="#EFF6FF" />
           </View>
           <View>
-            <Text style={styles.headerTitle}>Panou de antrenament</Text>
+            <Text style={styles.headerTitle}>
+              {user ? `Bună, ${user.displayName}` : 'Panou de antrenament'}
+            </Text>
             <Text style={styles.headerSubtitle}>Rămâi atent. Rămâi în siguranță.</Text>
           </View>
         </View>
-        <View style={styles.bell}>
-          <Ionicons name="notifications-outline" size={17} color={TrainingColors.textPrimary} />
-          <View style={styles.bellDot} />
-        </View>
+        <Pressable
+          style={({ pressed }) => [styles.logoutButton, pressed && styles.pressableFeedback]}
+          onPress={logout}
+        >
+          <Ionicons name="log-out-outline" size={17} color={TrainingColors.textMuted} />
+        </Pressable>
       </View>
 
       <View style={styles.scoreCard}>
@@ -305,7 +311,7 @@ const styles = StyleSheet.create({
   },
   headerTitle: { color: TrainingColors.textPrimary, fontSize: 22, fontWeight: '800' },
   headerSubtitle: { color: TrainingColors.textSecondary, fontSize: 12 },
-  bell: {
+  logoutButton: {
     width: 40,
     height: 40,
     borderRadius: 12,
@@ -314,15 +320,6 @@ const styles = StyleSheet.create({
     backgroundColor: TrainingColors.panel,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  bellDot: {
-    position: 'absolute',
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-    top: 9,
-    right: 9,
-    backgroundColor: TrainingColors.accentTeal,
   },
   scoreCard: {
     position: 'relative',

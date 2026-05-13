@@ -20,9 +20,10 @@ The project is already functional as a vertical MVP slice.
 
 ### Backend status
 Backend lives in `BackendAPI/` and currently includes:
-- `main.py` for API routing only
+- `main.py` for API routing and auth middleware
+- `auth_service.py` for password hashing + JWT token handling
 - `training_service.py` for session orchestration, scoring, recommendation, and event timeline
-- `db.py` for SQLite engine/session initialization
+- `db.py` for environment-driven SQLAlchemy engine/session initialization
 - `persistence_models.py` for SQLAlchemy ORM models
 - `persistence_repository.py` for persistence read/write operations
 - `scenario_library.py` for the scenario templates
@@ -32,6 +33,9 @@ Backend lives in `BackendAPI/` and currently includes:
 
 Backend features currently implemented:
 - `GET /health`
+- `POST /auth/register`
+- `POST /auth/login`
+- `GET /auth/me`
 - `GET /scenario/catalog`
 - `POST /scenario/generate`
 - `POST /scenario/evaluate`
@@ -39,6 +43,9 @@ Backend features currently implemented:
 - `GET /session/{session_id}`
 - `GET /session/{session_id}/events`
 - `GET /session/{session_id}/trends`
+- `GET /session/{session_id}/trends/aggregate`
+- protected API routes via Bearer JWT auth middleware (all routes except `health` + auth register/login)
+- per-user session ownership enforcement for scenario/session reads and writes
 - endpoint-level sliding-window rate limiting:
   - `/scenario/generate`: 30 requests / 60 seconds / client
   - `/scenario/evaluate`: 60 requests / 60 seconds / client
@@ -52,7 +59,7 @@ Backend features currently implemented:
 - per-attack statistics
 - recommendation logic for the next scenario
 - session event history (`recent_events`) with timestamp and tone metadata
-- SQLite persistence for sessions, attempts and events
+- persistence for users, sessions, attempts and events via SQLAlchemy (SQLite default, PostgreSQL-ready via `DATABASE_URL`)
 - startup DB bootstrap now applies Alembic migrations (`upgrade head`) when available, with a safe ORM `create_all` fallback if Alembic is missing
 - scenario evaluation is restart-safe: when in-memory scenario context is missing, backend restores rule context from persisted `scenario_attempts` data
 
@@ -67,20 +74,30 @@ The app now has a broader product-style tab shell and route flow:
 - `app/(tabs)/analytics.tsx` for progress/stats UI
 - `app/chat/[scenarioId].tsx` for chat-style scenario simulation
 - `app/feedback/[scenarioId].tsx` for post-scenario debrief
+- `app/login.tsx` for user authentication
+- `app/register.tsx` for new account creation
 
 Navigation updates:
 - `app/(tabs)/_layout.tsx` now defines the new visible tabs and hides legacy routes (`index`, `training`, `explore`)
-- `app/_layout.tsx` now includes stack routes for `chat/[scenarioId]` and `feedback/[scenarioId]`
-- `app/(tabs)/index.tsx` now redirects to `/(tabs)/dashboard`
+- `app/_layout.tsx` wraps everything with `AuthProvider` (outermost) → `TrainingSessionProvider`, and includes stack routes for `login`, `register`, `chat/[scenarioId]`, and `feedback/[scenarioId]`
+- `app/(tabs)/index.tsx` now acts as an auth gate: redirects to `/login` when unauthenticated, shows a loading spinner during auth hydration, then redirects to `/(tabs)/dashboard`
 
 The existing `features/training/*` architecture is still present and reusable.
 
+Auth feature module (`features/auth/`):
+- `auth-api.ts` — API client for auth endpoints (`/auth/login`, `/auth/register`, `/auth/me`) with multi-candidate base URL fallback
+- `auth-context.tsx` — React context provider managing login/register/logout, AsyncStorage persistence (`auth-session-v1` key), token validation on hydration via `GET /auth/me`, and automatic token accessor wiring for the training API client
+
 Current integration level:
+- frontend auth is fully wired: login/register screens, JWT token persistence, automatic token injection on all protected API calls
 - chat/feedback flow is now wired to real session continuity (`session_id` carried through routes)
 - analytics now consumes persisted backend session snapshot + recent events when a session is active
 - assistant and learn tabs now use real backend AI responses via `POST /assistant/ask`
 - dashboard and scenarios now consume backend scenario catalog (`GET /scenario/catalog`) through shared `useTrainingSession` state
+- dashboard header shows personalized greeting ("Bună, {displayName}") and logout button
 - local continuity is enabled via AsyncStorage for training session state, assistant/learn conversations, and in-progress chat/feedback continuity
+- training session state is scoped per-user (storage key includes user ID) so each account has isolated training data
+- protected API calls in `useTrainingSession` are gated on `isAuthenticated` — no backend calls are made before login
 
 ## Recent Progress (April-May 2026)
 - Backend refactor completed: service layer extracted from `main.py` into `training_service.py`.
@@ -168,6 +185,10 @@ Current integration level:
 - Added retention and cleanup policy for frontend continuity storage:
   - chat progress keys use TTL (7 days) and max-entry cap to prevent unbounded growth
   - feedback context uses TTL validation and expired payload cleanup
+- Extended frontend continuity hardening for assistant/learn tabs:
+  - assistant history now uses TTL-based persisted state (7 days) with capped message retention
+  - learn tab persisted state now uses TTL-based validation with capped lesson-thread retention
+  - added explicit "Șterge cache" UX action in assistant and learn tabs to clear local training cache
 - Backend session reads now use DB as source of truth for session progress:
   - removed in-memory `session_progress` cache dependency for reads
   - session state is restored from persisted snapshot on each access
@@ -177,6 +198,17 @@ Current integration level:
   - trend points include running score/accuracy per evaluated attempt
   - frontend analytics now fetches and displays session evolution trend card
   - typed API contracts added for trends payloads
+- Added backend trend aggregation endpoint for chart-friendly analytics:
+  - `GET /session/{session_id}/trends/aggregate`
+  - supports filters: `attack_type`, `since`, `until`
+  - aggregation payload includes:
+    - `by_day` (attempts, correct, accuracy, score delta, cumulative score)
+    - `by_attack` (attempts, correct, accuracy, score totals, average score delta)
+  - repository + endpoint tests added for aggregation behavior and unknown-session handling
+- Updated frontend analytics to consume trend aggregates:
+  - analytics chart now uses server-side `by_day` aggregates (daily evolution bars)
+  - per-attack accuracy card now prefers `by_attack` aggregate values
+  - trend filters continue to work with persisted server-side data
 - Extended analytics queries with persisted filters:
   - backend `events` endpoint now supports `since`/`until`
   - backend `trends` endpoint now supports `attack_type` + `since`/`until`
@@ -187,26 +219,57 @@ Current integration level:
   - `since`/`until` filter behavior
   - `attack_type` trend filtering
   - unknown-session and offset edge cases
+- Added production-ready backend auth + ownership foundation:
+  - new auth endpoints:
+    - `POST /auth/register`
+    - `POST /auth/login`
+    - `GET /auth/me`
+  - JWT bearer middleware now protects training/catalog/assistant/session endpoints
+  - user accounts persisted in DB (`users` table)
+  - training sessions now support per-user ownership (`owner_user_id`) with ownership checks on protected session/scenario paths
+  - password hashing uses scrypt-based hashes in `auth_service.py`
+- Added Alembic migration `20260513_0003`:
+  - creates `users` table
+  - adds `owner_user_id` column + index to `training_sessions`
+- Added auth/security test coverage:
+  - auth token roundtrip + password hash verification tests (`tests/test_auth_service.py`)
+  - API tests for protected route behavior and cross-user session access blocking
+  - repository tests for user creation and session ownership checks
+
+- Added frontend auth integration:
+  - new `features/auth/auth-api.ts` — API client for `/auth/login`, `/auth/register`, `/auth/me` with multi-candidate base URL fallback and Romanian error messages
+  - new `features/auth/auth-context.tsx` — React context provider with login/register/logout actions, AsyncStorage persistence, token validation on hydration, and automatic `setAuthTokenAccessor()` wiring
+  - new `app/login.tsx` — cyber-themed login screen with email/password fields, show/hide toggle, error banner, loading state
+  - new `app/register.tsx` — cyber-themed register screen with display name, email, password + confirmation, client-side validation
+  - modified `features/training/api.ts` — added `setAuthTokenAccessor()` + `getAuthHeaders()` so all `postJson`/`getJson` calls automatically inject `Authorization: Bearer <token>`
+  - modified `app/_layout.tsx` — wrapped with `AuthProvider` (outermost), added `login` and `register` stack routes
+  - modified `app/(tabs)/index.tsx` — now acts as auth gate: redirects to `/login` when unauthenticated, loading spinner during hydration
+  - modified `app/(tabs)/dashboard.tsx` — personalized greeting ("Bună, {displayName}"), logout button replaces notification bell
+  - modified `features/training/useTrainingSession.tsx` — all protected API calls gated on `isAuthenticated`, per-user storage key (includes user ID), state reset on user identity change
 
 ## What the App Already Does
-1. User selects attack type and difficulty.
-2. App sends request to backend to generate a scenario.
-3. User picks an answer.
-4. Backend evaluates the answer.
-5. App shows:
+1. User registers or logs in (JWT auth).
+2. User selects attack type and difficulty.
+3. App sends request to backend to generate a scenario.
+4. User picks an answer.
+5. Backend evaluates the answer.
+6. App shows:
    - result
    - score delta
    - session stats
    - recent event history in analytics
    - adaptive recommendation
    - red flags
-6. User can continue with current selection or recommended scenario.
+7. User can continue with current selection or recommended scenario.
+8. User can log out (clears auth state, redirects to login).
 
 ## Important Design Decisions
 - The scenario content is still rule-based for now, not LLM-generated.
 - The app keeps a stable API contract so the frontend will not break when LLM generation is added later.
 - The frontend is now organized feature-first for readability and future scalability.
 - The UI theme is intentionally cyber-themed with dark console-like styling.
+- Auth token is stored in AsyncStorage (acceptable for MVP; `expo-secure-store` recommended for production).
+- Training session state is scoped per-user in AsyncStorage to prevent cross-account data leakage.
 
 ## Main Files to Know
 ### Backend
@@ -222,8 +285,11 @@ Current integration level:
 - `BackendAPI/migrations/env.py`
 - `BackendAPI/migrations/versions/20260507_0001_initial_schema.py`
 - `BackendAPI/migrations/versions/20260511_0002_persist_scenario_rule.py`
+- `BackendAPI/migrations/versions/20260513_0003_add_users_and_session_ownership.py`
+- `BackendAPI/auth_service.py`
 - `BackendAPI/tests/test_api_endpoints.py`
 - `BackendAPI/tests/test_persistence_repository.py`
+- `BackendAPI/tests/test_auth_service.py`
 
 ### Frontend
 - `CyberSecurityApp/app/(tabs)/_layout.tsx`
@@ -235,7 +301,11 @@ Current integration level:
 - `CyberSecurityApp/app/(tabs)/index.tsx`
 - `CyberSecurityApp/app/chat/[scenarioId].tsx`
 - `CyberSecurityApp/app/feedback/[scenarioId].tsx`
+- `CyberSecurityApp/app/login.tsx`
+- `CyberSecurityApp/app/register.tsx`
 - `CyberSecurityApp/app/_layout.tsx`
+- `CyberSecurityApp/features/auth/auth-api.ts`
+- `CyberSecurityApp/features/auth/auth-context.tsx`
 - `CyberSecurityApp/features/training/api.ts`
 - `CyberSecurityApp/features/training/useTrainingSession.tsx`
 - `CyberSecurityApp/features/training/types.ts`
@@ -249,19 +319,20 @@ Current integration level:
 ## Remaining Tasks / Suggested Roadmap
 Priority order:
 
-### 1. Finish wiring remaining tabs to real backend/session state
-Status: major wiring completed.
+### 1. ~~Integrate frontend authentication with backend-protected API~~
+Status: **COMPLETE**.
 
-Current state:
-- `dashboard`, `scenarios`, chat/feedback and analytics now share provider-level training state + backend signals
-- scenario catalog fetching is centralized in `useTrainingSession`
-
-Next integration step:
-- reduce remaining UI-only heuristics/placeholders (e.g., estimated duration/risk derivations) where backend-backed signals are preferable
-- continue consolidating route behavior around provider actions where duplication still exists
+Implemented:
+- login/register screens with cyber-themed UI and Romanian labels
+- `AuthProvider` context with JWT token persistence in AsyncStorage
+- automatic token injection on all protected API calls via `setAuthTokenAccessor()`
+- auth gate in `(tabs)/index.tsx` redirecting unauthenticated users to `/login`
+- per-user training session storage (isolated by user ID)
+- personalized dashboard greeting + logout button
+- token validation on app startup via `GET /auth/me`
 
 ### 2. Add persistence layer hardening
-Status: implemented as MVP with SQLite + SQLAlchemy + repository + startup init.
+Status: implemented with SQLAlchemy + Alembic + user/session ownership, PostgreSQL-ready DB config.
 
 Current approach:
 - dual-write mode (existing in-memory flow + DB writes)
@@ -278,12 +349,15 @@ Next persistence step:
 ### 3. Expand persistent frontend continuity (AsyncStorage)
 Current baseline:
 - training session state, assistant chat, and learn state are persisted/restored
+- training session state is now scoped per-user (storage key includes user ID)
 - in-progress chat scenario state (`/chat/[scenarioId]`) and feedback transition context are now persisted/restored
-- retention policy is applied to chat/feedback continuity keys (TTL + capped entries)
+- retention policy is now applied across chat/feedback + assistant/learn continuity keys (TTL + capped entries)
+- assistant and learn tabs now expose explicit local-cache reset actions
 
 Next step:
-- apply similar retention limits to assistant/learn histories
-- add explicit UX affordance for clearing local training history/cache
+- scope assistant/learn/chat/feedback continuity keys per-user (currently only training session is per-user)
+- add selective clear controls (e.g., clear only assistant history vs full training cache)
+- add user-facing confirmation/toast feedback after cache clear actions
 
 ### 4. Add more UI polish
 Possible improvements:
@@ -299,14 +373,16 @@ If needed:
 - move the scenario body into a dedicated component
 - move the stats section into a dashboard component
 
-### 6. Extend analytics with persisted trends (next step after current integration)
+### 6. Extend analytics with persisted trends and aggregate insights
 Current baseline:
 - analytics now reads persisted snapshot + paginated events + persisted trends for active session
 - analytics supports persisted attack-type/date-range filters and load-more activity pagination
+- analytics now consumes persisted trend aggregates (`/trends/aggregate`) for daily and per-attack chart data
 
 Next:
-- richer chart variants based on stored attempts (e.g., moving average / per-attack trend lines)
-- server-side aggregation options for trend summaries (e.g., grouped by day/attack)
+- add moving-average overlays (7-point or 5-point) using existing trend points + aggregate daily series
+- add dedicated per-attack trend lines over time (multiple lines, one per attack type)
+- add optional compare mode between date ranges (last 7d vs previous 7d)
 
 ### 7. Add LLM integration
 When ready:
@@ -327,11 +403,12 @@ Recommended:
 - basic UI smoke tests if needed
 
 ## Current Code Style / Structure Rules
-- Keep feature-specific code in `features/training/`
+- Keep feature-specific code in `features/training/` and `features/auth/`
 - Keep screen-level orchestration in `app/(tabs)/index.tsx`
 - Keep shared types and config separate from UI
 - Prefer small focused components over large screens
 - Preserve the API contract between frontend and backend
+- Auth state lives in `AuthProvider`; training state in `TrainingSessionProvider` (auth wraps training)
 
 ## Run Instructions
 ### Backend
@@ -358,10 +435,11 @@ npx expo start
 Focus on incremental improvements only.
 
 Good next tasks:
-- apply retention/cleanup policy to assistant/learn local history keys
-- add richer analytics trend visualizations (moving averages / per-attack lines)
-- add backend trend aggregation endpoints for chart-friendly grouped data
-- then iterate on UI polish and LLM integration with fallback
+- scope remaining AsyncStorage keys (assistant, learn, chat, feedback) per-user like training session
+- add token refresh or silent re-auth before JWT expiration
+- continue analytics enhancements (moving averages, compare mode, export/share)
+- iterate on UI polish and LLM integration with fallback
+- consider migrating token storage from AsyncStorage to `expo-secure-store` for production
 
 Avoid large rewrites unless necessary.
 Preserve the current modular structure and API contract.

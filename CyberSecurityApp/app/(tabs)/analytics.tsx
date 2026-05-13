@@ -2,8 +2,13 @@ import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { getSessionEvents, getSessionSnapshot, getSessionTrends } from '@/features/training/api';
-import type { AttackType, SessionEvent, SessionStats, SessionTrendPointApiResponse } from '@/features/training/types';
+import { getSessionEvents, getSessionSnapshot, getSessionTrendAggregates } from '@/features/training/api';
+import type {
+  AttackType,
+  SessionEvent,
+  SessionStats,
+  SessionTrendAggregatesApiResponse,
+} from '@/features/training/types';
 import { TrainingColors } from '@/features/training/ui-theme';
 import { useTrainingSession } from '@/features/training/useTrainingSession';
 
@@ -40,7 +45,7 @@ export default function AnalyticsScreen() {
   const { sessionId, stats, perAttackStats } = useTrainingSession();
   const [serverStats, setServerStats] = useState<SessionStats | null>(null);
   const [serverEvents, setServerEvents] = useState<SessionEvent[]>([]);
-  const [serverTrends, setServerTrends] = useState<SessionTrendPointApiResponse[]>([]);
+  const [serverTrendAggregates, setServerTrendAggregates] = useState<SessionTrendAggregatesApiResponse | null>(null);
   const [serverEventsTotal, setServerEventsTotal] = useState(0);
   const [eventsLimit, setEventsLimit] = useState(12);
   const [trendAttackFilter, setTrendAttackFilter] = useState<TrendAttackFilter>('all');
@@ -70,7 +75,7 @@ export default function AnalyticsScreen() {
       if (!sessionId) {
         setServerStats(null);
         setServerEvents([]);
-        setServerTrends([]);
+        setServerTrendAggregates(null);
         setServerEventsTotal(0);
         setFetchError(null);
         return;
@@ -80,12 +85,10 @@ export default function AnalyticsScreen() {
       setFetchError(null);
 
       try {
-        const [snapshot, events, trends] = await Promise.all([
+        const [snapshot, events, trendAggregates] = await Promise.all([
           getSessionSnapshot(sessionId),
           getSessionEvents(sessionId, { limit: eventsLimit, offset: 0, since: rangeSince }),
-          getSessionTrends(sessionId, {
-            limit: 120,
-            offset: 0,
+          getSessionTrendAggregates(sessionId, {
             attackType: trendAttackFilter === 'all' ? undefined : trendAttackFilter,
             since: rangeSince,
           }),
@@ -98,7 +101,7 @@ export default function AnalyticsScreen() {
         setServerStats(snapshot.session_stats);
         setServerEvents(events.events);
         setServerEventsTotal(events.total);
-        setServerTrends(trends.points);
+        setServerTrendAggregates(trendAggregates);
       } catch {
         if (!cancelled) {
           setFetchError('Nu am putut incarca datele salvate ale sesiunii.');
@@ -143,15 +146,25 @@ export default function AnalyticsScreen() {
     recent_events: [],
   };
 
-  const accuracyBars = useMemo(
-    () =>
-      (Object.keys(ATTACK_LABELS) as AttackType[]).map((attackType) => ({
+  const aggregateByAttackMap = useMemo(() => {
+    const map = new Map<AttackType, SessionTrendAggregatesApiResponse['by_attack'][number]>();
+    for (const item of serverTrendAggregates?.by_attack ?? []) {
+      map.set(item.attack_type, item);
+    }
+    return map;
+  }, [serverTrendAggregates?.by_attack]);
+
+  const accuracyBars = useMemo(() => {
+    return (Object.keys(ATTACK_LABELS) as AttackType[]).map((attackType) => {
+      const aggregateItem = aggregateByAttackMap.get(attackType);
+      const accuracy = aggregateItem?.accuracy ?? effectiveStats.per_attack[attackType]?.accuracy ?? 0;
+      return {
         id: attackType,
         label: ATTACK_SHORT_LABELS[attackType],
-        value: Math.max(0, Math.min(100, effectiveStats.per_attack[attackType]?.accuracy ?? 0)),
-      })),
-    [effectiveStats.per_attack]
-  );
+        value: Math.max(0, Math.min(100, accuracy)),
+      };
+    });
+  }, [aggregateByAttackMap, effectiveStats.per_attack]);
 
   const weakSpots = useMemo<WeakSpot[]>(
     () =>
@@ -169,11 +182,14 @@ export default function AnalyticsScreen() {
   );
 
   const activityFeed = serverEvents.length > 0 ? serverEvents : effectiveStats.recent_events;
-  const trendSlice = serverTrends.slice(-10);
+  const trendSlice = (serverTrendAggregates?.by_day ?? []).slice(-10);
   const trendStart = trendSlice[0];
   const trendEnd = trendSlice[trendSlice.length - 1];
   const scoreTrendDelta =
-    trendStart && trendEnd ? trendEnd.score_after - trendStart.score_after : (trendEnd?.score_after ?? 0);
+    trendStart && trendEnd
+      ? trendEnd.cumulative_score_after - trendStart.cumulative_score_after
+      : (trendEnd?.cumulative_score_after ?? 0);
+  const trendAttemptsCount = serverTrendAggregates?.total_attempts ?? trendSlice.reduce((sum, point) => sum + point.attempts, 0);
 
   const badges = [
     { name: 'Prima detectare', earned: effectiveStats.total_correct > 0 },
@@ -292,7 +308,7 @@ export default function AnalyticsScreen() {
         <View style={styles.chartHeader}>
           <View>
             <Text style={styles.chartEyebrow}>Evoluție sesiune</Text>
-            <Text style={styles.chartScore}>{trendEnd?.score_after ?? effectiveStats.total_score}</Text>
+            <Text style={styles.chartScore}>{trendEnd?.cumulative_score_after ?? effectiveStats.total_score}</Text>
           </View>
           <View style={styles.trendPill}>
             <Ionicons
@@ -309,23 +325,23 @@ export default function AnalyticsScreen() {
         {trendSlice.length > 0 ? (
           <View style={styles.bars}>
             {trendSlice.map((point) => (
-              <View key={`${point.attempt_index}-${point.timestamp}`} style={styles.barColumn}>
+              <View key={point.day} style={styles.barColumn}>
                 <View style={styles.barTrack}>
                   <View
                     style={[
                       styles.barFill,
-                      point.is_correct ? styles.barFillActive : styles.barFillMuted,
-                      { height: `${Math.max(8, Math.min(100, point.accuracy_after))}%` },
+                      point.accuracy >= 60 ? styles.barFillActive : styles.barFillMuted,
+                      { height: `${Math.max(8, Math.min(100, point.accuracy))}%` },
                     ]}
                   />
                 </View>
-                <Text style={styles.barLabel}>{point.attempt_index}</Text>
+                <Text style={styles.barLabel}>{point.day.slice(5)}</Text>
               </View>
             ))}
           </View>
         ) : (
           <View style={styles.activityEmptyCard}>
-            <Text style={styles.activityEmptyText}>Trendul va apărea după primele răspunsuri evaluate.</Text>
+            <Text style={styles.activityEmptyText}>Trendul zilnic va apărea după primele răspunsuri evaluate.</Text>
           </View>
         )}
       </View>
@@ -338,7 +354,7 @@ export default function AnalyticsScreen() {
           </View>
           <View style={styles.trendPill}>
             <Ionicons name="shield-checkmark-outline" size={12} color={TrainingColors.accentTeal} />
-            <Text style={styles.trendText}>{effectiveStats.total_attempts} încercări</Text>
+            <Text style={styles.trendText}>{trendAttemptsCount} încercări</Text>
           </View>
         </View>
         <View style={styles.bars}>

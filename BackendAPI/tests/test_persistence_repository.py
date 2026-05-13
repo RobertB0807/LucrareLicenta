@@ -175,6 +175,89 @@ class PersistenceRepositoryTestCase(unittest.TestCase):
     def test_fetch_repository_queries_return_none_for_unknown_session(self) -> None:
         self.assertIsNone(persistence_repository.fetch_session_events("missing-session", limit=20, offset=0))
         self.assertIsNone(persistence_repository.fetch_session_trends("missing-session", limit=20, offset=0))
+        self.assertIsNone(persistence_repository.fetch_session_trend_aggregates("missing-session"))
+
+    def test_user_creation_and_session_ownership(self) -> None:
+        user = persistence_repository.create_user(
+            email="owner@example.com",
+            password_hash="hashed-value",
+            display_name="Owner",
+        )
+        self.assertEqual(user["email"], "owner@example.com")
+
+        found = persistence_repository.fetch_user_by_email("owner@example.com")
+        self.assertIsNotNone(found)
+        assert found is not None
+        self.assertEqual(found["id"], user["id"])
+
+        persistence_repository.upsert_session_progress(
+            session_id="owned-session",
+            total_score=0,
+            total_attempts=0,
+            total_correct=0,
+            correct_streak=0,
+            incorrect_streak=0,
+            per_attack_stats={
+                "phishing": {"attempts": 0, "correct": 0},
+                "smishing": {"attempts": 0, "correct": 0},
+                "impersonation": {"attempts": 0, "correct": 0},
+            },
+            owner_user_id=user["id"],
+        )
+
+        self.assertTrue(persistence_repository.ensure_session_owner("owned-session", user["id"]))
+        self.assertFalse(persistence_repository.ensure_session_owner("owned-session", "different-user"))
+
+    def test_fetch_session_trend_aggregates_groups_by_day_and_attack(self) -> None:
+        session_id = "repo-trend-aggregates-session"
+        self._seed_session(session_id)
+        base = datetime(2026, 5, 3, 9, 0, tzinfo=timezone.utc)
+
+        attempts = [
+            ("agg-1", "phishing", "easy", True, 10, base + timedelta(minutes=5)),
+            ("agg-2", "phishing", "medium", False, -5, base + timedelta(minutes=15)),
+            ("agg-3", "smishing", "easy", True, 10, base + timedelta(days=1, minutes=10)),
+            ("agg-4", "impersonation", "hard", False, 0, base + timedelta(days=1, minutes=20)),
+        ]
+
+        for scenario_id, attack_type, difficulty, is_correct, score_delta, _ in attempts:
+            persistence_repository.record_scenario_evaluation(
+                scenario_id=scenario_id,
+                session_id=session_id,
+                attack_type=attack_type,
+                difficulty=difficulty,
+                selected_option_id="click",
+                is_correct=is_correct,
+                score_delta=score_delta,
+                explanation="test",
+                recommendation_attack_type="phishing",
+                recommendation_difficulty="easy",
+            )
+
+        with persistence_repository.session_scope() as test_session:
+            rows = (
+                test_session.query(ScenarioAttemptORM)
+                .filter(ScenarioAttemptORM.session_id == session_id)
+                .order_by(ScenarioAttemptORM.id.asc())
+                .all()
+            )
+            for row, (_, _, _, _, _, evaluated_at) in zip(rows, attempts):
+                row.evaluated_at = evaluated_at
+
+        aggregates = persistence_repository.fetch_session_trend_aggregates(session_id)
+        self.assertIsNotNone(aggregates)
+        assert aggregates is not None
+        self.assertEqual(aggregates["total_attempts"], 4)
+        self.assertEqual([point["day"] for point in aggregates["by_day"]], ["2026-05-03", "2026-05-04"])
+        self.assertEqual([point["score_delta_total"] for point in aggregates["by_day"]], [5, 10])
+        self.assertEqual([point["cumulative_score_after"] for point in aggregates["by_day"]], [5, 15])
+
+        by_attack = {item["attack_type"]: item for item in aggregates["by_attack"]}
+        self.assertEqual(by_attack["phishing"]["attempts"], 2)
+        self.assertEqual(by_attack["phishing"]["accuracy"], 50.0)
+        self.assertEqual(by_attack["phishing"]["score_delta_total"], 5)
+        self.assertEqual(by_attack["smishing"]["attempts"], 1)
+        self.assertEqual(by_attack["smishing"]["average_score_delta"], 10.0)
 
 
 if __name__ == "__main__":

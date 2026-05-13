@@ -41,6 +41,7 @@ class ApiEndpointsTestCase(unittest.TestCase):
         db.init_db()
         main.rate_limiter.reset()
         self.client = TestClient(main.app)
+        self.auth_headers = self._register_and_auth_headers("tester@example.com")
 
         def restore_state() -> None:
             training_service.scenario_contexts.clear()
@@ -58,6 +59,19 @@ class ApiEndpointsTestCase(unittest.TestCase):
             testing_engine.dispose()
 
         self.addCleanup(restore_state)
+
+    def _register_and_auth_headers(self, email: str) -> dict[str, str]:
+        response = self.client.post(
+            "/auth/register",
+            json={
+                "email": email,
+                "password": "strong-pass-123",
+                "display_name": "Tester",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        token = response.json()["access_token"]
+        return {"Authorization": f"Bearer {token}"}
 
     def test_health_returns_ok(self) -> None:
         response = main.health()
@@ -132,6 +146,16 @@ class ApiEndpointsTestCase(unittest.TestCase):
         ).model_dump()
         self.assertEqual(empty_trends["total"], 0)
 
+        trend_aggregates = main.get_session_trend_aggregates(
+            session_id=session_id,
+            attack_type="phishing",
+        ).model_dump()
+        self.assertEqual(trend_aggregates["session_id"], session_id)
+        self.assertIn("total_attempts", trend_aggregates)
+        self.assertIn("by_day", trend_aggregates)
+        self.assertIn("by_attack", trend_aggregates)
+        self.assertTrue(all(item["attack_type"] == "phishing" for item in trend_aggregates["by_attack"]))
+
     def test_evaluate_after_context_cache_reset_uses_persisted_rule(self) -> None:
         generated = main.generate_scenario(
             main.GenerateScenarioRequest(attack_type="smishing", difficulty="medium")
@@ -205,6 +229,11 @@ class ApiEndpointsTestCase(unittest.TestCase):
         self.assertEqual(trends_exc.exception.status_code, 404)
         self.assertEqual(trends_exc.exception.detail, "Session not found")
 
+        with self.assertRaises(HTTPException) as trend_aggregates_exc:
+            main.get_session_trend_aggregates(session_id="does-not-exist")
+        self.assertEqual(trend_aggregates_exc.exception.status_code, 404)
+        self.assertEqual(trend_aggregates_exc.exception.detail, "Session not found")
+
     def test_evaluate_unknown_scenario_returns_404(self) -> None:
         with self.assertRaises(HTTPException) as evaluation_exc:
             main.evaluate_scenario(
@@ -224,6 +253,7 @@ class ApiEndpointsTestCase(unittest.TestCase):
                 "attack_type": "phishing",
                 "difficulty": "easy",
             },
+            headers=self.auth_headers,
         )
         self.assertEqual(response.status_code, 200)
         payload = response.json()
@@ -232,7 +262,7 @@ class ApiEndpointsTestCase(unittest.TestCase):
         self.assertGreaterEqual(len(payload["quick_tips"]), 3)
 
     def test_scenario_catalog_returns_items(self) -> None:
-        response = self.client.get("/scenario/catalog")
+        response = self.client.get("/scenario/catalog", headers=self.auth_headers)
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertIn("items", payload)
@@ -250,6 +280,7 @@ class ApiEndpointsTestCase(unittest.TestCase):
         response = self.client.post(
             "/assistant/ask",
             json={"message": "   "},
+            headers=self.auth_headers,
         )
         self.assertEqual(response.status_code, 422)
 
@@ -260,11 +291,43 @@ class ApiEndpointsTestCase(unittest.TestCase):
                 "scenario_id": "invalid id with spaces",
                 "selected_option_id": "click",
             },
+            headers=self.auth_headers,
         )
         self.assertEqual(response.status_code, 422)
 
-        response = self.client.get("/session/invalid id with spaces")
+        response = self.client.get("/session/invalid id with spaces", headers=self.auth_headers)
         self.assertEqual(response.status_code, 422)
+
+    def test_auth_endpoints_and_protected_routes(self) -> None:
+        login = self.client.post(
+            "/auth/login",
+            json={
+                "email": "tester@example.com",
+                "password": "strong-pass-123",
+            },
+        )
+        self.assertEqual(login.status_code, 200)
+        access_token = login.json()["access_token"]
+
+        me = self.client.get("/auth/me", headers={"Authorization": f"Bearer {access_token}"})
+        self.assertEqual(me.status_code, 200)
+        self.assertEqual(me.json()["email"], "tester@example.com")
+
+        unauthorized = self.client.get("/scenario/catalog")
+        self.assertEqual(unauthorized.status_code, 401)
+
+    def test_session_ownership_blocks_cross_user_access(self) -> None:
+        first = self.client.post(
+            "/scenario/generate",
+            json={"attack_type": "phishing", "difficulty": "easy"},
+            headers=self.auth_headers,
+        )
+        self.assertEqual(first.status_code, 200)
+        session_id = first.json()["session_id"]
+
+        other_headers = self._register_and_auth_headers("other@example.com")
+        forbidden = self.client.get(f"/session/{session_id}", headers=other_headers)
+        self.assertEqual(forbidden.status_code, 404)
 
     def test_rate_limiting_blocks_excessive_requests(self) -> None:
         original_limits = main.rate_limiter.snapshot_limits()

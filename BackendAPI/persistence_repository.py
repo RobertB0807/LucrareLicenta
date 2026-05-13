@@ -4,12 +4,13 @@ import json
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Iterator
+from uuid import uuid4
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from db import SessionLocal
-from persistence_models import ScenarioAttemptORM, SessionEventORM, TrainingSessionORM
+from persistence_models import ScenarioAttemptORM, SessionEventORM, TrainingSessionORM, UserORM
 from scenario_library import ALL_ATTACK_TYPES
 
 
@@ -56,14 +57,17 @@ def upsert_session_progress(
     correct_streak: int,
     incorrect_streak: int,
     per_attack_stats: dict[str, dict[str, int]],
+    owner_user_id: str | None = None,
 ) -> None:
     normalized = normalize_per_attack_stats(per_attack_stats)
 
     with session_scope() as db:
         row = db.get(TrainingSessionORM, session_id)
         if row is None:
-            row = TrainingSessionORM(session_id=session_id)
+            row = TrainingSessionORM(session_id=session_id, owner_user_id=owner_user_id)
             db.add(row)
+        elif owner_user_id and row.owner_user_id is None:
+            row.owner_user_id = owner_user_id
 
         row.total_score = total_score
         row.total_attempts = total_attempts
@@ -72,6 +76,93 @@ def upsert_session_progress(
         row.incorrect_streak = incorrect_streak
         row.per_attack_stats_json = json.dumps(normalized)
         row.updated_at = utc_now()
+
+
+def create_user(*, email: str, password_hash: str, display_name: str) -> dict[str, Any]:
+    normalized_email = email.strip().lower()
+    with session_scope() as db:
+        existing = db.scalar(select(UserORM).where(UserORM.email == normalized_email))
+        if existing is not None:
+            raise ValueError("Email already exists")
+
+        user = UserORM(
+            id=str(uuid4()),
+            email=normalized_email,
+            password_hash=password_hash,
+            display_name=display_name,
+            is_active=True,
+        )
+        db.add(user)
+        db.flush()
+        return {
+            "id": user.id,
+            "email": user.email,
+            "display_name": user.display_name,
+            "is_active": user.is_active,
+            "created_at": user.created_at.isoformat() if user.created_at else None,
+        }
+
+
+def fetch_user_by_email(email: str) -> dict[str, Any] | None:
+    normalized_email = email.strip().lower()
+    db = SessionLocal()
+    try:
+        row = db.scalar(select(UserORM).where(UserORM.email == normalized_email))
+        if row is None:
+            return None
+        return {
+            "id": row.id,
+            "email": row.email,
+            "password_hash": row.password_hash,
+            "display_name": row.display_name,
+            "is_active": row.is_active,
+        }
+    finally:
+        db.close()
+
+
+def fetch_user_by_id(user_id: str) -> dict[str, Any] | None:
+    db = SessionLocal()
+    try:
+        row = db.get(UserORM, user_id)
+        if row is None:
+            return None
+        return {
+            "id": row.id,
+            "email": row.email,
+            "display_name": row.display_name,
+            "is_active": row.is_active,
+        }
+    finally:
+        db.close()
+
+
+def ensure_session_owner(session_id: str, user_id: str) -> bool:
+    with session_scope() as db:
+        row = db.get(TrainingSessionORM, session_id)
+        if row is None:
+            return False
+        if row.owner_user_id is None:
+            row.owner_user_id = user_id
+            return True
+        return row.owner_user_id == user_id
+
+
+def fetch_scenario_session_owner(scenario_id: str) -> dict[str, Any] | None:
+    db = SessionLocal()
+    try:
+        row = db.scalar(
+            select(ScenarioAttemptORM).where(ScenarioAttemptORM.scenario_id == scenario_id)
+        )
+        if row is None:
+            return None
+        session = db.get(TrainingSessionORM, row.session_id)
+        return {
+            "session_id": row.session_id,
+            "owner_user_id": session.owner_user_id if session is not None else None,
+        }
+    finally:
+        db.close()
 
 
 def record_generated_scenario(
@@ -389,6 +480,120 @@ def fetch_session_trends(
             "limit": limit,
             "offset": offset,
             "points": paged_points,
+        }
+    finally:
+        db.close()
+
+
+def fetch_session_trend_aggregates(
+    session_id: str,
+    *,
+    attack_type: str | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> dict[str, Any] | None:
+    db = SessionLocal()
+    try:
+        row = db.get(TrainingSessionORM, session_id)
+        if row is None:
+            return None
+
+        filters = [
+            ScenarioAttemptORM.session_id == session_id,
+            ScenarioAttemptORM.evaluated_at.is_not(None),
+        ]
+        if attack_type is not None:
+            filters.append(ScenarioAttemptORM.attack_type == attack_type)
+        if since is not None:
+            filters.append(ScenarioAttemptORM.evaluated_at >= since)
+        if until is not None:
+            filters.append(ScenarioAttemptORM.evaluated_at <= until)
+
+        attempts = db.execute(
+            select(ScenarioAttemptORM)
+            .where(*filters)
+            .order_by(ScenarioAttemptORM.evaluated_at.asc(), ScenarioAttemptORM.id.asc())
+        ).scalars().all()
+
+        by_day: dict[str, dict[str, int]] = {}
+        by_attack: dict[str, dict[str, int]] = {}
+
+        for attempt in attempts:
+            if attempt.evaluated_at is None:
+                continue
+
+            day_key = attempt.evaluated_at.date().isoformat()
+            day_stats = by_day.setdefault(
+                day_key,
+                {
+                    "attempts": 0,
+                    "correct": 0,
+                    "score_delta_total": 0,
+                },
+            )
+            day_stats["attempts"] += 1
+            day_stats["correct"] += 1 if bool(attempt.is_correct) else 0
+            day_stats["score_delta_total"] += int(attempt.score_delta or 0)
+
+            attack_key = str(attempt.attack_type)
+            attack_stats = by_attack.setdefault(
+                attack_key,
+                {
+                    "attempts": 0,
+                    "correct": 0,
+                    "score_delta_total": 0,
+                },
+            )
+            attack_stats["attempts"] += 1
+            attack_stats["correct"] += 1 if bool(attempt.is_correct) else 0
+            attack_stats["score_delta_total"] += int(attempt.score_delta or 0)
+
+        day_points: list[dict[str, Any]] = []
+        cumulative_score_after = 0
+        for day in sorted(by_day.keys()):
+            stats = by_day[day]
+            attempts_count = stats["attempts"]
+            correct_count = stats["correct"]
+            score_delta_total = stats["score_delta_total"]
+            cumulative_score_after += score_delta_total
+            accuracy = round((correct_count / attempts_count) * 100, 1) if attempts_count else 0.0
+            day_points.append(
+                {
+                    "day": day,
+                    "attempts": attempts_count,
+                    "correct": correct_count,
+                    "accuracy": accuracy,
+                    "score_delta_total": score_delta_total,
+                    "cumulative_score_after": cumulative_score_after,
+                }
+            )
+
+        attack_points: list[dict[str, Any]] = []
+        for current_attack in sorted(by_attack.keys()):
+            stats = by_attack[current_attack]
+            attempts_count = stats["attempts"]
+            correct_count = stats["correct"]
+            score_delta_total = stats["score_delta_total"]
+            accuracy = round((correct_count / attempts_count) * 100, 1) if attempts_count else 0.0
+            average_score_delta = (
+                round(score_delta_total / attempts_count, 2) if attempts_count else 0.0
+            )
+            attack_points.append(
+                {
+                    "attack_type": current_attack,
+                    "attempts": attempts_count,
+                    "correct": correct_count,
+                    "accuracy": accuracy,
+                    "score_delta_total": score_delta_total,
+                    "average_score_delta": average_score_delta,
+                }
+            )
+
+        return {
+            "session_id": session_id,
+            "total_attempts": len(attempts),
+            "by_day": day_points,
+            "by_attack": attack_points,
         }
     finally:
         db.close()

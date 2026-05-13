@@ -3,6 +3,7 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
 
+import { AuthProvider } from '@/features/auth/auth-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { TrainingSessionProvider } from '@/features/training/useTrainingSession';
 
@@ -14,16 +15,27 @@ export default function RootLayout() {
   const colorScheme = useColorScheme();
 
   return (
-    <TrainingSessionProvider>
-      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-        <Stack>
-          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-          <Stack.Screen name="chat/[scenarioId]" options={{ headerShown: false }} />
-          <Stack.Screen name="feedback/[scenarioId]" options={{ headerShown: false }} />
-          <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Fereastră modală' }} />
-        </Stack>
-        <StatusBar style="auto" />
-      </ThemeProvider>
-    </TrainingSessionProvider>
+    <AuthProvider>
+      <TrainingSessionProvider>
+        <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+          <Stack screenOptions={{ headerShown: false }}>
+            {/* Public auth screens */}
+            <Stack.Screen name="login" />
+            <Stack.Screen name="register" />
+
+            {/* Protected screens — auth gated by (tabs)/index.tsx redirect */}
+            <Stack.Screen name="(tabs)" />
+            <Stack.Screen name="chat/[scenarioId]" />
+            <Stack.Screen name="feedback/[scenarioId]" />
+            <Stack.Screen
+              name="modal"
+              options={{ presentation: 'modal', title: 'Fereastră modală', headerShown: true }}
+            />
+          </Stack>
+          <StatusBar style="auto" />
+        </ThemeProvider>
+      </TrainingSessionProvider>
+    </AuthProvider>
   );
 }
+

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { askAssistant } from '@/features/training/api';
+import { clearTrainingLocalCache, LEARN_SCREEN_STORAGE_KEY } from '@/features/training/local-cache';
 import type { AttackType, DifficultyLevel } from '@/features/training/types';
 import { TrainingColors } from '@/features/training/ui-theme';
 
@@ -28,6 +29,7 @@ type PersistedLearnState = {
   activeCat: ActiveCategory;
   openLessonId: string | null;
   lessonMessages: LessonMessage[];
+  updatedAt: number;
 };
 
 const lessons: Lesson[] = [
@@ -90,7 +92,8 @@ const lessons: Lesson[] = [
 ];
 
 const categories = ['Toate', 'Fundamente', 'Phishing', 'Smishing', 'Vishing', 'Escrocherii web', 'Siguranța contului'] as const;
-const LEARN_SCREEN_STORAGE_KEY = 'learn-screen-state-v1';
+const LEARN_STATE_TTL_MS = 1000 * 60 * 60 * 24 * 7;
+const LEARN_MESSAGES_MAX_ITEMS = 40;
 
 function mapLessonCategoryToAttackType(
   category: Lesson['category']
@@ -132,12 +135,17 @@ export default function LearnScreen() {
         }
 
         const parsed = JSON.parse(raw) as PersistedLearnState;
+        if (typeof parsed.updatedAt !== 'number' || Date.now() - parsed.updatedAt > LEARN_STATE_TTL_MS) {
+          await AsyncStorage.removeItem(LEARN_SCREEN_STORAGE_KEY);
+          return;
+        }
+
         if (parsed.activeCat && categories.includes(parsed.activeCat)) {
           setActiveCat(parsed.activeCat);
         }
 
         if (Array.isArray(parsed.lessonMessages) && parsed.lessonMessages.length > 0) {
-          setLessonMessages(parsed.lessonMessages.slice(-40));
+          setLessonMessages(parsed.lessonMessages.slice(-LEARN_MESSAGES_MAX_ITEMS));
         }
 
         if (typeof parsed.openLessonId === 'string' && parsed.openLessonId) {
@@ -168,10 +176,21 @@ export default function LearnScreen() {
     const stateToPersist: PersistedLearnState = {
       activeCat,
       openLessonId: openLesson?.id ?? null,
-      lessonMessages: lessonMessages.slice(-40),
+      lessonMessages: lessonMessages.slice(-LEARN_MESSAGES_MAX_ITEMS),
+      updatedAt: Date.now(),
     };
     void AsyncStorage.setItem(LEARN_SCREEN_STORAGE_KEY, JSON.stringify(stateToPersist));
   }, [activeCat, isHydrated, lessonMessages, openLesson?.id]);
+
+  const clearLocalCache = async () => {
+    await clearTrainingLocalCache();
+    setActiveCat('Toate');
+    setOpenLesson(null);
+    setInput('');
+    setLessonMessages([]);
+    setIsAsking(false);
+    setLessonError(null);
+  };
 
   const openLessonModal = (lesson: Lesson) => {
     setOpenLesson(lesson);
@@ -230,13 +249,19 @@ export default function LearnScreen() {
     <View style={styles.screen}>
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.header}>
-          <View style={styles.headerIcon}>
-            <Ionicons name="book-outline" size={18} color="#EFF6FF" />
+          <View style={styles.headerLeft}>
+            <View style={styles.headerIcon}>
+              <Ionicons name="book-outline" size={18} color="#EFF6FF" />
+            </View>
+            <View>
+              <Text style={styles.title}>Învață</Text>
+              <Text style={styles.subtitle}>Stăpânește arta apărării cibernetice</Text>
+            </View>
           </View>
-          <View>
-            <Text style={styles.title}>Învață</Text>
-            <Text style={styles.subtitle}>Stăpânește arta apărării cibernetice</Text>
-          </View>
+          <Pressable onPress={() => void clearLocalCache()} style={styles.clearCacheButton}>
+            <Ionicons name="trash-outline" size={14} color={TrainingColors.textSecondary} />
+            <Text style={styles.clearCacheText}>Șterge cache</Text>
+          </Pressable>
         </View>
 
         <View style={styles.hero}>
@@ -363,7 +388,14 @@ export default function LearnScreen() {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: TrainingColors.pageBase },
   content: { paddingHorizontal: 20, paddingTop: 50, paddingBottom: 130, gap: 12 },
-  header: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 4 },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    marginBottom: 4,
+  },
+  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10, flexShrink: 1 },
   headerIcon: {
     width: 40,
     height: 40,
@@ -376,6 +408,18 @@ const styles = StyleSheet.create({
   },
   title: { color: TrainingColors.textPrimary, fontSize: 24, fontWeight: '800' },
   subtitle: { color: TrainingColors.textSecondary, fontSize: 12 },
+  clearCacheButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: TrainingColors.border,
+    backgroundColor: TrainingColors.panel,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+  },
+  clearCacheText: { color: TrainingColors.textSecondary, fontSize: 11, fontWeight: '700' },
   hero: {
     borderRadius: 20,
     borderWidth: 1,

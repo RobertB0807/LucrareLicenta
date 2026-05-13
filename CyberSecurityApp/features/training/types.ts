@@ -95,6 +95,31 @@ export type SessionTrendsApiResponse = {
   points: SessionTrendPointApiResponse[];
 };
 
+export type SessionTrendAggregateByDayApiResponse = {
+  day: string;
+  attempts: number;
+  correct: number;
+  accuracy: number;
+  score_delta_total: number;
+  cumulative_score_after: number;
+};
+
+export type SessionTrendAggregateByAttackApiResponse = {
+  attack_type: AttackType;
+  attempts: number;
+  correct: number;
+  accuracy: number;
+  score_delta_total: number;
+  average_score_delta: number;
+};
+
+export type SessionTrendAggregatesApiResponse = {
+  session_id: string;
+  total_attempts: number;
+  by_day: SessionTrendAggregateByDayApiResponse[];
+  by_attack: SessionTrendAggregateByAttackApiResponse[];
+};
+
 export type AssistantAskApiResponse = {
   answer: string;
   quick_tips: string[];
