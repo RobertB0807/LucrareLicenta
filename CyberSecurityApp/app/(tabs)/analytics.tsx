@@ -5,6 +5,7 @@ import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-nat
 import { getSessionEvents, getSessionSnapshot, getSessionTrendAggregates } from '@/features/training/api';
 import type {
   AttackType,
+  LearningProfileAttack,
   SessionEvent,
   SessionStats,
   SessionTrendAggregatesApiResponse,
@@ -13,9 +14,12 @@ import { TrainingColors } from '@/features/training/ui-theme';
 import { useTrainingSession } from '@/features/training/useTrainingSession';
 
 type WeakSpot = {
-  id: AttackType;
+  id: string;
   label: string;
   value: number;
+  detail: string;
+  attempts: number;
+  mastery: number;
   tone: 'danger' | 'warning';
   icon: keyof typeof Ionicons.glyphMap;
 };
@@ -42,7 +46,8 @@ const ATTACK_ICONS: Record<AttackType, keyof typeof Ionicons.glyphMap> = {
 };
 
 export default function AnalyticsScreen() {
-  const { sessionId, stats, perAttackStats } = useTrainingSession();
+  const { sessionId, stats, perAttackStats, adaptiveProfile, isLoadingAdaptiveProfile } =
+    useTrainingSession();
   const [serverStats, setServerStats] = useState<SessionStats | null>(null);
   const [serverEvents, setServerEvents] = useState<SessionEvent[]>([]);
   const [serverTrendAggregates, setServerTrendAggregates] = useState<SessionTrendAggregatesApiResponse | null>(null);
@@ -154,31 +159,61 @@ export default function AnalyticsScreen() {
     return map;
   }, [serverTrendAggregates?.by_attack]);
 
+  const adaptiveByAttackMap = useMemo(() => {
+    const map = new Map<AttackType, LearningProfileAttack>();
+    for (const item of adaptiveProfile?.by_attack ?? []) {
+      map.set(item.attack_type, item);
+    }
+    return map;
+  }, [adaptiveProfile?.by_attack]);
+
   const accuracyBars = useMemo(() => {
     return (Object.keys(ATTACK_LABELS) as AttackType[]).map((attackType) => {
+      const adaptiveItem = adaptiveByAttackMap.get(attackType);
       const aggregateItem = aggregateByAttackMap.get(attackType);
-      const accuracy = aggregateItem?.accuracy ?? effectiveStats.per_attack[attackType]?.accuracy ?? 0;
+      const accuracy =
+        adaptiveItem?.accuracy ?? aggregateItem?.accuracy ?? effectiveStats.per_attack[attackType]?.accuracy ?? 0;
       return {
         id: attackType,
         label: ATTACK_SHORT_LABELS[attackType],
         value: Math.max(0, Math.min(100, accuracy)),
       };
     });
-  }, [aggregateByAttackMap, effectiveStats.per_attack]);
+  }, [adaptiveByAttackMap, aggregateByAttackMap, effectiveStats.per_attack]);
 
   const weakSpots = useMemo<WeakSpot[]>(
     () =>
-      accuracyBars
-        .slice()
-        .sort((a, b) => a.value - b.value)
-        .map((bar, index) => ({
-          id: bar.id,
-          label: ATTACK_LABELS[bar.id],
-          value: bar.value,
-          tone: index === 0 ? 'danger' : 'warning',
-          icon: ATTACK_ICONS[bar.id],
-        })),
-    [accuracyBars]
+      adaptiveProfile?.weak_areas?.length
+        ? adaptiveProfile.weak_areas
+            .slice()
+            .sort((a, b) => a.mastery_score - b.mastery_score)
+            .map((item, index) => ({
+              id: `${item.attack_type}-${item.difficulty}`,
+              label: `${ATTACK_LABELS[item.attack_type]} · ${item.difficulty}`,
+              detail:
+                item.attempts > 0
+                  ? `${item.attempts} rulări · ${item.mastery_score}% mastery`
+                  : 'Neexplorat încă',
+              attempts: item.attempts,
+              mastery: item.mastery_score,
+              value: item.accuracy,
+              tone: index === 0 ? 'danger' : 'warning',
+              icon: ATTACK_ICONS[item.attack_type],
+            }))
+        : accuracyBars
+            .slice()
+            .sort((a, b) => a.value - b.value)
+            .map((bar, index) => ({
+              id: bar.id,
+              label: ATTACK_LABELS[bar.id],
+              detail: `${bar.value}% acuratețe`,
+              attempts: effectiveStats.per_attack[bar.id]?.attempts ?? 0,
+              mastery: bar.value,
+              value: bar.value,
+              tone: index === 0 ? 'danger' : 'warning',
+              icon: ATTACK_ICONS[bar.id],
+            })),
+    [accuracyBars, adaptiveProfile?.weak_areas, effectiveStats.per_attack]
   );
 
   const activityFeed = serverEvents.length > 0 ? serverEvents : effectiveStats.recent_events;
@@ -248,7 +283,7 @@ export default function AnalyticsScreen() {
 
       <View style={styles.summaryCard}>
         <View style={styles.summaryIcon}>
-          {isLoading ? (
+          {isLoading || isLoadingAdaptiveProfile ? (
             <ActivityIndicator size="small" color={TrainingColors.accentTeal} />
           ) : (
             <Ionicons name="sparkles" size={16} color={TrainingColors.accentTeal} />
@@ -262,6 +297,31 @@ export default function AnalyticsScreen() {
             <Text style={styles.negative}>{effectiveStats.total_attempts}</Text>
           </Text>
         </View>
+      </View>
+
+      <View style={styles.adaptiveCard}>
+        <View style={styles.adaptiveHeader}>
+          <View>
+            <Text style={styles.adaptiveEyebrow}>Profil adaptiv</Text>
+            <Text style={styles.adaptiveTitle}>
+              {adaptiveProfile?.overall_mastery ?? stats.accuracy}% stăpânire globală
+            </Text>
+          </View>
+          <View style={styles.adaptivePill}>
+            <Text style={styles.adaptivePillText}>{adaptiveProfile?.coverage ?? 0}% acoperire</Text>
+          </View>
+        </View>
+        <Text style={styles.adaptiveText}>
+          {adaptiveProfile?.recommended_next
+            ? `Următorul pas: ${ATTACK_LABELS[adaptiveProfile.recommended_next.attack_type]} · ${
+                adaptiveProfile.recommended_next.difficulty === 'easy'
+                  ? 'UȘOR'
+                  : adaptiveProfile.recommended_next.difficulty === 'medium'
+                    ? 'MEDIU'
+                    : 'GREU'
+              }`
+            : 'Profilul adaptiv se construiește după primele răspunsuri evaluate.'}
+        </Text>
       </View>
 
       <View style={styles.filtersCard}>
@@ -396,15 +456,15 @@ export default function AnalyticsScreen() {
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.weakSpotName}>{spot.label}</Text>
-                <Text style={styles.weakSpotMeta}>Acuratețe detecție {spot.value}%</Text>
+                <Text style={styles.weakSpotMeta}>{spot.detail}</Text>
               </View>
-              <Text style={styles.weakSpotValue}>{spot.value}%</Text>
+              <Text style={styles.weakSpotValue}>{spot.mastery}%</Text>
             </View>
             <View style={styles.progressTrack}>
               <View
                 style={[
                   styles.progressFill,
-                  { width: `${spot.value}%` },
+                  { width: `${spot.mastery}%` },
                   spot.tone === 'danger' ? styles.progressFillDanger : styles.progressFillWarning,
                 ]}
               />
@@ -514,6 +574,33 @@ const styles = StyleSheet.create({
   summaryText: { color: TrainingColors.textPrimary, fontSize: 13, lineHeight: 18, marginTop: 2 },
   positive: { color: TrainingColors.accentTeal, fontWeight: '700' },
   negative: { color: TrainingColors.accentAmber, fontWeight: '700' },
+  adaptiveCard: {
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: TrainingColors.border,
+    backgroundColor: TrainingColors.panel,
+    padding: 14,
+    gap: 8,
+  },
+  adaptiveHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 },
+  adaptiveEyebrow: {
+    color: TrainingColors.accentTeal,
+    fontSize: 10,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    fontWeight: '700',
+  },
+  adaptiveTitle: { color: TrainingColors.textPrimary, fontSize: 18, fontWeight: '800', marginTop: 2 },
+  adaptivePill: {
+    borderRadius: 999,
+    backgroundColor: 'rgba(69,224,177,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(69,224,177,0.28)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  adaptivePillText: { color: TrainingColors.accentTeal, fontSize: 10, fontWeight: '700' },
+  adaptiveText: { color: TrainingColors.textSecondary, fontSize: 12, lineHeight: 17 },
   filtersCard: {
     borderRadius: 16,
     borderWidth: 1,

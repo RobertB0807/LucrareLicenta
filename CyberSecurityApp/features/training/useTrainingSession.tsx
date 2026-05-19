@@ -1,7 +1,13 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 
-import { evaluateScenario, generateScenario, getScenarioCatalog, getSessionSnapshot } from './api';
+import {
+  evaluateScenario,
+  generateScenario,
+  getLearningProfile,
+  getScenarioCatalog,
+  getSessionSnapshot,
+} from './api';
 import { ATTACK_TYPE_OPTIONS } from './options';
 import { useAuth } from '../auth/auth-context';
 import type {
@@ -13,6 +19,7 @@ import type {
   SessionEvent,
   Scenario,
   SessionStats,
+  LearningProfile,
 } from './types';
 
 type ActivityItem = {
@@ -24,6 +31,7 @@ type ActivityItem = {
 };
 
 const TRAINING_SESSION_STORAGE_KEY = 'training-session-state-v1';
+const AUTH_REQUIRED_ERROR = 'Trebuie să te autentifici pentru această acțiune.';
 
 type PersistedTrainingSessionState = {
   sessionId: string | null;
@@ -87,6 +95,10 @@ type TrainingSessionContextValue = {
   isLoadingCatalog: boolean;
   catalogError: string | null;
   refreshScenarioCatalog: () => Promise<void>;
+  adaptiveProfile: LearningProfile | null;
+  isLoadingAdaptiveProfile: boolean;
+  adaptiveProfileError: string | null;
+  refreshAdaptiveProfile: () => Promise<void>;
   setSelectedOptionId: (optionId: string | null) => void;
   setAttackType: (attackType: AttackType) => void;
   setDifficulty: (difficulty: DifficultyLevel) => void;
@@ -96,7 +108,7 @@ type TrainingSessionContextValue = {
     nextSessionId?: string | null
   ) => Promise<void>;
   evaluateAnswer: () => Promise<void>;
-  evaluateWithOptionId: (optionId: string) => Promise<void>;
+  evaluateWithOptionId: (optionId: string) => Promise<boolean>;
   runCurrentSelection: () => Promise<void>;
   runRecommendedScenario: () => Promise<void>;
   resetSession: () => void;
@@ -119,6 +131,9 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
   const [scenarioCatalog, setScenarioCatalog] = useState<ScenarioCatalogItemApiResponse[]>([]);
   const [isLoadingCatalog, setIsLoadingCatalog] = useState(true);
   const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [adaptiveProfile, setAdaptiveProfile] = useState<LearningProfile | null>(null);
+  const [isLoadingAdaptiveProfile, setIsLoadingAdaptiveProfile] = useState(false);
+  const [adaptiveProfileError, setAdaptiveProfileError] = useState<string | null>(null);
   const { isAuthenticated, user } = useAuth();
 
   // Per-user storage key so each account gets its own training state.
@@ -283,12 +298,38 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const refreshAdaptiveProfile = useCallback(async () => {
+    if (!isAuthenticated) {
+      setAdaptiveProfile(null);
+      setAdaptiveProfileError(null);
+      setIsLoadingAdaptiveProfile(false);
+      return;
+    }
+
+    setIsLoadingAdaptiveProfile(true);
+    setAdaptiveProfileError(null);
+
+    try {
+      const data = await getLearningProfile();
+      setAdaptiveProfile(data);
+    } catch {
+      setAdaptiveProfile(null);
+      setAdaptiveProfileError('Nu am putut încărca profilul adaptiv.');
+    } finally {
+      setIsLoadingAdaptiveProfile(false);
+    }
+  }, [isAuthenticated]);
+
   useEffect(() => {
     if (!isAuthenticated) {
       return;
     }
     void refreshScenarioCatalog();
   }, [isAuthenticated, refreshScenarioCatalog]);
+
+  useEffect(() => {
+    void refreshAdaptiveProfile();
+  }, [refreshAdaptiveProfile]);
 
   useEffect(() => {
     let cancelled = false;
@@ -322,6 +363,11 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
     nextDifficulty: DifficultyLevel = difficulty,
     nextSessionId?: string | null
   ) => {
+    if (!isAuthenticated) {
+      setError(AUTH_REQUIRED_ERROR);
+      return;
+    }
+
     setIsLoading(true);
     setError(null);
     setEvaluation(null);
@@ -358,6 +404,10 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
     if (!scenario || !selectedOptionId || evaluation) {
       return;
     }
+    if (!isAuthenticated) {
+      setError(AUTH_REQUIRED_ERROR);
+      return;
+    }
 
     setIsLoading(true);
     setError(null);
@@ -370,6 +420,7 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
 
       setEvaluation(data);
       setSessionStats(data.session_stats);
+      void refreshAdaptiveProfile();
       if (data.session_stats.recent_events?.length) {
         applyServerEvents(data.session_stats.recent_events);
       } else {
@@ -386,9 +437,13 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const evaluateWithOptionId = async (optionId: string) => {
+  const evaluateWithOptionId = async (optionId: string): Promise<boolean> => {
     if (!scenario || evaluation) {
-      return;
+      return false;
+    }
+    if (!isAuthenticated) {
+      setError(AUTH_REQUIRED_ERROR);
+      return false;
     }
 
     setSelectedOptionId(optionId);
@@ -403,6 +458,7 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
 
       setEvaluation(data);
       setSessionStats(data.session_stats);
+      void refreshAdaptiveProfile();
       if (data.session_stats.recent_events?.length) {
         applyServerEvents(data.session_stats.recent_events);
       } else {
@@ -412,8 +468,10 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
           tone: data.is_correct ? 'good' : 'warning',
         });
       }
+      return true;
     } catch {
       setError('Eroare la evaluare. Incearca din nou.');
+      return false;
     } finally {
       setIsLoading(false);
     }
@@ -461,6 +519,10 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
     isLoadingCatalog,
     catalogError,
     refreshScenarioCatalog,
+    adaptiveProfile,
+    isLoadingAdaptiveProfile,
+    adaptiveProfileError,
+    refreshAdaptiveProfile,
     setSelectedOptionId,
     setAttackType,
     setDifficulty,

@@ -152,6 +152,7 @@ export default function ChatScenarioScreen() {
   const [hasRestoredChatState, setHasRestoredChatState] = useState(false);
   const [restoredScenarioId, setRestoredScenarioId] = useState<string | null>(null);
   const hasGeneratedRef = useRef(false);
+  const feedbackNavigationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollRef = useRef<ScrollView>(null);
   const chatStorageKey = useMemo(
     () =>
@@ -297,7 +298,6 @@ export default function ChatScenarioScreen() {
   // After evaluation completes, navigate to feedback
   useEffect(() => {
     if (evaluation && evaluating) {
-      setEvaluating(false);
       void AsyncStorage.setItem(
         FEEDBACK_CONTEXT_STORAGE_KEY,
         JSON.stringify({
@@ -313,7 +313,12 @@ export default function ChatScenarioScreen() {
           savedAt: Date.now(),
         })
       ).finally(() => {
-        setTimeout(() => {
+        if (feedbackNavigationTimeoutRef.current) {
+          clearTimeout(feedbackNavigationTimeoutRef.current);
+        }
+
+        feedbackNavigationTimeoutRef.current = setTimeout(() => {
+          feedbackNavigationTimeoutRef.current = null;
           router.push({
             pathname: '/feedback/[scenarioId]',
             params: {
@@ -324,6 +329,12 @@ export default function ChatScenarioScreen() {
         }, 600);
       });
     }
+    return () => {
+      if (feedbackNavigationTimeoutRef.current) {
+        clearTimeout(feedbackNavigationTimeoutRef.current);
+        feedbackNavigationTimeoutRef.current = null;
+      }
+    };
   }, [
     attackType,
     difficulty,
@@ -343,7 +354,10 @@ export default function ChatScenarioScreen() {
     setEvaluating(true);
 
     // Evaluate via backend using the direct method
-    await evaluateWithOptionId(optionId);
+    const success = await evaluateWithOptionId(optionId);
+    if (!success) {
+      setEvaluating(false);
+    }
   };
 
   const channelConfig = useMemo(() => {
@@ -412,6 +426,13 @@ export default function ChatScenarioScreen() {
         <Ionicons name="sparkles" size={13} color={TrainingColors.accentAmber} />
         <Text style={styles.bannerText}>Simulare AI · răspunsurile nu sunt reale</Text>
       </View>
+
+      {error ? (
+        <View style={styles.inlineError}>
+          <Ionicons name="alert-circle" size={14} color={TrainingColors.accentDanger} />
+          <Text style={styles.inlineErrorText}>{error}</Text>
+        </View>
+      ) : null}
 
       <ScrollView ref={scrollRef} style={styles.messages} contentContainerStyle={styles.messageContent}>
         {messages.filter(Boolean).map((m) => (
@@ -576,6 +597,25 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(245,197,107,0.10)',
   },
   bannerText: { color: TrainingColors.accentAmber, fontSize: 11, fontWeight: '700' },
+  inlineError: {
+    marginHorizontal: 14,
+    marginTop: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 125, 125, 0.35)',
+    backgroundColor: 'rgba(255, 125, 125, 0.12)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  inlineErrorText: {
+    flex: 1,
+    color: '#FFD0D0',
+    fontSize: 12,
+    lineHeight: 16,
+  },
   messages: { flex: 1 },
   messageContent: { paddingHorizontal: 14, paddingVertical: 12, gap: 8 },
   attackerRow: { alignItems: 'flex-start' },

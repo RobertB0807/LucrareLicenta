@@ -402,6 +402,14 @@ Recommended:
 - unit tests for session recommendation and score logic
 - basic UI smoke tests if needed
 
+### Recent fixes (2026-05-14)
+- Fixed a web crash and stuck-evaluating loop: the delayed feedback navigation in `app/chat/[scenarioId].tsx` could fire after a session reset or unmount and trigger React DOM errors (removeChild / maximum update depth). Introduced `feedbackNavigationTimeoutRef`, cancelation before scheduling, and cleanup on unmount to prevent the stale navigation from running.
+- Prevented stuck evaluation spinner: `evaluateWithOptionId` now returns `Promise<boolean>` and evaluation flows clear the evaluating state on failure. `useTrainingSession` was updated so failed evaluations return false and the UI stops showing the spinner.
+- Added auth-failure handling: `features/training/api.ts` now exposes `setAuthFailureHandler()` and invokes a handler on `401` responses; `AuthProvider` registers a handler that logs the user out on auth failures so the app recovers from expired/invalid tokens.
+- Gate protected UI and backend calls: tab layout now waits for auth hydration and redirects unauthenticated users to `/login` (prevents protected API calls before auth ready). `useTrainingSession` now short-circuits `startSimulation` / `evaluate*` when `isAuthenticated` is false and surfaces a localized AUTH_REQUIRED error instead of sending unauthenticated requests.
+- Fixed AuthProvider init ordering bug: registration of the auth-failure handler was moved so it executes after `logout` is defined to avoid a ReferenceError during mount.
+- Hooked adaptive-profile refresh: `useTrainingSession` now fetches the learning profile (`getLearningProfile()`) on mount and after evaluations, exposing `adaptiveProfile` and related loading/error state through the provider.
+
 ## Current Code Style / Structure Rules
 - Keep feature-specific code in `features/training/` and `features/auth/`
 - Keep screen-level orchestration in `app/(tabs)/index.tsx`

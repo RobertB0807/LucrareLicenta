@@ -10,7 +10,13 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from db import SessionLocal
-from persistence_models import ScenarioAttemptORM, SessionEventORM, TrainingSessionORM, UserORM
+from persistence_models import (
+    ScenarioAttemptORM,
+    SessionEventORM,
+    TrainingSessionORM,
+    UserLearningProfileORM,
+    UserORM,
+)
 from scenario_library import ALL_ATTACK_TYPES
 
 
@@ -46,6 +52,20 @@ def normalize_per_attack_stats(per_attack_stats: dict[str, dict[str, int]] | Non
         }
 
     return normalized
+
+
+def normalize_mastery_score(score: float) -> float:
+    return round(max(0.0, min(100.0, score)), 1)
+
+
+def compute_mastery_score(current_score: float, attempts: int, is_correct: bool, difficulty: str) -> float:
+    difficulty_target_map = {"easy": 10.0, "medium": 16.0, "hard": 22.0}
+    difficulty_bonus_map = {"easy": 0.0, "medium": 0.01, "hard": 0.02}
+
+    target = 100.0 if is_correct else difficulty_target_map.get(difficulty, 16.0)
+    update_weight = min(0.4, 0.18 + min(attempts, 5) * 0.03 + difficulty_bonus_map.get(difficulty, 0.0))
+    updated_score = current_score * (1.0 - update_weight) + target * update_weight
+    return normalize_mastery_score(updated_score)
 
 
 def upsert_session_progress(
@@ -133,6 +153,75 @@ def fetch_user_by_id(user_id: str) -> dict[str, Any] | None:
             "display_name": row.display_name,
             "is_active": row.is_active,
         }
+    finally:
+        db.close()
+
+
+def record_user_learning_attempt(
+    *,
+    user_id: str,
+    attack_type: str,
+    difficulty: str,
+    is_correct: bool,
+    attempted_at: datetime | None = None,
+) -> None:
+    with session_scope() as db:
+        row = db.scalar(
+            select(UserLearningProfileORM).where(
+                UserLearningProfileORM.user_id == user_id,
+                UserLearningProfileORM.attack_type == attack_type,
+                UserLearningProfileORM.difficulty == difficulty,
+            )
+        )
+
+        if row is None:
+            row = UserLearningProfileORM(
+                user_id=user_id,
+                attack_type=attack_type,
+                difficulty=difficulty,
+                mastery_score=50.0,
+                attempts=0,
+                correct=0,
+            )
+            db.add(row)
+
+        row.attempts = int(row.attempts or 0) + 1
+        if is_correct:
+            row.correct = int(row.correct or 0) + 1
+
+        row.mastery_score = compute_mastery_score(
+            float(row.mastery_score or 50.0),
+            row.attempts,
+            is_correct,
+            difficulty,
+        )
+        row.last_result_correct = is_correct
+        row.last_attempt_at = attempted_at or utc_now()
+        row.updated_at = utc_now()
+
+
+def fetch_user_learning_profiles(user_id: str) -> list[dict[str, Any]]:
+    db = SessionLocal()
+    try:
+        rows = db.execute(
+            select(UserLearningProfileORM)
+            .where(UserLearningProfileORM.user_id == user_id)
+            .order_by(UserLearningProfileORM.attack_type.asc(), UserLearningProfileORM.difficulty.asc())
+        ).scalars().all()
+        return [
+            {
+                "user_id": row.user_id,
+                "attack_type": row.attack_type,
+                "difficulty": row.difficulty,
+                "attempts": row.attempts,
+                "correct": row.correct,
+                "mastery_score": float(row.mastery_score or 0.0),
+                "last_result_correct": row.last_result_correct,
+                "last_attempt_at": row.last_attempt_at.isoformat() if row.last_attempt_at else None,
+                "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+            }
+            for row in rows
+        ]
     finally:
         db.close()
 

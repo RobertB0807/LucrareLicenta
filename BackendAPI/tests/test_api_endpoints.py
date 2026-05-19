@@ -13,6 +13,7 @@ from sqlalchemy.orm import sessionmaker
 import db
 import main
 import persistence_repository
+from persistence_models import UserLearningProfileORM
 import training_service
 
 
@@ -70,7 +71,9 @@ class ApiEndpointsTestCase(unittest.TestCase):
             },
         )
         self.assertEqual(response.status_code, 200)
-        token = response.json()["access_token"]
+        payload = response.json()
+        self.auth_user_id = payload["user"]["id"]
+        token = payload["access_token"]
         return {"Authorization": f"Bearer {token}"}
 
     def test_health_returns_ok(self) -> None:
@@ -283,6 +286,45 @@ class ApiEndpointsTestCase(unittest.TestCase):
             headers=self.auth_headers,
         )
         self.assertEqual(response.status_code, 422)
+
+    def test_learning_profile_endpoint_reflects_adaptive_attempts(self) -> None:
+        persistence_repository.record_user_learning_attempt(
+            user_id=self.auth_user_id,
+            attack_type="phishing",
+            difficulty="easy",
+            is_correct=False,
+        )
+        persistence_repository.record_user_learning_attempt(
+            user_id=self.auth_user_id,
+            attack_type="smishing",
+            difficulty="medium",
+            is_correct=True,
+        )
+
+        with persistence_repository.session_scope() as test_session:
+            rows = (
+                test_session.query(UserLearningProfileORM)
+                .filter(UserLearningProfileORM.user_id == self.auth_user_id)
+                .all()
+            )
+            for row in rows:
+                if row.attack_type == "phishing":
+                    row.last_attempt_at = datetime.now(timezone.utc) - timedelta(days=4)
+                else:
+                    row.last_attempt_at = datetime.now(timezone.utc) + timedelta(days=4)
+
+        profile = self.client.get("/learning/profile", headers=self.auth_headers)
+        self.assertEqual(profile.status_code, 200)
+        payload = profile.json()
+
+        self.assertEqual(payload["user_id"], self.auth_user_id)
+        self.assertGreaterEqual(payload["overall_mastery"], 0)
+        self.assertGreaterEqual(payload["coverage"], 0)
+        self.assertGreaterEqual(payload["review_summary"]["due_now"], 1)
+        self.assertEqual(payload["review_queue"][0]["attack_type"], "phishing")
+        self.assertEqual(payload["review_queue"][0]["status"], "due_now")
+        self.assertEqual(payload["recommended_next"]["attack_type"], "phishing")
+        self.assertIn("recommended_next", payload)
 
     def test_request_validation_rejects_invalid_identifiers(self) -> None:
         response = self.client.post(

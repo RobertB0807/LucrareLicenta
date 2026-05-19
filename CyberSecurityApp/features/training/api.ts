@@ -5,6 +5,7 @@ import type {
   AssistantAskApiResponse,
   AttackType,
   DifficultyLevel,
+  LearningProfileApiResponse,
   Evaluation,
   GenerateScenarioApiResponse,
   ScenarioCatalogApiResponse,
@@ -18,14 +19,23 @@ import type {
 // The auth context calls setAuthTokenAccessor on mount so that all protected
 // API calls automatically include the Bearer token header.
 let _tokenAccessor: (() => string | null) | null = null;
+let _authFailureHandler: (() => void) | null = null;
 
 export function setAuthTokenAccessor(accessor: () => string | null): void {
   _tokenAccessor = accessor;
 }
 
+export function setAuthFailureHandler(handler: (() => void) | null): void {
+  _authFailureHandler = handler;
+}
+
 function getAuthHeaders(): Record<string, string> {
   const token = _tokenAccessor?.();
   return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+function handleAuthFailure(): void {
+  _authFailureHandler?.();
 }
 
 type GenerateScenarioPayload = {
@@ -111,6 +121,10 @@ async function postJson<TResponse>(path: string, payload: unknown, fallbackError
         body: JSON.stringify(payload),
       });
 
+      if (response.status === 401) {
+        handleAuthFailure();
+        throw new Error('Sesiune expirată. Autentifică-te din nou.');
+      }
       if (!response.ok) {
         throw new Error(fallbackError);
       }
@@ -134,6 +148,10 @@ async function getJson<TResponse>(path: string, fallbackError: string): Promise<
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       });
 
+      if (response.status === 401) {
+        handleAuthFailure();
+        throw new Error('Sesiune expirată. Autentifică-te din nou.');
+      }
       if (!response.ok) {
         throw new Error(fallbackError);
       }
@@ -250,5 +268,12 @@ export async function askAssistant(payload: AssistantAskPayload): Promise<Assist
     '/assistant/ask',
     payload,
     'Nu am putut obtine raspunsul asistentului.'
+  );
+}
+
+export async function getLearningProfile(): Promise<LearningProfileApiResponse> {
+  return getJson<LearningProfileApiResponse>(
+    '/learning/profile',
+    'Nu am putut incarca profilul adaptiv.'
   );
 }

@@ -208,6 +208,50 @@ class PersistenceRepositoryTestCase(unittest.TestCase):
         self.assertTrue(persistence_repository.ensure_session_owner("owned-session", user["id"]))
         self.assertFalse(persistence_repository.ensure_session_owner("owned-session", "different-user"))
 
+    def test_learning_profile_attempts_are_persisted_and_updated(self) -> None:
+        user = persistence_repository.create_user(
+            email="learner@example.com",
+            password_hash="hashed-value",
+            display_name="Learner",
+        )
+
+        persistence_repository.record_user_learning_attempt(
+            user_id=user["id"],
+            attack_type="phishing",
+            difficulty="easy",
+            is_correct=False,
+        )
+        persistence_repository.record_user_learning_attempt(
+            user_id=user["id"],
+            attack_type="phishing",
+            difficulty="easy",
+            is_correct=True,
+        )
+        persistence_repository.record_user_learning_attempt(
+            user_id=user["id"],
+            attack_type="smishing",
+            difficulty="medium",
+            is_correct=True,
+        )
+
+        rows = persistence_repository.fetch_user_learning_profiles(user["id"])
+        self.assertEqual(len(rows), 2)
+
+        phishing_row = next(
+            row for row in rows if row["attack_type"] == "phishing" and row["difficulty"] == "easy"
+        )
+        self.assertEqual(phishing_row["attempts"], 2)
+        self.assertEqual(phishing_row["correct"], 1)
+        self.assertGreater(phishing_row["mastery_score"], 0.0)
+        self.assertLessEqual(phishing_row["mastery_score"], 100.0)
+
+        smishing_row = next(
+            row for row in rows if row["attack_type"] == "smishing" and row["difficulty"] == "medium"
+        )
+        self.assertEqual(smishing_row["attempts"], 1)
+        self.assertEqual(smishing_row["correct"], 1)
+        self.assertEqual(smishing_row["last_result_correct"], True)
+
     def test_fetch_session_trend_aggregates_groups_by_day_and_attack(self) -> None:
         session_id = "repo-trend-aggregates-session"
         self._seed_session(session_id)

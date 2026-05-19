@@ -11,7 +11,7 @@ import {
 } from 'react';
 
 import { apiGetMe, apiLogin, apiRegister, type AuthUserResponse } from './auth-api';
-import { setAuthTokenAccessor } from '../training/api';
+import { setAuthFailureHandler, setAuthTokenAccessor } from '../training/api';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -69,6 +69,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     setAuthTokenAccessor(() => tokenRef.current);
   }, []);
+
 
   const isAuthenticated = useMemo(() => Boolean(token && user), [token, user]);
 
@@ -164,6 +165,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     tokenRef.current = null;
     await clearPersistedSession();
   }, [clearPersistedSession]);
+
+  useEffect(() => {
+    setAuthFailureHandler(() => {
+      void logout();
+    });
+  }, [logout]);
 
   // ── Value ──────────────────────────────────────────────────────────────────
 

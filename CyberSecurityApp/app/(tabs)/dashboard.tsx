@@ -4,7 +4,7 @@ import { useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { useAuth } from '@/features/auth/auth-context';
-import type { AttackType, DifficultyLevel } from '@/features/training/types';
+import type { AttackType, DifficultyLevel, LearningProfileAttack } from '@/features/training/types';
 import { TrainingColors } from '@/features/training/ui-theme';
 import { useTrainingSession } from '@/features/training/useTrainingSession';
 
@@ -36,15 +36,15 @@ function riskFromAccuracy(accuracy: number, attempts: number): RiskLevel {
   return 'Scăzut';
 }
 
-function recommendedDifficulty(accuracy: number, attempts: number): DifficultyLevel {
-  if (attempts < 2) return 'easy';
-  if (accuracy < 50) return 'easy';
-  if (accuracy < 80) return 'medium';
+function adaptiveDifficulty(masteryScore: number, attempts: number): DifficultyLevel {
+  if (attempts < 2 || masteryScore < 45) return 'easy';
+  if (masteryScore < 75) return 'medium';
   return 'hard';
 }
 
 export default function DashboardScreen() {
-  const { stats, perAttackStats, evaluation, sessionId, scenarioCatalog } = useTrainingSession();
+  const { stats, perAttackStats, evaluation, sessionId, scenarioCatalog, adaptiveProfile, isLoadingAdaptiveProfile } =
+    useTrainingSession();
   const { user, logout } = useAuth();
 
   const scenarioPreviewByKey = useMemo(() => {
@@ -58,6 +58,14 @@ export default function DashboardScreen() {
     return map;
   }, [scenarioCatalog]);
 
+  const adaptiveAttackMap = useMemo(() => {
+    const map = new Map<AttackType, LearningProfileAttack>();
+    for (const item of adaptiveProfile?.by_attack ?? []) {
+      map.set(item.attack_type, item);
+    }
+    return map;
+  }, [adaptiveProfile?.by_attack]);
+
   const cyberScore = Math.max(0, Math.min(100, stats.accuracy));
   const estimatedDetected = Math.round((stats.totalAttempts * stats.accuracy) / 100);
   const mistakes = Math.max(0, stats.totalAttempts - estimatedDetected);
@@ -66,9 +74,11 @@ export default function DashboardScreen() {
     () =>
       perAttackStats
         .map(({ id, value }) => {
-          const accuracy = value?.accuracy ?? 0;
-          const attempts = value?.attempts ?? 0;
-          const difficulty = recommendedDifficulty(accuracy, attempts);
+          const adaptive = adaptiveAttackMap.get(id);
+          const attempts = adaptive?.attempts ?? value?.attempts ?? 0;
+          const masteryScore = adaptive?.mastery_score ?? value?.accuracy ?? 0;
+          const difficulty = adaptiveDifficulty(masteryScore, attempts);
+          const accuracy = adaptive?.accuracy ?? value?.accuracy ?? 0;
           const preview = scenarioPreviewByKey[`${id}-${difficulty}`];
           const title = preview
             ? preview.length > 58
@@ -86,19 +96,20 @@ export default function DashboardScreen() {
           };
         })
         .sort((a, b) => {
-          const aAccuracy = perAttackStats.find((item) => item.id === a.attackType)?.value?.accuracy ?? 0;
-          const bAccuracy = perAttackStats.find((item) => item.id === b.attackType)?.value?.accuracy ?? 0;
-          return aAccuracy - bAccuracy;
+          const aMastery = adaptiveAttackMap.get(a.attackType)?.mastery_score ?? 0;
+          const bMastery = adaptiveAttackMap.get(b.attackType)?.mastery_score ?? 0;
+          return aMastery - bMastery;
         }),
-    [perAttackStats, scenarioPreviewByKey]
+    [adaptiveAttackMap, perAttackStats, scenarioPreviewByKey]
   );
 
   const challenge = useMemo(() => {
-    if (evaluation?.recommendation) {
-      const attack = evaluation.recommendation.attack_type;
+    const recommendation = evaluation?.recommendation ?? adaptiveProfile?.recommended_next;
+    if (recommendation) {
+      const attack = recommendation.attack_type;
       return {
         title: `Scenariu recomandat · ${ATTACK_LABELS[attack]}`,
-        difficulty: evaluation.recommendation.difficulty,
+        difficulty: recommendation.difficulty,
         attackType: attack,
       };
     }
@@ -109,7 +120,27 @@ export default function DashboardScreen() {
       difficulty: fallback?.difficulty ?? 'easy',
       attackType: fallback?.attackType ?? 'phishing',
     };
-  }, [evaluation?.recommendation, scenarioCards]);
+  }, [adaptiveProfile?.recommended_next, evaluation?.recommendation, scenarioCards]);
+
+  const weakestAdaptiveArea = adaptiveProfile?.weak_areas[0];
+  const topReview = adaptiveProfile?.review_queue?.[0];
+
+  const reviewBadgeText =
+    isLoadingAdaptiveProfile && !adaptiveProfile
+      ? 'Se încarcă...'
+      : topReview?.status === 'due_now'
+      ? 'Repetă acum'
+      : topReview?.status === 'due_soon'
+        ? 'Urmează'
+        : topReview
+          ? 'Programat'
+          : 'Fără recapitulări';
+
+  const reviewMetaText = topReview
+    ? `${ATTACK_LABELS[topReview.attack_type]} · ${DIFFICULTY_LABELS[topReview.difficulty]}`
+    : isLoadingAdaptiveProfile && !adaptiveProfile
+      ? 'Se calculează recapitulările din progresul tău...'
+      : 'Recapitulările apar după primele răspunsuri evaluate.';
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
@@ -148,6 +179,76 @@ export default function DashboardScreen() {
             {stats.totalAttempts} încercări · <Text style={styles.successText}>Sesiune activă</Text>
           </Text>
         </View>
+      </View>
+
+      <View style={styles.adaptiveCard}>
+        <View style={styles.adaptiveTopRow}>
+          <View>
+            <Text style={styles.adaptiveEyebrow}>Profil adaptiv</Text>
+            <Text style={styles.adaptiveValue}>{adaptiveProfile?.overall_mastery ?? stats.accuracy}%</Text>
+          </View>
+          <View style={styles.adaptivePill}>
+            <Text style={styles.adaptivePillText}>{adaptiveProfile?.coverage ?? 0}% acoperire</Text>
+          </View>
+        </View>
+        <Text style={styles.adaptiveText}>
+          {adaptiveProfile
+            ? `Următorul pas: ${ATTACK_LABELS[challenge.attackType]} · ${DIFFICULTY_LABELS[challenge.difficulty]}`
+            : 'Profilul adaptiv se construiește după primele răspunsuri evaluate.'}
+        </Text>
+        {weakestAdaptiveArea ? (
+          <Text style={styles.adaptiveHint}>
+            Zonă prioritară: {ATTACK_LABELS[weakestAdaptiveArea.attack_type]} · {DIFFICULTY_LABELS[weakestAdaptiveArea.difficulty]}
+          </Text>
+        ) : null}
+      </View>
+
+      <View style={styles.reviewCard}>
+        <View style={styles.reviewTopRow}>
+          <View>
+            <Text style={styles.reviewEyebrow}>Recapitulare programată</Text>
+            <Text style={styles.reviewTitle}>{reviewBadgeText}</Text>
+          </View>
+          {adaptiveProfile?.review_summary ? (
+            <View style={styles.reviewPill}>
+              <Text style={styles.reviewPillText}>
+                {adaptiveProfile.review_summary.due_now} acum · {adaptiveProfile.review_summary.due_soon} curând
+              </Text>
+            </View>
+          ) : null}
+        </View>
+
+        <Text style={styles.reviewMeta}>{reviewMetaText}</Text>
+
+        {topReview ? (
+          <>
+            <View style={styles.reviewProgressRow}>
+              <View style={styles.reviewProgressInfo}>
+                <Text style={styles.reviewProgressLabel}>{ATTACK_LABELS[topReview.attack_type]}</Text>
+                <Text style={styles.reviewProgressHint}>
+                  {topReview.attempts} rulări · {topReview.mastery_score}% mastery
+                </Text>
+              </View>
+              <Text style={styles.reviewProgressValue}>{topReview.accuracy}%</Text>
+            </View>
+            <Link
+              href={{
+                pathname: '/chat/[scenarioId]',
+                params: {
+                  scenarioId: `review-${topReview.attack_type}-${topReview.difficulty}`,
+                  attackType: topReview.attack_type,
+                  difficulty: topReview.difficulty,
+                  sessionId: sessionId ?? undefined,
+                },
+              }}
+              asChild>
+              <Pressable style={({ pressed }) => [styles.reviewButton, pressed && styles.pressableFeedback]}>
+                <Ionicons name="refresh" size={15} color="#EFF6FF" />
+                <Text style={styles.reviewButtonText}>Începe recapitularea</Text>
+              </Pressable>
+            </Link>
+          </>
+        ) : null}
       </View>
 
       <Link
@@ -249,6 +350,7 @@ export default function DashboardScreen() {
           <Text style={styles.tipTitle}>Insight-ul zilei</Text>
           <Text style={styles.tipText}>
             {evaluation?.recommendation?.reason ??
+              adaptiveProfile?.recommended_next.reason ??
               'Antrenează mai întâi categoria cu acuratețea cea mai mică, apoi crește gradual dificultatea.'}
           </Text>
         </View>
@@ -333,6 +435,98 @@ const styles = StyleSheet.create({
     padding: 18,
     overflow: 'hidden',
   },
+  adaptiveCard: {
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: TrainingColors.border,
+    backgroundColor: TrainingColors.panel,
+    padding: 14,
+    gap: 8,
+  },
+  adaptiveTopRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  adaptiveEyebrow: {
+    color: TrainingColors.accentTeal,
+    fontSize: 10,
+    textTransform: 'uppercase',
+    letterSpacing: 1.4,
+    fontWeight: '700',
+  },
+  adaptiveValue: { color: TrainingColors.textPrimary, fontSize: 28, fontWeight: '800', marginTop: 2 },
+  adaptivePill: {
+    borderRadius: 999,
+    backgroundColor: 'rgba(69,224,177,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(69,224,177,0.28)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  adaptivePillText: { color: TrainingColors.accentTeal, fontSize: 10, fontWeight: '700' },
+  adaptiveText: { color: TrainingColors.textSecondary, fontSize: 12, lineHeight: 17 },
+  adaptiveHint: { color: TrainingColors.textPrimary, fontSize: 12, fontWeight: '700' },
+  reviewCard: {
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(69,224,177,0.28)',
+    backgroundColor: 'rgba(69,224,177,0.07)',
+    padding: 14,
+    gap: 8,
+  },
+  reviewTopRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  reviewEyebrow: {
+    color: TrainingColors.accentTeal,
+    fontSize: 10,
+    textTransform: 'uppercase',
+    letterSpacing: 1.4,
+    fontWeight: '700',
+  },
+  reviewTitle: { color: TrainingColors.textPrimary, fontSize: 20, fontWeight: '800', marginTop: 2 },
+  reviewPill: {
+    borderRadius: 999,
+    backgroundColor: 'rgba(69,224,177,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(69,224,177,0.28)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  reviewPillText: { color: TrainingColors.accentTeal, fontSize: 10, fontWeight: '700' },
+  reviewMeta: { color: TrainingColors.textSecondary, fontSize: 12, lineHeight: 17 },
+  reviewProgressRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: TrainingColors.border,
+    backgroundColor: TrainingColors.panel,
+    padding: 12,
+  },
+  reviewProgressInfo: { flex: 1, gap: 2 },
+  reviewProgressLabel: { color: TrainingColors.textPrimary, fontSize: 14, fontWeight: '700' },
+  reviewProgressHint: { color: TrainingColors.textMuted, fontSize: 11 },
+  reviewProgressValue: { color: TrainingColors.accentTeal, fontSize: 20, fontWeight: '800' },
+  reviewButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: TrainingColors.buttonPrimaryBorder,
+    backgroundColor: TrainingColors.buttonPrimary,
+    paddingVertical: 11,
+  },
+  reviewButtonText: { color: '#EFF6FF', fontSize: 13, fontWeight: '700' },
   scoreGlow: {
     position: 'absolute',
     width: 190,

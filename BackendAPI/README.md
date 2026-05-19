@@ -68,6 +68,7 @@ alembic downgrade -1
 - `POST /scenario/evaluate`
 - `GET /scenario/catalog`
 - `POST /assistant/ask`
+- `GET /learning/profile`
 - `GET /session/{session_id}`
 - `GET /session/{session_id}/events?limit=20&offset=0`
 - `GET /session/{session_id}/trends?limit=30&offset=0`

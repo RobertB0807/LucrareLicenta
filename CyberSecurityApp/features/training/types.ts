@@ -48,6 +48,68 @@ export type Recommendation = {
   reason: string;
 };
 
+export type LearningProfileArea = {
+  attack_type: AttackType;
+  difficulty: DifficultyLevel;
+  attempts: number;
+  correct: number;
+  accuracy: number;
+  mastery_score: number;
+  last_attempt_at: string | null;
+};
+
+export type LearningProfileAttack = {
+  attack_type: AttackType;
+  attempts: number;
+  correct: number;
+  accuracy: number;
+  mastery_score: number;
+  weakest_difficulty: DifficultyLevel | null;
+};
+
+export type LearningProfileDifficulty = {
+  difficulty: DifficultyLevel;
+  attempts: number;
+  correct: number;
+  accuracy: number;
+  mastery_score: number;
+};
+
+export type ReviewQueueItemStatus = 'due_now' | 'due_soon' | 'scheduled';
+
+export type ReviewQueueItem = {
+  attack_type: AttackType;
+  difficulty: DifficultyLevel;
+  attempts: number;
+  correct: number;
+  accuracy: number;
+  mastery_score: number;
+  last_attempt_at: string | null;
+  due_at: string;
+  status: ReviewQueueItemStatus;
+  priority: number;
+};
+
+export type ReviewSummary = {
+  due_now: number;
+  due_soon: number;
+  scheduled: number;
+  next_due_at: string | null;
+};
+
+export type LearningProfile = {
+  user_id: string;
+  overall_mastery: number;
+  coverage: number;
+  by_attack: LearningProfileAttack[];
+  by_difficulty: LearningProfileDifficulty[];
+  weak_areas: LearningProfileArea[];
+  review_queue: ReviewQueueItem[];
+  review_summary: ReviewSummary;
+  recommended_next: Recommendation;
+  last_updated_at: string | null;
+};
+
 export type Evaluation = {
   is_correct: boolean;
   score_delta: number;
@@ -137,3 +199,5 @@ export type ScenarioCatalogItemApiResponse = {
 export type ScenarioCatalogApiResponse = {
   items: ScenarioCatalogItemApiResponse[];
 };
+
+export type LearningProfileApiResponse = LearningProfile;

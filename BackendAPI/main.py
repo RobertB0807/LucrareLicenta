@@ -33,11 +33,13 @@ from scenario_models import AttackType, DifficultyLevel
 from training_service import (
     EvaluateScenarioResponse,
     GenerateScenarioResponse,
+    LearningProfileResponse,
     ScenarioCatalogResponse,
     SessionEventsResponse,
     SessionSnapshotResponse,
     SessionTrendAggregatesResponse,
     SessionTrendsResponse,
+    get_learning_profile as get_training_learning_profile,
     get_scenario_catalog as get_training_scenario_catalog,
     evaluate_scenario as evaluate_training_scenario,
     generate_scenario as generate_training_scenario,
@@ -334,6 +336,12 @@ def get_me(request: Request) -> UserResponse:
     return UserResponse.model_validate(current_user.model_dump())
 
 
+@app.get("/learning/profile", response_model=LearningProfileResponse)
+def get_learning_profile(request: Request = None) -> LearningProfileResponse:
+    current_user = require_authenticated_user(request)
+    return get_training_learning_profile(current_user.id)
+
+
 @app.post("/scenario/generate", response_model=GenerateScenarioResponse)
 def generate_scenario(
     payload: GenerateScenarioRequest,
@@ -369,6 +377,7 @@ def evaluate_scenario(
         return evaluate_training_scenario(
             scenario_id=payload.scenario_id,
             selected_option_id=payload.selected_option_id,
+            owner_user_id=current_user.id if request is not None else None,
         )
     except KeyError as exc:
         detail = exc.args[0] if exc.args else "Scenario not found"
