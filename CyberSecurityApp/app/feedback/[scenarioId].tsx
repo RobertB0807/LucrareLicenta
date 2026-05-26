@@ -1,14 +1,15 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { Link, router, useLocalSearchParams } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { useAuth } from '@/features/auth/auth-context';
+import { buildUserStorageKey, FEEDBACK_CONTEXT_STORAGE_KEY } from '@/features/training/local-cache';
 import type { AttackType, DifficultyLevel, Recommendation } from '@/features/training/types';
 import { TrainingColors } from '@/features/training/ui-theme';
 import { useTrainingSession } from '@/features/training/useTrainingSession';
 
-const FEEDBACK_CONTEXT_STORAGE_KEY = 'training-feedback-context-v1';
 const FEEDBACK_CONTEXT_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 
 type PersistedFeedbackContext = {
@@ -29,21 +30,26 @@ export default function FeedbackScreen() {
     scenarioId?: string;
     sessionId?: string;
   }>();
+  const { user } = useAuth();
   const { evaluation, scenario, stats, sessionId } = useTrainingSession();
   const [persistedContext, setPersistedContext] = useState<PersistedFeedbackContext | null>(null);
+  const feedbackStorageKey = useMemo(
+    () => buildUserStorageKey(FEEDBACK_CONTEXT_STORAGE_KEY, user?.id),
+    [user?.id]
+  );
 
   useEffect(() => {
     let cancelled = false;
 
     const hydrateFeedbackContext = async () => {
       try {
-        const raw = await AsyncStorage.getItem(FEEDBACK_CONTEXT_STORAGE_KEY);
+        const raw = await AsyncStorage.getItem(feedbackStorageKey);
         if (!raw || cancelled) {
           return;
         }
         const parsed = JSON.parse(raw) as PersistedFeedbackContext;
         if (typeof parsed.savedAt !== 'number' || Date.now() - parsed.savedAt > FEEDBACK_CONTEXT_TTL_MS) {
-          await AsyncStorage.removeItem(FEEDBACK_CONTEXT_STORAGE_KEY);
+          await AsyncStorage.removeItem(feedbackStorageKey);
           return;
         }
         setPersistedContext(parsed);
@@ -56,7 +62,7 @@ export default function FeedbackScreen() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [feedbackStorageKey]);
 
   const activeSessionId = sessionId ?? routeSessionId ?? persistedContext?.sessionId ?? null;
   const activeScenarioId = scenario?.scenario_id ?? routeScenarioId ?? persistedContext?.scenarioId ?? 'live-session';

@@ -35,6 +35,7 @@ Backend features currently implemented:
 - `GET /health`
 - `POST /auth/register`
 - `POST /auth/login`
+- `POST /auth/refresh`
 - `GET /auth/me`
 - `GET /scenario/catalog`
 - `POST /scenario/generate`
@@ -85,8 +86,8 @@ Navigation updates:
 The existing `features/training/*` architecture is still present and reusable.
 
 Auth feature module (`features/auth/`):
-- `auth-api.ts` — API client for auth endpoints (`/auth/login`, `/auth/register`, `/auth/me`) with multi-candidate base URL fallback
-- `auth-context.tsx` — React context provider managing login/register/logout, AsyncStorage persistence (`auth-session-v1` key), token validation on hydration via `GET /auth/me`, and automatic token accessor wiring for the training API client
+- `auth-api.ts` — API client for auth endpoints (`/auth/login`, `/auth/register`, `/auth/refresh`, `/auth/me`) with multi-candidate base URL fallback
+- `auth-context.tsx` — React context provider managing login/register/logout, AsyncStorage persistence (`auth-session-v1` key), token validation on hydration via `GET /auth/me`, silent refresh scheduling via `/auth/refresh`, and automatic token accessor wiring for the training API client
 
 Current integration level:
 - frontend auth is fully wired: login/register screens, JWT token persistence, automatic token injection on all protected API calls
@@ -96,7 +97,8 @@ Current integration level:
 - dashboard and scenarios now consume backend scenario catalog (`GET /scenario/catalog`) through shared `useTrainingSession` state
 - dashboard header shows personalized greeting ("Bună, {displayName}") and logout button
 - local continuity is enabled via AsyncStorage for training session state, assistant/learn conversations, and in-progress chat/feedback continuity
-- training session state is scoped per-user (storage key includes user ID) so each account has isolated training data
+- local continuity keys for training, assistant, learn, chat, and feedback are scoped per-user (storage key includes user ID) so each account has isolated training data
+- silent auth refresh is scheduled before JWT expiry to reduce session drops
 - protected API calls in `useTrainingSession` are gated on `isAuthenticated` — no backend calls are made before login
 
 ## Recent Progress (April-May 2026)
@@ -237,8 +239,8 @@ Current integration level:
   - repository tests for user creation and session ownership checks
 
 - Added frontend auth integration:
-  - new `features/auth/auth-api.ts` — API client for `/auth/login`, `/auth/register`, `/auth/me` with multi-candidate base URL fallback and Romanian error messages
-  - new `features/auth/auth-context.tsx` — React context provider with login/register/logout actions, AsyncStorage persistence, token validation on hydration, and automatic `setAuthTokenAccessor()` wiring
+  - new `features/auth/auth-api.ts` — API client for `/auth/login`, `/auth/register`, `/auth/refresh`, `/auth/me` with multi-candidate base URL fallback and Romanian error messages
+  - new `features/auth/auth-context.tsx` — React context provider with login/register/logout actions, AsyncStorage persistence, token validation on hydration, silent refresh scheduling, and automatic `setAuthTokenAccessor()` wiring
   - new `app/login.tsx` — cyber-themed login screen with email/password fields, show/hide toggle, error banner, loading state
   - new `app/register.tsx` — cyber-themed register screen with display name, email, password + confirmation, client-side validation
   - modified `features/training/api.ts` — added `setAuthTokenAccessor()` + `getAuthHeaders()` so all `postJson`/`getJson` calls automatically inject `Authorization: Bearer <token>`
@@ -246,6 +248,12 @@ Current integration level:
   - modified `app/(tabs)/index.tsx` — now acts as auth gate: redirects to `/login` when unauthenticated, loading spinner during hydration
   - modified `app/(tabs)/dashboard.tsx` — personalized greeting ("Bună, {displayName}"), logout button replaces notification bell
   - modified `features/training/useTrainingSession.tsx` — all protected API calls gated on `isAuthenticated`, per-user storage key (includes user ID), state reset on user identity change
+- Added auth refresh support:
+  - backend `POST /auth/refresh` issues a new access token for authenticated users
+  - frontend schedules silent refresh before JWT expiry and retries gracefully on transient failures
+- Scoped assistant/learn/chat/feedback continuity keys per-user:
+  - assistant, learn, chat progress, and feedback context storage keys now include user ID
+  - cache clear actions now show a confirmation alert after reset
 
 ## What the App Already Does
 1. User registers or logs in (JWT auth).
@@ -330,6 +338,7 @@ Implemented:
 - per-user training session storage (isolated by user ID)
 - personalized dashboard greeting + logout button
 - token validation on app startup via `GET /auth/me`
+- silent refresh before JWT expiry via `POST /auth/refresh`
 
 ### 2. Add persistence layer hardening
 Status: implemented with SQLAlchemy + Alembic + user/session ownership, PostgreSQL-ready DB config.
@@ -353,14 +362,14 @@ Current baseline:
 - in-progress chat scenario state (`/chat/[scenarioId]`) and feedback transition context are now persisted/restored
 - retention policy is now applied across chat/feedback + assistant/learn continuity keys (TTL + capped entries)
 - assistant and learn tabs now expose explicit local-cache reset actions
+- assistant/learn/chat/feedback continuity keys are scoped per-user and cache clears show confirmation alerts
 
 Next step:
-- scope assistant/learn/chat/feedback continuity keys per-user (currently only training session is per-user)
 - add selective clear controls (e.g., clear only assistant history vs full training cache)
-- add user-facing confirmation/toast feedback after cache clear actions
 
 ### 4. Add more UI polish
 Possible improvements:
+- compact layout tuning now applied to dashboard/scenarios/analytics; continue with animations and background pattern
 - cyber background pattern / grid
 - animated transitions for cards
 - small icons per attack type
@@ -401,6 +410,11 @@ Recommended:
 - backend repository tests now cover persistence timeline filters and pagination edge cases
 - unit tests for session recommendation and score logic
 - basic UI smoke tests if needed
+
+### Recent fixes (2026-05-26)
+- Scoped assistant/learn/chat/feedback AsyncStorage keys per-user and added confirmation alerts on cache clears.
+- Added `POST /auth/refresh` plus frontend silent refresh scheduling before JWT expiration.
+- Improved responsiveness on smaller screens with compact spacing and typography tweaks in Dashboard/Scenarios/Analytics.
 
 ### Recent fixes (2026-05-14)
 - Fixed a web crash and stuck-evaluating loop: the delayed feedback navigation in `app/chat/[scenarioId].tsx` could fire after a session reset or unmount and trigger React DOM errors (removeChild / maximum update depth). Introduced `feedbackNavigationTimeoutRef`, cancelation before scheduling, and cleanup on unmount to prevent the stale navigation from running.
@@ -443,9 +457,8 @@ npx expo start
 Focus on incremental improvements only.
 
 Good next tasks:
-- scope remaining AsyncStorage keys (assistant, learn, chat, feedback) per-user like training session
-- add token refresh or silent re-auth before JWT expiration
-- continue analytics enhancements (moving averages, compare mode, export/share)
+- add selective clear controls for cache (assistant-only / learn-only / full)
+- add compare-mode analytics (last 7d vs previous 7d) and export/share
 - iterate on UI polish and LLM integration with fallback
 - consider migrating token storage from AsyncStorage to `expo-secure-store` for production
 

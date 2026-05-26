@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from 'react';
 
-import { apiGetMe, apiLogin, apiRegister, type AuthUserResponse } from './auth-api';
+import { apiGetMe, apiLogin, apiRefreshToken, apiRegister, type AuthUserResponse } from './auth-api';
 import { setAuthFailureHandler, setAuthTokenAccessor } from '../training/api';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -34,6 +34,8 @@ type AuthContextValue = {
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 const AUTH_STORAGE_KEY = 'auth-session-v1';
+const TOKEN_REFRESH_BUFFER_MS = 1000 * 60 * 5;
+const TOKEN_REFRESH_RETRY_MS = 1000 * 60;
 
 type PersistedAuthState = {
   token: string;
@@ -52,6 +54,41 @@ function mapUserResponse(u: AuthUserResponse): AuthUser {
   };
 }
 
+function decodeBase64Url(payload: string): string | null {
+  const normalized = payload.replace(/-/g, '+').replace(/_/g, '/');
+  const paddingLength = (4 - (normalized.length % 4)) % 4;
+  const padded = `${normalized}${'='.repeat(paddingLength)}`;
+  const atobFn = (globalThis as { atob?: (data: string) => string }).atob;
+  if (typeof atobFn !== 'function') {
+    return null;
+  }
+  try {
+    return atobFn(padded);
+  } catch {
+    return null;
+  }
+}
+
+function getTokenExpiryMs(token: string): number | null {
+  const parts = token.split('.');
+  if (parts.length < 2) {
+    return null;
+  }
+  const decoded = decodeBase64Url(parts[1]);
+  if (!decoded) {
+    return null;
+  }
+  try {
+    const payload = JSON.parse(decoded) as { exp?: number };
+    if (typeof payload.exp === 'number') {
+      return payload.exp * 1000;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 // ── Provider ───────────────────────────────────────────────────────────────────
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -59,6 +96,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const tokenRef = useRef<string | null>(null);
+  const refreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Keep tokenRef in sync for the accessor function.
   useEffect(() => {
@@ -82,6 +120,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const clearPersistedSession = useCallback(async () => {
     await AsyncStorage.removeItem(AUTH_STORAGE_KEY);
+  }, []);
+
+  const clearRefreshTimeout = useCallback(() => {
+    if (refreshTimeoutRef.current) {
+      clearTimeout(refreshTimeoutRef.current);
+      refreshTimeoutRef.current = null;
+    }
   }, []);
 
   // ── Hydrate on mount ──────────────────────────────────────────────────────
@@ -163,14 +208,65 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setToken(null);
     setUser(null);
     tokenRef.current = null;
+    clearRefreshTimeout();
     await clearPersistedSession();
-  }, [clearPersistedSession]);
+  }, [clearPersistedSession, clearRefreshTimeout]);
+
+  const refreshAccessToken = useCallback(async () => {
+    const currentToken = tokenRef.current;
+    if (!currentToken) {
+      return;
+    }
+    const expiresAt = getTokenExpiryMs(currentToken);
+    if (expiresAt && expiresAt <= Date.now()) {
+      await logout();
+      return;
+    }
+
+    try {
+      const response = await apiRefreshToken(currentToken);
+      const mappedUser = mapUserResponse(response.user);
+      setToken(response.access_token);
+      setUser(mappedUser);
+      tokenRef.current = response.access_token;
+      await persistSession(response.access_token, mappedUser);
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('Sesiune expirată')) {
+        await logout();
+        return;
+      }
+      clearRefreshTimeout();
+      refreshTimeoutRef.current = setTimeout(() => {
+        void refreshAccessToken();
+      }, TOKEN_REFRESH_RETRY_MS);
+    }
+  }, [clearRefreshTimeout, logout, persistSession]);
 
   useEffect(() => {
     setAuthFailureHandler(() => {
       void logout();
     });
   }, [logout]);
+
+  useEffect(() => {
+    if (!token) {
+      clearRefreshTimeout();
+      return;
+    }
+    const expiresAt = getTokenExpiryMs(token);
+    if (!expiresAt) {
+      return;
+    }
+    const refreshAt = expiresAt - TOKEN_REFRESH_BUFFER_MS;
+    const delay = Math.max(refreshAt - Date.now(), 0);
+    clearRefreshTimeout();
+    refreshTimeoutRef.current = setTimeout(() => {
+      void refreshAccessToken();
+    }, delay);
+    return () => {
+      clearRefreshTimeout();
+    };
+  }, [clearRefreshTimeout, refreshAccessToken, token]);
 
   // ── Value ──────────────────────────────────────────────────────────────────
 

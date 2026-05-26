@@ -141,6 +141,42 @@ async function authGet<TResponse>(path: string, token: string, fallbackError: st
   throw lastError ?? new Error(fallbackError);
 }
 
+async function authPostWithToken<TResponse>(
+  path: string,
+  token: string,
+  fallbackError: string
+): Promise<TResponse> {
+  let lastError: Error | null = null;
+
+  for (const baseUrl of API_BASE_URL_CANDIDATES) {
+    try {
+      const response = await fetch(`${baseUrl}${path}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (response.status === 401) {
+        throw new Error('Sesiune expirată. Te rog autentifică-te din nou.');
+      }
+      if (!response.ok) {
+        throw new Error(fallbackError);
+      }
+
+      return (await response.json()) as TResponse;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(fallbackError);
+      if (error instanceof Error && !error.message.includes('fetch')) {
+        throw error;
+      }
+    }
+  }
+
+  throw lastError ?? new Error(fallbackError);
+}
+
 // ── Public API ─────────────────────────────────────────────────────────────────
 
 export async function apiLogin(email: string, password: string): Promise<AuthTokenResponse> {
@@ -168,5 +204,13 @@ export async function apiGetMe(token: string): Promise<AuthUserResponse> {
     '/auth/me',
     token,
     'Nu am putut verifica sesiunea curentă.'
+  );
+}
+
+export async function apiRefreshToken(token: string): Promise<AuthTokenResponse> {
+  return authPostWithToken<AuthTokenResponse>(
+    '/auth/refresh',
+    token,
+    'Nu am putut reînnoi sesiunea curentă.'
   );
 }

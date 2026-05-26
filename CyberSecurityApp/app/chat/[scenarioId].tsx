@@ -4,6 +4,12 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { useAuth } from '@/features/auth/auth-context';
+import {
+  buildUserChatProgressPrefix,
+  buildUserStorageKey,
+  FEEDBACK_CONTEXT_STORAGE_KEY,
+} from '@/features/training/local-cache';
 import type { AttackType, DifficultyLevel } from '@/features/training/types';
 import { TrainingColors } from '@/features/training/ui-theme';
 import { useTrainingSession } from '@/features/training/useTrainingSession';
@@ -14,8 +20,6 @@ type Msg =
   | { id: string; from: 'user'; kind: 'text'; text: string }
   | { id: string; from: 'system'; kind: 'text'; text: string };
 
-const CHAT_PROGRESS_STORAGE_PREFIX = 'training-chat-progress-v1';
-const FEEDBACK_CONTEXT_STORAGE_KEY = 'training-feedback-context-v1';
 const CHAT_PROGRESS_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 const CHAT_PROGRESS_MAX_ENTRIES = 12;
 
@@ -26,14 +30,14 @@ type PersistedChatProgress = {
   updatedAt: number;
 };
 
-async function cleanupChatProgressStorage(currentKey: string): Promise<void> {
+async function cleanupChatProgressStorage(currentKey: string, chatProgressPrefix: string): Promise<void> {
   const storage = AsyncStorage as typeof AsyncStorage & {
     multiGet?: (keys: readonly string[]) => Promise<[string, string | null][]>;
     multiRemove?: (keys: readonly string[]) => Promise<void>;
   };
 
   const allKeys = await AsyncStorage.getAllKeys();
-  const chatKeys = allKeys.filter((key) => key.startsWith(`${CHAT_PROGRESS_STORAGE_PREFIX}:`));
+  const chatKeys = allKeys.filter((key) => key.startsWith(`${chatProgressPrefix}:`));
   if (!chatKeys.length) {
     return;
   }
@@ -134,6 +138,7 @@ export default function ChatScenarioScreen() {
     sessionId?: string;
   }>();
 
+  const { user } = useAuth();
   const {
     scenario,
     isLoading,
@@ -154,10 +159,18 @@ export default function ChatScenarioScreen() {
   const hasGeneratedRef = useRef(false);
   const feedbackNavigationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollRef = useRef<ScrollView>(null);
+  const chatProgressPrefix = useMemo(
+    () => buildUserChatProgressPrefix(user?.id),
+    [user?.id]
+  );
   const chatStorageKey = useMemo(
     () =>
-      `${CHAT_PROGRESS_STORAGE_PREFIX}:${String(scenarioId ?? 'unknown')}:${String(attackType ?? 'phishing')}:${String(difficulty ?? 'easy')}:${String(routeSessionId ?? 'new')}`,
-    [attackType, difficulty, routeSessionId, scenarioId]
+      `${chatProgressPrefix}:${String(scenarioId ?? 'unknown')}:${String(attackType ?? 'phishing')}:${String(difficulty ?? 'easy')}:${String(routeSessionId ?? 'new')}`,
+    [attackType, chatProgressPrefix, difficulty, routeSessionId, scenarioId]
+  );
+  const feedbackStorageKey = useMemo(
+    () => buildUserStorageKey(FEEDBACK_CONTEXT_STORAGE_KEY, user?.id),
+    [user?.id]
   );
 
   useEffect(() => {
@@ -165,7 +178,7 @@ export default function ChatScenarioScreen() {
 
     const hydrateChatProgress = async () => {
       try {
-        await cleanupChatProgressStorage(chatStorageKey);
+        await cleanupChatProgressStorage(chatStorageKey, chatProgressPrefix);
 
         const raw = await AsyncStorage.getItem(chatStorageKey);
         if (!raw || cancelled) {
@@ -193,7 +206,7 @@ export default function ChatScenarioScreen() {
     return () => {
       cancelled = true;
     };
-  }, [chatStorageKey]);
+  }, [chatProgressPrefix, chatStorageKey]);
 
   useEffect(() => {
     if (!isChatStateHydrated) {
@@ -207,9 +220,9 @@ export default function ChatScenarioScreen() {
       updatedAt: Date.now(),
     };
     void AsyncStorage.setItem(chatStorageKey, JSON.stringify(stateToPersist)).then(() =>
-      cleanupChatProgressStorage(chatStorageKey)
+      cleanupChatProgressStorage(chatStorageKey, chatProgressPrefix)
     );
-  }, [chatStorageKey, isChatStateHydrated, messages, scenario?.scenario_id, scriptDone]);
+  }, [chatProgressPrefix, chatStorageKey, isChatStateHydrated, messages, scenario?.scenario_id, scriptDone]);
 
   // Generate scenario on mount
   useEffect(() => {
@@ -299,7 +312,7 @@ export default function ChatScenarioScreen() {
   useEffect(() => {
     if (evaluation && evaluating) {
       void AsyncStorage.setItem(
-        FEEDBACK_CONTEXT_STORAGE_KEY,
+        feedbackStorageKey,
         JSON.stringify({
           scenarioId: scenario?.scenario_id ?? null,
           sessionId: sessionId ?? routeSessionId ?? null,
@@ -345,6 +358,7 @@ export default function ChatScenarioScreen() {
     scenario?.difficulty,
     scenario?.red_flags,
     scenario?.scenario_id,
+    feedbackStorageKey,
     sessionId,
   ]);
 

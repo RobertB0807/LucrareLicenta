@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
 import { getSessionEvents, getSessionSnapshot, getSessionTrendAggregates } from '@/features/training/api';
 import type {
@@ -45,12 +45,36 @@ const ATTACK_ICONS: Record<AttackType, keyof typeof Ionicons.glyphMap> = {
   impersonation: 'call-outline',
 };
 
+const ATTACK_TREND_COLORS: Record<AttackType, string> = {
+  phishing: TrainingColors.accentTeal,
+  smishing: TrainingColors.accentBlue,
+  impersonation: TrainingColors.accentAmber,
+};
+
 export default function AnalyticsScreen() {
   const { sessionId, stats, perAttackStats, adaptiveProfile, isLoadingAdaptiveProfile } =
     useTrainingSession();
+  const { width } = useWindowDimensions();
+  const isCompact = width < 360;
+  const contentInsets = useMemo(
+    () => ({
+      paddingHorizontal: isCompact ? 16 : 20,
+      paddingTop: isCompact ? 40 : 50,
+      paddingBottom: isCompact ? 120 : 130,
+      gap: isCompact ? 10 : 12,
+    }),
+    [isCompact]
+  );
   const [serverStats, setServerStats] = useState<SessionStats | null>(null);
   const [serverEvents, setServerEvents] = useState<SessionEvent[]>([]);
   const [serverTrendAggregates, setServerTrendAggregates] = useState<SessionTrendAggregatesApiResponse | null>(null);
+  const [perAttackTrendAggregates, setPerAttackTrendAggregates] = useState<
+    Record<AttackType, SessionTrendAggregatesApiResponse | null>
+  >({
+    phishing: null,
+    smishing: null,
+    impersonation: null,
+  });
   const [serverEventsTotal, setServerEventsTotal] = useState(0);
   const [eventsLimit, setEventsLimit] = useState(12);
   const [trendAttackFilter, setTrendAttackFilter] = useState<TrendAttackFilter>('all');
@@ -81,6 +105,11 @@ export default function AnalyticsScreen() {
         setServerStats(null);
         setServerEvents([]);
         setServerTrendAggregates(null);
+        setPerAttackTrendAggregates({
+          phishing: null,
+          smishing: null,
+          impersonation: null,
+        });
         setServerEventsTotal(0);
         setFetchError(null);
         return;
@@ -90,14 +119,18 @@ export default function AnalyticsScreen() {
       setFetchError(null);
 
       try {
-        const [snapshot, events, trendAggregates] = await Promise.all([
+        const [snapshot, events, trendAggregates, phishingTrend, smishingTrend, impersonationTrend] =
+          await Promise.all([
           getSessionSnapshot(sessionId),
           getSessionEvents(sessionId, { limit: eventsLimit, offset: 0, since: rangeSince }),
           getSessionTrendAggregates(sessionId, {
             attackType: trendAttackFilter === 'all' ? undefined : trendAttackFilter,
             since: rangeSince,
           }),
-        ]);
+          getSessionTrendAggregates(sessionId, { attackType: 'phishing', since: rangeSince }),
+          getSessionTrendAggregates(sessionId, { attackType: 'smishing', since: rangeSince }),
+          getSessionTrendAggregates(sessionId, { attackType: 'impersonation', since: rangeSince }),
+          ]);
 
         if (cancelled) {
           return;
@@ -107,9 +140,19 @@ export default function AnalyticsScreen() {
         setServerEvents(events.events);
         setServerEventsTotal(events.total);
         setServerTrendAggregates(trendAggregates);
+        setPerAttackTrendAggregates({
+          phishing: phishingTrend,
+          smishing: smishingTrend,
+          impersonation: impersonationTrend,
+        });
       } catch {
         if (!cancelled) {
           setFetchError('Nu am putut incarca datele salvate ale sesiunii.');
+          setPerAttackTrendAggregates({
+            phishing: null,
+            smishing: null,
+            impersonation: null,
+          });
         }
       } finally {
         if (!cancelled) {
@@ -224,7 +267,45 @@ export default function AnalyticsScreen() {
     trendStart && trendEnd
       ? trendEnd.cumulative_score_after - trendStart.cumulative_score_after
       : (trendEnd?.cumulative_score_after ?? 0);
-  const trendAttemptsCount = serverTrendAggregates?.total_attempts ?? trendSlice.reduce((sum, point) => sum + point.attempts, 0);
+  const trendAttemptsCount =
+    serverTrendAggregates?.total_attempts ?? trendSlice.reduce((sum, point) => sum + point.attempts, 0);
+  const trendRangeLabel = dateRangeFilter === '7d' ? '7 zile' : dateRangeFilter === '30d' ? '30 zile' : 'Tot';
+  const movingAverageWindow = trendSlice.length >= 7 ? 7 : 5;
+  const showMovingAverage = trendSlice.length >= movingAverageWindow;
+  const movingAverageValues = useMemo(() => {
+    if (!showMovingAverage) {
+      return [];
+    }
+    return trendSlice.map((point, index) => {
+      const start = Math.max(0, index - movingAverageWindow + 1);
+      const windowPoints = trendSlice.slice(start, index + 1);
+      const avg = windowPoints.reduce((sum, item) => sum + item.accuracy, 0) / windowPoints.length;
+      return Math.round(avg);
+    });
+  }, [movingAverageWindow, showMovingAverage, trendSlice]);
+
+  const perAttackTrendSeries = useMemo(() => {
+    return (Object.keys(ATTACK_LABELS) as AttackType[]).map((attackType) => {
+      const series = perAttackTrendAggregates[attackType]?.by_day ?? [];
+      const slice = series.slice(-10);
+      const points = slice.map((item) => Math.max(0, Math.min(100, item.accuracy)));
+      const fallbackAccuracy =
+        aggregateByAttackMap.get(attackType)?.accuracy ?? effectiveStats.per_attack[attackType]?.accuracy ?? 0;
+      const fallbackAttempts =
+        perAttackTrendAggregates[attackType]?.total_attempts ??
+        aggregateByAttackMap.get(attackType)?.attempts ??
+        effectiveStats.per_attack[attackType]?.attempts ??
+        0;
+      return {
+        attackType,
+        label: ATTACK_LABELS[attackType],
+        color: ATTACK_TREND_COLORS[attackType],
+        latestAccuracy: slice[slice.length - 1]?.accuracy ?? fallbackAccuracy,
+        attempts: fallbackAttempts,
+        points,
+      };
+    });
+  }, [aggregateByAttackMap, effectiveStats.per_attack, perAttackTrendAggregates]);
 
   const badges = [
     { name: 'Prima detectare', earned: effectiveStats.total_correct > 0 },
@@ -254,14 +335,14 @@ export default function AnalyticsScreen() {
   ];
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+    <ScrollView style={styles.screen} contentContainerStyle={[styles.content, contentInsets]}>
       <View style={styles.header}>
         <View style={styles.headerIcon}>
           <Ionicons name="stats-chart" size={18} color="#EFF6FF" />
         </View>
         <View>
-          <Text style={styles.title}>Progres</Text>
-          <Text style={styles.subtitle}>Apărarea ta, măsurată</Text>
+          <Text style={[styles.title, isCompact && styles.titleCompact]}>Progres</Text>
+          <Text style={[styles.subtitle, isCompact && styles.subtitleCompact]}>Apărarea ta, măsurată</Text>
         </View>
       </View>
 
@@ -368,7 +449,9 @@ export default function AnalyticsScreen() {
         <View style={styles.chartHeader}>
           <View>
             <Text style={styles.chartEyebrow}>Evoluție sesiune</Text>
-            <Text style={styles.chartScore}>{trendEnd?.cumulative_score_after ?? effectiveStats.total_score}</Text>
+            <Text style={[styles.chartScore, isCompact && styles.chartScoreCompact]}>
+              {trendEnd?.cumulative_score_after ?? effectiveStats.total_score}
+            </Text>
           </View>
           <View style={styles.trendPill}>
             <Ionicons
@@ -382,11 +465,17 @@ export default function AnalyticsScreen() {
             </Text>
           </View>
         </View>
+        {showMovingAverage ? (
+          <View style={styles.chartLegendRow}>
+            <View style={styles.movingAverageLegendLine} />
+            <Text style={styles.movingAverageLegendText}>Media {movingAverageWindow} zile</Text>
+          </View>
+        ) : null}
         {trendSlice.length > 0 ? (
-          <View style={styles.bars}>
-            {trendSlice.map((point) => (
+          <View style={[styles.bars, isCompact && styles.barsCompact]}>
+            {trendSlice.map((point, index) => (
               <View key={point.day} style={styles.barColumn}>
-                <View style={styles.barTrack}>
+                <View style={[styles.barTrack, isCompact && styles.barTrackCompact]}>
                   <View
                     style={[
                       styles.barFill,
@@ -394,6 +483,16 @@ export default function AnalyticsScreen() {
                       { height: `${Math.max(8, Math.min(100, point.accuracy))}%` },
                     ]}
                   />
+                  {showMovingAverage && movingAverageValues[index] !== undefined ? (
+                    <View
+                      style={[
+                        styles.movingAverageLine,
+                        {
+                          bottom: `${Math.max(0, Math.min(100, movingAverageValues[index]))}%`,
+                        },
+                      ]}
+                    />
+                  ) : null}
                 </View>
                 <Text style={styles.barLabel}>{point.day.slice(5)}</Text>
               </View>
@@ -410,19 +509,21 @@ export default function AnalyticsScreen() {
         <View style={styles.chartHeader}>
           <View>
             <Text style={styles.chartEyebrow}>Acuratețe de detecție pe tip de atac</Text>
-            <Text style={styles.chartScore}>{effectiveStats.accuracy}%</Text>
+            <Text style={[styles.chartScore, isCompact && styles.chartScoreCompact]}>
+              {effectiveStats.accuracy}%
+            </Text>
           </View>
           <View style={styles.trendPill}>
             <Ionicons name="shield-checkmark-outline" size={12} color={TrainingColors.accentTeal} />
             <Text style={styles.trendText}>{trendAttemptsCount} încercări</Text>
           </View>
         </View>
-        <View style={styles.bars}>
+        <View style={[styles.bars, isCompact && styles.barsCompact]}>
           {accuracyBars.map((bar, index) => {
             const isBest = bar.value === Math.max(...accuracyBars.map((item) => item.value));
             return (
               <View key={`${bar.id}-${index}`} style={styles.barColumn}>
-                <View style={styles.barTrack}>
+                <View style={[styles.barTrack, isCompact && styles.barTrackCompact]}>
                   <View
                     style={[
                       styles.barFill,
@@ -435,6 +536,58 @@ export default function AnalyticsScreen() {
               </View>
             );
           })}
+        </View>
+      </View>
+
+      <View style={styles.chartCard}>
+        <View style={styles.chartHeader}>
+          <View>
+            <Text style={styles.chartEyebrow}>Trend acuratețe pe tip de atac</Text>
+            <Text style={[styles.chartScore, isCompact && styles.chartScoreCompact]}>{trendAttemptsCount}</Text>
+            <Text style={styles.chartMeta}>încercări urmărite</Text>
+          </View>
+          <View style={styles.trendPill}>
+            <Ionicons name="calendar-outline" size={12} color={TrainingColors.accentTeal} />
+            <Text style={styles.trendText}>{trendRangeLabel}</Text>
+          </View>
+        </View>
+        <View style={styles.attackTrendList}>
+          {perAttackTrendSeries.map((series) => (
+            <View key={series.attackType} style={styles.attackTrendItem}>
+              <View style={styles.attackTrendHeader}>
+                <View
+                  style={[
+                    styles.attackTrendIcon,
+                    { backgroundColor: `${series.color}26`, borderColor: `${series.color}55` },
+                  ]}>
+                  <Ionicons name={ATTACK_ICONS[series.attackType]} size={14} color={series.color} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.attackTrendLabel}>{series.label}</Text>
+                  <Text style={styles.attackTrendMeta}>{series.attempts} încercări</Text>
+                </View>
+                <Text style={styles.attackTrendValue}>{Math.round(series.latestAccuracy)}%</Text>
+              </View>
+              {series.points.length > 0 ? (
+                <View style={[styles.miniBars, isCompact && styles.miniBarsCompact]}>
+                  {series.points.map((value, index) => (
+                    <View
+                      key={`${series.attackType}-${index}`}
+                      style={[styles.miniBarTrack, isCompact && styles.miniBarTrackCompact]}>
+                      <View
+                        style={[
+                          styles.miniBarFill,
+                          { height: `${Math.max(6, value)}%`, backgroundColor: series.color },
+                        ]}
+                      />
+                    </View>
+                  ))}
+                </View>
+              ) : (
+                <Text style={styles.attackTrendEmpty}>Nu există încă trenduri persistate.</Text>
+              )}
+            </View>
+          ))}
         </View>
       </View>
 
@@ -497,7 +650,13 @@ export default function AnalyticsScreen() {
       <Text style={styles.sectionTitle}>Insigne</Text>
       <View style={styles.badgesGrid}>
         {badges.map((badge) => (
-          <View key={badge.name} style={[styles.badgeCard, !badge.earned && styles.badgeCardLocked]}>
+          <View
+            key={badge.name}
+            style={[
+              styles.badgeCard,
+              isCompact && styles.badgeCardCompact,
+              !badge.earned && styles.badgeCardLocked,
+            ]}>
             <View style={[styles.badgeIcon, badge.earned ? styles.badgeIconEarned : styles.badgeIconLocked]}>
               <Ionicons name="trophy-outline" size={18} color="#EFF6FF" />
             </View>
@@ -525,6 +684,8 @@ const styles = StyleSheet.create({
   },
   title: { color: TrainingColors.textPrimary, fontSize: 24, fontWeight: '800' },
   subtitle: { color: TrainingColors.textSecondary, fontSize: 12 },
+  titleCompact: { fontSize: 21 },
+  subtitleCompact: { fontSize: 11 },
   emptyCard: {
     borderRadius: 16,
     borderWidth: 1,
@@ -639,6 +800,22 @@ const styles = StyleSheet.create({
   chartHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   chartEyebrow: { color: TrainingColors.textMuted, fontSize: 10, textTransform: 'uppercase', letterSpacing: 1 },
   chartScore: { color: TrainingColors.textPrimary, fontSize: 32, fontWeight: '800' },
+  chartScoreCompact: { fontSize: 28 },
+  chartMeta: {
+    color: TrainingColors.textMuted,
+    fontSize: 10,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+    marginTop: 2,
+  },
+  chartLegendRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  movingAverageLegendLine: {
+    width: 18,
+    height: 2,
+    borderRadius: 999,
+    backgroundColor: TrainingColors.accentAmber,
+  },
+  movingAverageLegendText: { color: TrainingColors.textMuted, fontSize: 10, fontWeight: '700' },
   trendPill: {
     borderRadius: 999,
     paddingHorizontal: 9,
@@ -652,6 +829,7 @@ const styles = StyleSheet.create({
   },
   trendText: { color: TrainingColors.accentTeal, fontSize: 11, fontWeight: '700' },
   bars: { height: 132, flexDirection: 'row', alignItems: 'flex-end', gap: 6 },
+  barsCompact: { height: 112 },
   barColumn: { flex: 1, alignItems: 'center', gap: 4 },
   barTrack: {
     height: 112,
@@ -660,11 +838,55 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     backgroundColor: TrainingColors.panelAlt,
     overflow: 'hidden',
+    position: 'relative',
   },
+  barTrackCompact: { height: 96 },
   barFill: { width: '100%', borderRadius: 8 },
   barFillMuted: { backgroundColor: '#2D3F5E' },
   barFillActive: { backgroundColor: TrainingColors.accentBlue },
+  movingAverageLine: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    height: 2,
+    backgroundColor: TrainingColors.accentAmber,
+    opacity: 0.9,
+  },
   barLabel: { color: TrainingColors.textMuted, fontSize: 10 },
+  attackTrendList: { gap: 10 },
+  attackTrendItem: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: TrainingColors.border,
+    backgroundColor: TrainingColors.panelAlt,
+    padding: 12,
+    gap: 8,
+  },
+  attackTrendHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  attackTrendIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  attackTrendLabel: { color: TrainingColors.textPrimary, fontSize: 13, fontWeight: '700' },
+  attackTrendMeta: { color: TrainingColors.textMuted, fontSize: 10 },
+  attackTrendValue: { color: TrainingColors.textPrimary, fontSize: 12, fontWeight: '800' },
+  miniBars: { height: 46, flexDirection: 'row', alignItems: 'flex-end', gap: 4 },
+  miniBarsCompact: { height: 38 },
+  miniBarTrack: {
+    flex: 1,
+    height: 40,
+    borderRadius: 6,
+    backgroundColor: TrainingColors.panel,
+    overflow: 'hidden',
+    justifyContent: 'flex-end',
+  },
+  miniBarTrackCompact: { height: 32 },
+  miniBarFill: { width: '100%', borderRadius: 6 },
+  attackTrendEmpty: { color: TrainingColors.textMuted, fontSize: 11 },
   sectionTitle: { color: TrainingColors.textPrimary, fontSize: 17, fontWeight: '800', marginTop: 4 },
   weakSpotList: { gap: 9 },
   weakSpotCard: {
@@ -725,6 +947,7 @@ const styles = StyleSheet.create({
     padding: 6,
     gap: 6,
   },
+  badgeCardCompact: { width: '48%' },
   badgeCardLocked: { opacity: 0.45 },
   badgeIcon: { width: 40, height: 40, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
   badgeIconEarned: { backgroundColor: TrainingColors.accentBlue },

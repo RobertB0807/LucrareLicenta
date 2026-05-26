@@ -330,6 +330,16 @@ def login(payload: AuthLoginRequest) -> AuthTokenResponse:
     )
 
 
+@app.post("/auth/refresh", response_model=AuthTokenResponse)
+def refresh_token(request: Request) -> AuthTokenResponse:
+    current_user = require_authenticated_user(request)
+    token = create_access_token(user_id=current_user.id, email=current_user.email)
+    return AuthTokenResponse(
+        access_token=token,
+        user=UserResponse.model_validate(current_user.model_dump()),
+    )
+
+
 @app.get("/auth/me", response_model=UserResponse)
 def get_me(request: Request) -> UserResponse:
     current_user = require_authenticated_user(request)

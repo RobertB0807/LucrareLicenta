@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Link } from 'expo-router';
 import { useMemo } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
 import { useAuth } from '@/features/auth/auth-context';
 import type { AttackType, DifficultyLevel, LearningProfileAttack } from '@/features/training/types';
@@ -46,6 +46,17 @@ export default function DashboardScreen() {
   const { stats, perAttackStats, evaluation, sessionId, scenarioCatalog, adaptiveProfile, isLoadingAdaptiveProfile } =
     useTrainingSession();
   const { user, logout } = useAuth();
+  const { width } = useWindowDimensions();
+  const isCompact = width < 360;
+  const contentInsets = useMemo(
+    () => ({
+      paddingHorizontal: isCompact ? 16 : 20,
+      paddingTop: isCompact ? 40 : 50,
+      paddingBottom: isCompact ? 110 : 130,
+      gap: isCompact ? 12 : 14,
+    }),
+    [isCompact]
+  );
 
   const scenarioPreviewByKey = useMemo(() => {
     const map: Record<string, string> = {};
@@ -143,17 +154,19 @@ export default function DashboardScreen() {
       : 'Recapitulările apar după primele răspunsuri evaluate.';
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+    <ScrollView style={styles.screen} contentContainerStyle={[styles.content, contentInsets]}>
       <View style={styles.header}>
         <View style={styles.headerLeft}>
           <View style={styles.headerIcon}>
             <Ionicons name="shield-half" size={18} color="#EFF6FF" />
           </View>
           <View>
-            <Text style={styles.headerTitle}>
+            <Text style={[styles.headerTitle, isCompact && styles.headerTitleCompact]}>
               {user ? `Bună, ${user.displayName}` : 'Panou de antrenament'}
             </Text>
-            <Text style={styles.headerSubtitle}>Rămâi atent. Rămâi în siguranță.</Text>
+            <Text style={[styles.headerSubtitle, isCompact && styles.headerSubtitleCompact]}>
+              Rămâi atent. Rămâi în siguranță.
+            </Text>
           </View>
         </View>
         <Pressable
@@ -164,14 +177,14 @@ export default function DashboardScreen() {
         </Pressable>
       </View>
 
-      <View style={styles.scoreCard}>
+      <View style={[styles.scoreCard, isCompact && styles.scoreCardCompact]}>
         <View style={styles.scoreGlow} />
-        <View style={styles.scoreRing}>
-          <Text style={styles.scoreRingText}>{cyberScore}</Text>
+        <View style={[styles.scoreRing, isCompact && styles.scoreRingCompact]}>
+          <Text style={[styles.scoreRingText, isCompact && styles.scoreRingTextCompact]}>{cyberScore}</Text>
         </View>
         <View style={styles.scoreContent}>
           <Text style={styles.eyebrow}>Scor de securitate</Text>
-          <Text style={styles.scoreValue}>
+          <Text style={[styles.scoreValue, isCompact && styles.scoreValueCompact]}>
             {cyberScore}
             <Text style={styles.scoreOutOf}> / 100</Text>
           </Text>
@@ -262,8 +275,13 @@ export default function DashboardScreen() {
           },
         }}
         asChild>
-        <Pressable style={({ pressed }) => [styles.challengeCard, pressed && styles.pressableFeedback]}>
-          <View style={styles.challengeIcon}>
+        <Pressable
+          style={({ pressed }) => [
+            styles.challengeCard,
+            isCompact && styles.challengeCardCompact,
+            pressed && styles.pressableFeedback,
+          ]}>
+          <View style={[styles.challengeIcon, isCompact && styles.challengeIconCompact]}>
             <Ionicons name="flame" size={22} color="#EFF6FF" />
           </View>
           <View style={{ flex: 1 }}>
@@ -275,7 +293,7 @@ export default function DashboardScreen() {
         </Pressable>
       </Link>
 
-      <View style={styles.metricGrid}>
+      <View style={[styles.metricGrid, isCompact && styles.metricGridCompact]}>
         {[
           {
             label: 'Atacuri detectate',
@@ -290,7 +308,7 @@ export default function DashboardScreen() {
             tone: 'warning' as const,
           },
         ].map((s) => (
-          <View key={s.label} style={styles.metricCard}>
+          <View key={s.label} style={[styles.metricCard, isCompact && styles.metricCardCompact]}>
             <View style={styles.metricTop}>
               <Ionicons
                 name={s.icon}
@@ -328,13 +346,18 @@ export default function DashboardScreen() {
               },
             }}
             asChild>
-            <Pressable style={({ pressed }) => [styles.scenarioCard, pressed && styles.pressableFeedback]}>
-              <View style={styles.scenarioIcon}>
+            <Pressable
+              style={({ pressed }) => [
+                styles.scenarioCard,
+                isCompact && styles.scenarioCardCompact,
+                pressed && styles.pressableFeedback,
+              ]}>
+              <View style={[styles.scenarioIcon, isCompact && styles.scenarioIconCompact]}>
                 <Ionicons name={scenario.icon} size={18} color={TrainingColors.accentTeal} />
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.scenarioType}>{scenario.type}</Text>
-                <Text style={styles.scenarioTitle}>{scenario.title}</Text>
+                <Text style={[styles.scenarioTitle, isCompact && styles.scenarioTitleCompact]}>{scenario.title}</Text>
               </View>
               <RiskBadge level={scenario.risk} />
             </Pressable>
@@ -342,7 +365,7 @@ export default function DashboardScreen() {
         ))}
       </View>
 
-      <View style={styles.tipCard}>
+      <View style={[styles.tipCard, isCompact && styles.tipCardCompact]}>
         <View style={styles.tipIcon}>
           <Ionicons name="sparkles" size={15} color={TrainingColors.accentTeal} />
         </View>
@@ -357,7 +380,12 @@ export default function DashboardScreen() {
       </View>
 
       <Link href="/(tabs)/learn" asChild>
-        <Pressable style={({ pressed }) => [styles.learnCard, pressed && styles.pressableFeedback]}>
+        <Pressable
+          style={({ pressed }) => [
+            styles.learnCard,
+            isCompact && styles.learnCardCompact,
+            pressed && styles.pressableFeedback,
+          ]}>
           <View style={styles.learnIcon}>
             <Ionicons name="book-outline" size={18} color={TrainingColors.accentTeal} />
           </View>
@@ -413,6 +441,8 @@ const styles = StyleSheet.create({
   },
   headerTitle: { color: TrainingColors.textPrimary, fontSize: 22, fontWeight: '800' },
   headerSubtitle: { color: TrainingColors.textSecondary, fontSize: 12 },
+  headerTitleCompact: { fontSize: 20 },
+  headerSubtitleCompact: { fontSize: 11 },
   logoutButton: {
     width: 40,
     height: 40,
@@ -435,6 +465,7 @@ const styles = StyleSheet.create({
     padding: 18,
     overflow: 'hidden',
   },
+  scoreCardCompact: { padding: 14, gap: 10, borderRadius: 20 },
   adaptiveCard: {
     borderRadius: 20,
     borderWidth: 1,
@@ -546,6 +577,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   scoreRingText: { color: TrainingColors.textPrimary, fontSize: 24, fontWeight: '800' },
+  scoreRingCompact: { width: 72, height: 72, borderRadius: 36 },
+  scoreRingTextCompact: { fontSize: 20 },
   scoreContent: { flex: 1 },
   eyebrow: {
     color: TrainingColors.accentTeal,
@@ -555,6 +588,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   scoreValue: { color: TrainingColors.textPrimary, fontSize: 32, fontWeight: '800', marginTop: 2 },
+  scoreValueCompact: { fontSize: 28 },
   scoreOutOf: { color: TrainingColors.textMuted, fontSize: 16, fontWeight: '500' },
   scoreMeta: { color: TrainingColors.textSecondary, fontSize: 12, marginTop: 2 },
   successText: { color: TrainingColors.accentTeal },
@@ -569,6 +603,7 @@ const styles = StyleSheet.create({
     padding: 16,
     gap: 12,
   },
+  challengeCardCompact: { padding: 12, gap: 10, borderRadius: 20 },
   pressableFeedback: { opacity: 0.92 },
   challengeIcon: {
     width: 46,
@@ -578,6 +613,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.14)',
   },
+  challengeIconCompact: { width: 40, height: 40, borderRadius: 12 },
   challengeEyebrow: {
     color: '#CFE0F8',
     textTransform: 'uppercase',
@@ -588,6 +624,7 @@ const styles = StyleSheet.create({
   challengeTitle: { color: '#EFF6FF', fontWeight: '700', marginTop: 1 },
   challengeMeta: { color: '#CFE0F8', fontSize: 12, marginTop: 1 },
   metricGrid: { flexDirection: 'row', gap: 10 },
+  metricGridCompact: { flexWrap: 'wrap' },
   metricCard: {
     flex: 1,
     borderRadius: 16,
@@ -597,6 +634,7 @@ const styles = StyleSheet.create({
     padding: 12,
     gap: 6,
   },
+  metricCardCompact: { padding: 10 },
   metricTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   metricTime: {
     color: TrainingColors.textMuted,
@@ -622,6 +660,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
   },
+  scenarioCardCompact: { padding: 10, gap: 8 },
   scenarioIcon: {
     width: 42,
     height: 42,
@@ -632,6 +671,7 @@ const styles = StyleSheet.create({
     borderColor: TrainingColors.border,
     backgroundColor: TrainingColors.panelAlt,
   },
+  scenarioIconCompact: { width: 36, height: 36, borderRadius: 10 },
   scenarioType: {
     color: TrainingColors.textMuted,
     fontSize: 10,
@@ -640,6 +680,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   scenarioTitle: { color: TrainingColors.textPrimary, fontSize: 14, fontWeight: '700', marginTop: 1 },
+  scenarioTitleCompact: { fontSize: 13 },
   riskBadge: { borderRadius: 999, paddingHorizontal: 9, paddingVertical: 4, borderWidth: 1 },
   riskText: { fontSize: 9, textTransform: 'uppercase', letterSpacing: 0.8, fontWeight: '800' },
   riskTextLow: { color: TrainingColors.accentTeal },
@@ -659,6 +700,7 @@ const styles = StyleSheet.create({
     gap: 10,
     padding: 12,
   },
+  tipCardCompact: { padding: 10, gap: 8 },
   tipIcon: {
     width: 36,
     height: 36,
@@ -679,6 +721,7 @@ const styles = StyleSheet.create({
     gap: 10,
     padding: 12,
   },
+  learnCardCompact: { padding: 10, gap: 8 },
   learnIcon: {
     width: 40,
     height: 40,

@@ -1,10 +1,15 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useMemo, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { useAuth } from '@/features/auth/auth-context';
 import { askAssistant } from '@/features/training/api';
-import { clearTrainingLocalCache, LEARN_SCREEN_STORAGE_KEY } from '@/features/training/local-cache';
+import {
+  buildUserStorageKey,
+  clearTrainingLocalCache,
+  LEARN_SCREEN_STORAGE_KEY,
+} from '@/features/training/local-cache';
 import type { AttackType, DifficultyLevel } from '@/features/training/types';
 import { TrainingColors } from '@/features/training/ui-theme';
 
@@ -111,6 +116,7 @@ function mapLessonLevelToDifficulty(level: Lesson['level']): DifficultyLevel {
 }
 
 export default function LearnScreen() {
+  const { user } = useAuth();
   const [activeCat, setActiveCat] = useState<ActiveCategory>('Toate');
   const [openLesson, setOpenLesson] = useState<Lesson | null>(null);
   const [input, setInput] = useState('');
@@ -118,6 +124,10 @@ export default function LearnScreen() {
   const [isAsking, setIsAsking] = useState(false);
   const [lessonError, setLessonError] = useState<string | null>(null);
   const [isHydrated, setIsHydrated] = useState(false);
+  const storageKey = useMemo(
+    () => buildUserStorageKey(LEARN_SCREEN_STORAGE_KEY, user?.id),
+    [user?.id]
+  );
 
   const filtered = useMemo(
     () => (activeCat === 'Toate' ? lessons : lessons.filter((l) => l.category === activeCat)),
@@ -127,16 +137,24 @@ export default function LearnScreen() {
   useEffect(() => {
     let cancelled = false;
 
+    setActiveCat('Toate');
+    setOpenLesson(null);
+    setInput('');
+    setLessonMessages([]);
+    setIsAsking(false);
+    setLessonError(null);
+    setIsHydrated(false);
+
     const hydrate = async () => {
       try {
-        const raw = await AsyncStorage.getItem(LEARN_SCREEN_STORAGE_KEY);
+        const raw = await AsyncStorage.getItem(storageKey);
         if (!raw || cancelled) {
           return;
         }
 
         const parsed = JSON.parse(raw) as PersistedLearnState;
         if (typeof parsed.updatedAt !== 'number' || Date.now() - parsed.updatedAt > LEARN_STATE_TTL_MS) {
-          await AsyncStorage.removeItem(LEARN_SCREEN_STORAGE_KEY);
+          await AsyncStorage.removeItem(storageKey);
           return;
         }
 
@@ -167,7 +185,7 @@ export default function LearnScreen() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [storageKey]);
 
   useEffect(() => {
     if (!isHydrated) {
@@ -179,17 +197,18 @@ export default function LearnScreen() {
       lessonMessages: lessonMessages.slice(-LEARN_MESSAGES_MAX_ITEMS),
       updatedAt: Date.now(),
     };
-    void AsyncStorage.setItem(LEARN_SCREEN_STORAGE_KEY, JSON.stringify(stateToPersist));
-  }, [activeCat, isHydrated, lessonMessages, openLesson?.id]);
+    void AsyncStorage.setItem(storageKey, JSON.stringify(stateToPersist));
+  }, [activeCat, isHydrated, lessonMessages, openLesson?.id, storageKey]);
 
   const clearLocalCache = async () => {
-    await clearTrainingLocalCache();
+    await clearTrainingLocalCache(user?.id);
     setActiveCat('Toate');
     setOpenLesson(null);
     setInput('');
     setLessonMessages([]);
     setIsAsking(false);
     setLessonError(null);
+    Alert.alert('Cache șters', 'Datele locale pentru lecții au fost resetate.');
   };
 
   const openLessonModal = (lesson: Lesson) => {

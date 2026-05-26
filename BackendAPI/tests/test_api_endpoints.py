@@ -355,6 +355,14 @@ class ApiEndpointsTestCase(unittest.TestCase):
         self.assertEqual(me.status_code, 200)
         self.assertEqual(me.json()["email"], "tester@example.com")
 
+        refresh = self.client.post("/auth/refresh", headers={"Authorization": f"Bearer {access_token}"})
+        self.assertEqual(refresh.status_code, 200)
+        refreshed_token = refresh.json()["access_token"]
+
+        refreshed_me = self.client.get("/auth/me", headers={"Authorization": f"Bearer {refreshed_token}"})
+        self.assertEqual(refreshed_me.status_code, 200)
+        self.assertEqual(refreshed_me.json()["email"], "tester@example.com")
+
         unauthorized = self.client.get("/scenario/catalog")
         self.assertEqual(unauthorized.status_code, 401)
 

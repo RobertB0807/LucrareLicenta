@@ -63,6 +63,7 @@ alembic downgrade -1
 - `GET /health`
 - `POST /auth/register`
 - `POST /auth/login`
+- `POST /auth/refresh`
 - `GET /auth/me`
 - `POST /scenario/generate`
 - `POST /scenario/evaluate`

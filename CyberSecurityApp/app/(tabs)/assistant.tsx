@@ -1,11 +1,13 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useEffect, useMemo, useState } from 'react';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { useAuth } from '@/features/auth/auth-context';
 import { askAssistant } from '@/features/training/api';
 import {
   ASSISTANT_MESSAGES_STORAGE_KEY,
+  buildUserStorageKey,
   clearTrainingLocalCache,
 } from '@/features/training/local-cache';
 import { TrainingColors } from '@/features/training/ui-theme';
@@ -35,17 +37,27 @@ const suggestions = [
 ];
 
 export default function AssistantScreen() {
+  const { user } = useAuth();
   const [messages, setMessages] = useState<Msg[]>(defaultMessages);
   const [draft, setDraft] = useState('');
   const [thinking, setThinking] = useState(false);
   const [isHydrated, setIsHydrated] = useState(false);
+  const storageKey = useMemo(
+    () => buildUserStorageKey(ASSISTANT_MESSAGES_STORAGE_KEY, user?.id),
+    [user?.id]
+  );
 
   useEffect(() => {
     let cancelled = false;
 
+    setMessages(defaultMessages);
+    setDraft('');
+    setThinking(false);
+    setIsHydrated(false);
+
     const hydrate = async () => {
       try {
-        const raw = await AsyncStorage.getItem(ASSISTANT_MESSAGES_STORAGE_KEY);
+        const raw = await AsyncStorage.getItem(storageKey);
         if (!raw || cancelled) {
           return;
         }
@@ -68,7 +80,7 @@ export default function AssistantScreen() {
           return;
         }
 
-        await AsyncStorage.removeItem(ASSISTANT_MESSAGES_STORAGE_KEY);
+        await AsyncStorage.removeItem(storageKey);
       } catch {
         // Ignore local cache read errors.
       } finally {
@@ -82,7 +94,7 @@ export default function AssistantScreen() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [storageKey]);
 
   useEffect(() => {
     if (!isHydrated) {
@@ -93,14 +105,15 @@ export default function AssistantScreen() {
       messages: messages.slice(-ASSISTANT_MESSAGES_MAX_ITEMS),
       updatedAt: Date.now(),
     };
-    void AsyncStorage.setItem(ASSISTANT_MESSAGES_STORAGE_KEY, JSON.stringify(stateToPersist));
-  }, [isHydrated, messages]);
+    void AsyncStorage.setItem(storageKey, JSON.stringify(stateToPersist));
+  }, [isHydrated, messages, storageKey]);
 
   const clearLocalCache = async () => {
-    await clearTrainingLocalCache();
+    await clearTrainingLocalCache(user?.id);
     setMessages(defaultMessages);
     setDraft('');
     setThinking(false);
+    Alert.alert('Cache șters', 'Datele locale ale asistentului au fost resetate.');
   };
 
   const send = async (text: string) => {
