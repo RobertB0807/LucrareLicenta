@@ -60,7 +60,7 @@ Backend features currently implemented:
 - per-attack statistics
 - recommendation logic for the next scenario
 - session event history (`recent_events`) with timestamp and tone metadata
-- persistence for users, sessions, attempts and events via SQLAlchemy (SQLite default, PostgreSQL-ready via `DATABASE_URL`)
+- persistence for users, sessions, attempts and events via SQLAlchemy (PostgreSQL default via `DATABASE_URL` or `POSTGRES_*`; SQLite opt-in)
 - startup DB bootstrap now applies Alembic migrations (`upgrade head`) when available, with a safe ORM `create_all` fallback if Alembic is missing
 - scenario evaluation is restart-safe: when in-memory scenario context is missing, backend restores rule context from persisted `scenario_attempts` data
 
@@ -325,37 +325,31 @@ Current integration level:
 - `CyberSecurityApp/package.json` (AsyncStorage dependency)
 
 ## Remaining Tasks / Suggested Roadmap
-Priority order:
+Priority order (next steps at top):
 
-### 1. ~~Integrate frontend authentication with backend-protected API~~
-Status: **COMPLETE**.
+### 1. Add LLM integration
+When ready:
+- use an LLM for generating scenario text
+- validate the output shape strictly (match `ScenarioTemplate` / `ScenarioRule`)
+- keep a rule-based fallback if AI output fails
+- expose provider/model via env (e.g., `LLM_API_KEY`, `LLM_MODEL`, `LLM_BASE_URL`)
 
-Implemented:
-- login/register screens with cyber-themed UI and Romanian labels
-- `AuthProvider` context with JWT token persistence in AsyncStorage
-- automatic token injection on all protected API calls via `setAuthTokenAccessor()`
-- auth gate in `(tabs)/index.tsx` redirecting unauthenticated users to `/login`
-- per-user training session storage (isolated by user ID)
-- personalized dashboard greeting + logout button
-- token validation on app startup via `GET /auth/me`
-- silent refresh before JWT expiry via `POST /auth/refresh`
+### 2. Full responsive UI pass
+Focus:
+- define breakpoints + spacing/typography scale in theme
+- convert fixed sizes to flex/percent and ensure text wraps
+- adaptive grids for dashboard/scenario cards based on screen width
+- SafeAreaView + KeyboardAvoidingView on auth/chat screens
 
-### 2. Add persistence layer hardening
-Status: implemented with SQLAlchemy + Alembic + user/session ownership, PostgreSQL-ready DB config.
+### 3. Add more UI polish
+Possible improvements:
+- compact layout tuning now applied to dashboard/scenarios/analytics; continue with animations and background pattern
+- cyber background pattern / grid
+- animated transitions for cards
+- small icons per attack type
+- richer scenario visuals
 
-Current approach:
-- dual-write mode (existing in-memory flow + DB writes)
-- existing `/scenario/generate` and `/scenario/evaluate` contracts preserved
-- persisted reads available via `/session/{session_id}`, `/session/{session_id}/events`, and `/session/{session_id}/trends`
-- when a known `session_id` is reused after restart, in-memory state is restored from persisted snapshot before new updates
-- Alembic migration tooling is now in place and wired in startup flow
-- session progress reads now use persisted state as source of truth (no in-memory progress cache)
-
-Next persistence step:
-- reduce remaining transient in-memory dependencies (primarily scenario context lifecycle) where practical
-- expand repository-level tests for trend/event query behavior and pagination edge cases
-
-### 3. Expand persistent frontend continuity (AsyncStorage)
+### 4. Expand persistent frontend continuity (AsyncStorage)
 Current baseline:
 - training session state, assistant chat, and learn state are persisted/restored
 - training session state is now scoped per-user (storage key includes user ID)
@@ -367,22 +361,7 @@ Current baseline:
 Next step:
 - add selective clear controls (e.g., clear only assistant history vs full training cache)
 
-### 4. Add more UI polish
-Possible improvements:
-- compact layout tuning now applied to dashboard/scenarios/analytics; continue with animations and background pattern
-- cyber background pattern / grid
-- animated transitions for cards
-- small icons per attack type
-- richer scenario visuals
-- better mobile spacing for smaller screens
-
-### 5. Extract reusable hooks or subcomponents further
-If needed:
-- split `index.tsx` even more
-- move the scenario body into a dedicated component
-- move the stats section into a dashboard component
-
-### 6. Extend analytics with persisted trends and aggregate insights
+### 5. Extend analytics with persisted trends and aggregate insights
 Current baseline:
 - analytics now reads persisted snapshot + paginated events + persisted trends for active session
 - analytics supports persisted attack-type/date-range filters and load-more activity pagination
@@ -393,11 +372,27 @@ Next:
 - add dedicated per-attack trend lines over time (multiple lines, one per attack type)
 - add optional compare mode between date ranges (last 7d vs previous 7d)
 
-### 7. Add LLM integration
-When ready:
-- use an LLM for generating scenario text
-- validate the output shape strictly
-- keep a rule-based fallback if AI output fails
+### 6. Add persistence layer hardening
+Status: implemented with SQLAlchemy + Alembic + user/session ownership, PostgreSQL-first DB config.
+
+Current approach:
+- dual-write mode (existing in-memory flow + DB writes)
+- existing `/scenario/generate` and `/scenario/evaluate` contracts preserved
+- persisted reads available via `/session/{session_id}`, `/session/{session_id}/events`, and `/session/{session_id}/trends`
+- when a known `session_id` is reused after restart, in-memory state is restored from persisted snapshot before new updates
+- Alembic migration tooling is now in place and wired in startup flow
+- PostgreSQL is now the default (via `POSTGRES_*` or `DATABASE_URL`); SQLite is opt-in only
+- session progress reads now use persisted state as source of truth (no in-memory progress cache)
+
+Next persistence step:
+- reduce remaining transient in-memory dependencies (primarily scenario context lifecycle) where practical
+- expand repository-level tests for trend/event query behavior and pagination edge cases
+
+### 7. Extract reusable hooks or subcomponents further
+If needed:
+- split `index.tsx` even more
+- move the scenario body into a dedicated component
+- move the stats section into a dashboard component
 
 ### 8. Add tests
 Recommended:
@@ -410,6 +405,24 @@ Recommended:
 - backend repository tests now cover persistence timeline filters and pagination edge cases
 - unit tests for session recommendation and score logic
 - basic UI smoke tests if needed
+
+### 9. ~~Integrate frontend authentication with backend-protected API~~
+Status: **COMPLETE**.
+
+Implemented:
+- login/register screens with cyber-themed UI and Romanian labels
+- `AuthProvider` context with JWT token persistence in AsyncStorage
+- automatic token injection on all protected API calls via `setAuthTokenAccessor()`
+- auth gate in `(tabs)/index.tsx` redirecting unauthenticated users to `/login`
+- per-user training session storage (isolated by user ID)
+- personalized dashboard greeting + logout button
+- token validation on app startup via `GET /auth/me`
+- silent refresh before JWT expiry via `POST /auth/refresh`
+
+### Recent fixes (2026-05-29)
+- Switched backend default DB config to PostgreSQL using `POSTGRES_*` (or `DATABASE_URL`), with SQLite available only when explicitly set.
+- Alembic now falls back to `DATABASE_URL` when `alembic.ini` has an empty `sqlalchemy.url`, preventing migration failures.
+- README updated with Postgres-first defaults and explicit SQLite opt-in instructions.
 
 ### Recent fixes (2026-05-26)
 - Scoped assistant/learn/chat/feedback AsyncStorage keys per-user and added confirmation alerts on cache clears.
@@ -437,6 +450,7 @@ Recommended:
 ```bash
 cd /Users/robertbalasoiu/Robert/Licenta2026/LucrareLicenta/BackendAPI
 source .venv/bin/activate
+export DATABASE_URL='postgresql+psycopg://user:pass@localhost:5432/cyber_training'
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
@@ -457,9 +471,10 @@ npx expo start
 Focus on incremental improvements only.
 
 Good next tasks:
-- add selective clear controls for cache (assistant-only / learn-only / full)
+- add LLM integration with strict schema validation + fallback
+- finish a full responsive UI pass across all screens
 - add compare-mode analytics (last 7d vs previous 7d) and export/share
-- iterate on UI polish and LLM integration with fallback
+- add selective clear controls for cache (assistant-only / learn-only / full)
 - consider migrating token storage from AsyncStorage to `expo-secure-store` for production
 
 Avoid large rewrites unless necessary.

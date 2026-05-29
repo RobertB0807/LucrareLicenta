@@ -1,13 +1,24 @@
 from __future__ import annotations
 
 import os
+from getpass import getuser
 from pathlib import Path
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_SQLITE_DATABASE_URL = f"sqlite:///{BASE_DIR / 'training_data.db'}"
+
+
+def build_default_postgres_url() -> str:
+    default_user = getuser()
+    user = os.getenv("POSTGRES_USER", default_user)
+    password = os.getenv("POSTGRES_PASSWORD", "")
+    host = os.getenv("POSTGRES_HOST", "localhost")
+    port = os.getenv("POSTGRES_PORT", "5432")
+    database = os.getenv("POSTGRES_DB", user)
+    auth = f"{user}:{password}@" if password else f"{user}@"
+    return f"postgresql+psycopg://{auth}{host}:{port}/{database}"
 
 
 def normalize_database_url(raw_url: str) -> str:
@@ -19,7 +30,7 @@ def normalize_database_url(raw_url: str) -> str:
 
 
 DATABASE_URL = normalize_database_url(
-    os.getenv("DATABASE_URL", DEFAULT_SQLITE_DATABASE_URL).strip()
+    os.getenv("DATABASE_URL", build_default_postgres_url()).strip()
 )
 
 

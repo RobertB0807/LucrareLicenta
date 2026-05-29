@@ -18,9 +18,13 @@ uvicorn main:app --reload --port 8000
 
 La pornire, backend-ul initializeaza automat baza de date configurata prin `DATABASE_URL`.
 
-Implicit (daca `DATABASE_URL` nu este setat), foloseste SQLite local:
+Implicit (daca `DATABASE_URL` nu este setat), foloseste PostgreSQL local:
 
-- `BackendAPI/training_data.db`
+- user: `POSTGRES_USER` (implicit utilizatorul local)
+- parola: `POSTGRES_PASSWORD` (implicit gol)
+- host: `POSTGRES_HOST` (implicit `localhost`)
+- port: `POSTGRES_PORT` (implicit `5432`)
+- baza: `POSTGRES_DB` (implicit acelasi cu user-ul)
 
 Exemplu PostgreSQL pentru mediu shared/prod:
 
@@ -29,7 +33,15 @@ export DATABASE_URL='postgresql+psycopg://app_user:app_pass@localhost:5432/cyber
 uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
+Daca primesti erori cu user/baza inexistente, creeaza-le in Postgres sau seteaza explicit `POSTGRES_USER`/`POSTGRES_DB`.
+
 Compatibilitate: URL-urile `postgres://` si `postgresql://` sunt normalizate automat la driver-ul `psycopg`.
+
+Pentru SQLite (optional), seteaza explicit:
+
+```bash
+export DATABASE_URL='sqlite:///BackendAPI/training_data.db'
+```
 
 ### Rulare pentru telefon fizic
 
