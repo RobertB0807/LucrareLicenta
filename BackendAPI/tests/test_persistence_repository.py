@@ -208,6 +208,36 @@ class PersistenceRepositoryTestCase(unittest.TestCase):
         self.assertTrue(persistence_repository.ensure_session_owner("owned-session", user["id"]))
         self.assertFalse(persistence_repository.ensure_session_owner("owned-session", "different-user"))
 
+    def test_firebase_user_mapping_creates_and_links_local_user(self) -> None:
+        firebase_user = persistence_repository.create_or_update_firebase_user(
+            firebase_uid="firebase-user-123",
+            email="firebase@example.com",
+            display_name="Firebase User",
+        )
+        self.assertEqual(firebase_user["firebase_uid"], "firebase-user-123")
+        self.assertEqual(firebase_user["email"], "firebase@example.com")
+
+        updated = persistence_repository.create_or_update_firebase_user(
+            firebase_uid="firebase-user-123",
+            email="firebase@example.com",
+            display_name="Updated Name",
+        )
+        self.assertEqual(updated["id"], firebase_user["id"])
+        self.assertEqual(updated["display_name"], "Updated Name")
+
+        legacy_user = persistence_repository.create_user(
+            email="legacy-link@example.com",
+            password_hash="hashed-value",
+            display_name="Legacy",
+        )
+        linked = persistence_repository.create_or_update_firebase_user(
+            firebase_uid="firebase-linked-456",
+            email="legacy-link@example.com",
+            display_name="Linked",
+        )
+        self.assertEqual(linked["id"], legacy_user["id"])
+        self.assertEqual(linked["firebase_uid"], "firebase-linked-456")
+
     def test_learning_profile_attempts_are_persisted_and_updated(self) -> None:
         user = persistence_repository.create_user(
             email="learner@example.com",

@@ -18,7 +18,7 @@ import { TrainingColors } from '@/features/training/ui-theme';
 
 export default function RegisterScreen() {
   const router = useRouter();
-  const { register } = useAuth();
+  const { register, logout } = useAuth();
 
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
@@ -51,7 +51,11 @@ export default function RegisterScreen() {
 
     try {
       await register(email.trim().toLowerCase(), password, displayName.trim());
-      router.replace('/(tabs)/dashboard' as const);
+      await logout();
+      router.replace({
+        pathname: '/login',
+        params: { registered: '1' },
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Eroare la crearea contului.');
     } finally {

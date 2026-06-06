@@ -14,6 +14,7 @@ The goal is educational: users interact with scenarios, choose a response, recei
 - Frontend: React Native + Expo
 - Backend: FastAPI (Python)
 - AI: rule-based assistant endpoint implemented, LLM integration planned later
+- Auth: Firebase Authentication on the frontend, Firebase token verification on the backend, local user/profile mapping in PostgreSQL or SQLite
 
 ## Current State
 The project is already functional as a vertical MVP slice.
@@ -22,6 +23,7 @@ The project is already functional as a vertical MVP slice.
 Backend lives in `BackendAPI/` and currently includes:
 - `main.py` for API routing and auth middleware
 - `auth_service.py` for password hashing + JWT token handling
+- `firebase_auth_service.py` for Firebase Admin verification of ID tokens
 - `training_service.py` for session orchestration, scoring, recommendation, and event timeline
 - `db.py` for environment-driven SQLAlchemy engine/session initialization
 - `persistence_models.py` for SQLAlchemy ORM models
@@ -46,6 +48,7 @@ Backend features currently implemented:
 - `GET /session/{session_id}/trends`
 - `GET /session/{session_id}/trends/aggregate`
 - protected API routes via Bearer JWT auth middleware (all routes except `health` + auth register/login)
+- protected API routes now accept either local JWTs or Firebase ID tokens
 - per-user session ownership enforcement for scenario/session reads and writes
 - endpoint-level sliding-window rate limiting:
   - `/scenario/generate`: 30 requests / 60 seconds / client
@@ -63,6 +66,9 @@ Backend features currently implemented:
 - persistence for users, sessions, attempts and events via SQLAlchemy (PostgreSQL default via `DATABASE_URL` or `POSTGRES_*`; SQLite opt-in)
 - startup DB bootstrap now applies Alembic migrations (`upgrade head`) when available, with a safe ORM `create_all` fallback if Alembic is missing
 - scenario evaluation is restart-safe: when in-memory scenario context is missing, backend restores rule context from persisted `scenario_attempts` data
+- Firebase-linked users are stored with `firebase_uid` so a Firebase account maps to one local user record
+- `/auth/me` now returns explicit CORS-safe errors for missing/invalid tokens and backend mapping conflicts
+- `BackendAPI/.env` is loaded automatically through `python-dotenv`
 
 ### Frontend status
 Frontend lives in `CyberSecurityApp/`.
@@ -86,17 +92,19 @@ Navigation updates:
 The existing `features/training/*` architecture is still present and reusable.
 
 Auth feature module (`features/auth/`):
-- `auth-api.ts` — API client for auth endpoints (`/auth/login`, `/auth/register`, `/auth/refresh`, `/auth/me`) with multi-candidate base URL fallback
-- `auth-context.tsx` — React context provider managing login/register/logout, AsyncStorage persistence (`auth-session-v1` key), token validation on hydration via `GET /auth/me`, silent refresh scheduling via `/auth/refresh`, and automatic token accessor wiring for the training API client
+- `auth-api.ts` — API client for auth endpoints and Firebase Auth REST flows; falls back to backend auth when Firebase is not configured
+- `auth-context.tsx` — React context provider managing login/register/logout, secure session persistence, token validation on hydration via `GET /auth/me`, silent refresh scheduling, and automatic token accessor wiring for the training API client
+- `secure-auth-storage.ts` — SecureStore-backed auth persistence with AsyncStorage fallback when SecureStore is unavailable
 
 Current integration level:
-- frontend auth is fully wired: login/register screens, JWT token persistence, automatic token injection on all protected API calls
+- frontend auth is fully wired: login/register screens, Firebase Auth when configured, JWT token persistence, automatic token injection on all protected API calls
 - chat/feedback flow is now wired to real session continuity (`session_id` carried through routes)
 - analytics now consumes persisted backend session snapshot + recent events when a session is active
 - assistant and learn tabs now use real backend AI responses via `POST /assistant/ask`
 - dashboard and scenarios now consume backend scenario catalog (`GET /scenario/catalog`) through shared `useTrainingSession` state
 - dashboard header shows personalized greeting ("Bună, {displayName}") and logout button
 - local continuity is enabled via AsyncStorage for training session state, assistant/learn conversations, and in-progress chat/feedback continuity
+- auth session persistence now prefers `expo-secure-store` on supported platforms, with AsyncStorage fallback
 - local continuity keys for training, assistant, learn, chat, and feedback are scoped per-user (storage key includes user ID) so each account has isolated training data
 - silent auth refresh is scheduled before JWT expiry to reduce session drops
 - protected API calls in `useTrainingSession` are gated on `isAuthenticated` — no backend calls are made before login
@@ -230,6 +238,17 @@ Current integration level:
   - user accounts persisted in DB (`users` table)
   - training sessions now support per-user ownership (`owner_user_id`) with ownership checks on protected session/scenario paths
   - password hashing uses scrypt-based hashes in `auth_service.py`
+- Added Firebase Auth migration:
+  - frontend login/register use Firebase Auth REST when `EXPO_PUBLIC_FIREBASE_API_KEY` is set
+  - backend verifies Firebase ID tokens with `firebase-admin`
+  - backend creates/links local users via `firebase_uid`
+  - register flow now returns to the login screen after account creation instead of staying signed in
+  - backend `/auth/me` now surfaces validation conflicts with explicit `409` instead of masking them as generic auth errors
+- Added Firebase / env / run-script support:
+  - backend loads `BackendAPI/.env` via `python-dotenv`
+  - `run-all.sh` now validates `.env`, `.env.local`, `.venv`, and `node_modules` before startup
+  - `run-all.sh` starts backend on `127.0.0.1:8000` with `--lifespan off` and waits for `/health`
+  - Expo package versions were aligned to the installed SDK
 - Added Alembic migration `20260513_0003`:
   - creates `users` table
   - adds `owner_user_id` column + index to `training_sessions`
@@ -444,21 +463,21 @@ Implemented:
 - Prefer small focused components over large screens
 - Preserve the API contract between frontend and backend
 - Auth state lives in `AuthProvider`; training state in `TrainingSessionProvider` (auth wraps training)
+- Auth state now prefers Firebase-backed sessions when Firebase is configured; otherwise the backend JWT flow remains available as a fallback path
 
 ## Run Instructions
 ### Backend
 ```bash
 cd /Users/robertbalasoiu/Robert/Licenta2026/LucrareLicenta/BackendAPI
 source .venv/bin/activate
-export DATABASE_URL='postgresql+psycopg://user:pass@localhost:5432/cyber_training'
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+uvicorn main:app --host 127.0.0.1 --port 8000 --lifespan off
 ```
 
 Backend tests:
 ```bash
 cd /Users/robertbalasoiu/Robert/Licenta2026/LucrareLicenta/BackendAPI
 source .venv/bin/activate
-python -m unittest discover -s tests -p "test_*.py" -q
+./.venv/bin/python -m unittest discover -s tests -p "test_*.py" -q
 ```
 
 ### Frontend
@@ -471,11 +490,15 @@ npx expo start
 Focus on incremental improvements only.
 
 Good next tasks:
-- add LLM integration with strict schema validation + fallback
+- make scenario generation deterministic from the catalog card selection (`template_id`), not only by attack type/difficulty
+- persist and restore the full generated scenario payload from the backend, including options, red flags, and channel
+- make `/scenario/evaluate` idempotent and block duplicate scoring for the same `scenario_id`
+- add a real session history screen with backend-backed session list and latest-session resume
+- harden auth/session handling further, especially deep links and stale-session cleanup
+- add LLM integration with strict schema validation + fallback once the deterministic scenario flow is stable
 - finish a full responsive UI pass across all screens
-- add compare-mode analytics (last 7d vs previous 7d) and export/share
-- add selective clear controls for cache (assistant-only / learn-only / full)
-- consider migrating token storage from AsyncStorage to `expo-secure-store` for production
+- add compare-mode analytics, export/share, and richer trend visualizations
+- add selective clear controls for cache if the current broad reset becomes too blunt
 
 Avoid large rewrites unless necessary.
 Preserve the current modular structure and API contract.

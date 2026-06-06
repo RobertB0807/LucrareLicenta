@@ -1,8 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -18,7 +19,8 @@ import { TrainingColors } from '@/features/training/ui-theme';
 
 export default function LoginScreen() {
   const router = useRouter();
-  const { login } = useAuth();
+  const { registered } = useLocalSearchParams<{ registered?: string }>();
+  const { login, resetPassword } = useAuth();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -41,6 +43,25 @@ export default function LoginScreen() {
       router.replace('/(tabs)/dashboard' as const);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Eroare la autentificare.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handlePasswordReset = async () => {
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail) {
+      setError('Introdu emailul contului pentru resetarea parolei.');
+      return;
+    }
+
+    setError(null);
+    setIsSubmitting(true);
+    try {
+      await resetPassword(normalizedEmail);
+      Alert.alert('Email trimis', 'Verifică inbox-ul pentru link-ul de resetare a parolei.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Nu am putut trimite emailul de resetare.');
     } finally {
       setIsSubmitting(false);
     }
@@ -76,6 +97,13 @@ export default function LoginScreen() {
               </View>
             )}
 
+            {registered === '1' && !error ? (
+              <View style={styles.successBanner}>
+                <Ionicons name="checkmark-circle" size={18} color={TrainingColors.accentTeal} />
+                <Text style={styles.successText}>Cont creat. Autentifică-te cu emailul și parola ta.</Text>
+              </View>
+            ) : null}
+
             <View style={styles.inputGroup}>
               <Text style={styles.label}>Email</Text>
               <View style={styles.inputWrapper}>
@@ -96,7 +124,12 @@ export default function LoginScreen() {
             </View>
 
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>Parolă</Text>
+              <View style={styles.passwordLabelRow}>
+                <Text style={[styles.label, styles.passwordLabel]}>Parolă</Text>
+                <Pressable onPress={handlePasswordReset} disabled={isSubmitting}>
+                  <Text style={styles.resetLink}>Ai uitat parola?</Text>
+                </Pressable>
+              </View>
               <View style={styles.inputWrapper}>
                 <Ionicons name="lock-closed-outline" size={18} color={TrainingColors.textMuted} style={styles.inputIcon} />
                 <TextInput
@@ -220,6 +253,21 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '500',
   },
+  successBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: TrainingColors.successBg,
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 16,
+    gap: 8,
+  },
+  successText: {
+    flex: 1,
+    color: TrainingColors.accentTeal,
+    fontSize: 13,
+    fontWeight: '600',
+  },
 
   // Inputs
   inputGroup: {
@@ -230,6 +278,20 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: TrainingColors.textSecondary,
     marginBottom: 8,
+  },
+  passwordLabelRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  passwordLabel: {
+    marginBottom: 0,
+  },
+  resetLink: {
+    color: TrainingColors.accentBlue,
+    fontSize: 12,
+    fontWeight: '700',
   },
   inputWrapper: {
     flexDirection: 'row',

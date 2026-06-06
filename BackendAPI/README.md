@@ -7,7 +7,7 @@ Backend minimal pentru MVP-ul aplicatiei de simulare phishing.
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+python3 -m pip install -r requirements.txt
 ```
 
 ## 2. Rulare server
@@ -42,6 +42,31 @@ Pentru SQLite (optional), seteaza explicit:
 ```bash
 export DATABASE_URL='sqlite:///BackendAPI/training_data.db'
 ```
+
+### Firebase Auth optional
+
+Backend-ul accepta in continuare JWT-urile locale existente, dar poate valida si Firebase ID tokens.
+Pentru Firebase, instaleaza dependintele din `requirements.txt`, apoi creeaza `BackendAPI/.env`
+dupa modelul `BackendAPI/.env.example`. Backend-ul incarca automat acest fisier la pornire.
+
+Configureaza una dintre variante:
+
+```env
+# Varianta recomandata local: fisier service account
+GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/firebase-service-account.json
+FIREBASE_PROJECT_ID=your-firebase-project-id
+
+# Alternativ: JSON intr-o variabila de mediu single-line
+FIREBASE_SERVICE_ACCOUNT_JSON={"type":"service_account",...}
+```
+
+Cand Firebase este configurat, clientul trimite:
+
+```http
+Authorization: Bearer <firebase_id_token>
+```
+
+FastAPI valideaza token-ul si creeaza/leaga automat utilizatorul local prin `firebase_uid`.
 
 ### Rulare pentru telefon fizic
 
@@ -97,7 +122,7 @@ Authorization: Bearer <access_token>
 ## 4. Rulare teste backend
 
 ```bash
-python -m unittest discover -s tests -p "test_*.py" -q
+python3 -m unittest discover -s tests -p "test_*.py" -q
 ```
 
 ## 5. Security hardening (MVP)

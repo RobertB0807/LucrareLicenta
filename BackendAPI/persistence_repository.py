@@ -116,10 +116,63 @@ def create_user(*, email: str, password_hash: str, display_name: str) -> dict[st
         db.flush()
         return {
             "id": user.id,
+            "firebase_uid": user.firebase_uid,
             "email": user.email,
             "display_name": user.display_name,
             "is_active": user.is_active,
             "created_at": user.created_at.isoformat() if user.created_at else None,
+        }
+
+
+def create_or_update_firebase_user(
+    *,
+    firebase_uid: str,
+    email: str,
+    display_name: str | None = None,
+) -> dict[str, Any]:
+    normalized_uid = firebase_uid.strip()
+    normalized_email = email.strip().lower()
+    resolved_display_name = (
+        display_name.strip()
+        if display_name and display_name.strip()
+        else normalized_email.split("@", maxsplit=1)[0]
+    )
+
+    if not normalized_uid:
+        raise ValueError("Firebase UID is required")
+    if not normalized_email:
+        raise ValueError("Firebase email is required")
+
+    with session_scope() as db:
+        user = db.scalar(select(UserORM).where(UserORM.firebase_uid == normalized_uid))
+        if user is None:
+            user = db.scalar(select(UserORM).where(UserORM.email == normalized_email))
+            if user is not None and user.firebase_uid not in (None, normalized_uid):
+                raise ValueError("Email is already linked to another Firebase account")
+
+        if user is None:
+            user = UserORM(
+                id=str(uuid4()),
+                firebase_uid=normalized_uid,
+                email=normalized_email,
+                password_hash="firebase-auth",
+                display_name=resolved_display_name,
+                is_active=True,
+            )
+            db.add(user)
+        else:
+            user.firebase_uid = normalized_uid
+            user.email = normalized_email
+            user.display_name = resolved_display_name
+            user.updated_at = utc_now()
+
+        db.flush()
+        return {
+            "id": user.id,
+            "firebase_uid": user.firebase_uid,
+            "email": user.email,
+            "display_name": user.display_name,
+            "is_active": user.is_active,
         }
 
 
@@ -132,6 +185,7 @@ def fetch_user_by_email(email: str) -> dict[str, Any] | None:
             return None
         return {
             "id": row.id,
+            "firebase_uid": row.firebase_uid,
             "email": row.email,
             "password_hash": row.password_hash,
             "display_name": row.display_name,
@@ -149,6 +203,7 @@ def fetch_user_by_id(user_id: str) -> dict[str, Any] | None:
             return None
         return {
             "id": row.id,
+            "firebase_uid": row.firebase_uid,
             "email": row.email,
             "display_name": row.display_name,
             "is_active": row.is_active,

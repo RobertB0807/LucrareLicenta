@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, NonNegativeInt, StringConstraints
 from jwt import InvalidTokenError
+from sqlalchemy.exc import SQLAlchemyError
 
 from assistant_service import build_assistant_answer
 from auth_service import (
@@ -22,7 +23,9 @@ from auth_service import (
     verify_password,
 )
 from db import init_db
+from firebase_auth_service import verify_firebase_id_token
 from persistence_repository import (
+    create_or_update_firebase_user,
     create_user,
     ensure_session_owner,
     fetch_scenario_session_owner,
@@ -214,6 +217,16 @@ def require_authenticated_user(request: Request) -> AuthenticatedUser:
     return user
 
 
+def cors_headers_for(request: Request) -> dict[str, str]:
+    origin = request.headers.get("origin") or "*"
+    requested_headers = request.headers.get("access-control-request-headers") or "*"
+    return {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Methods": "*",
+        "Access-Control-Allow-Headers": requested_headers,
+    }
+
+
 @app.middleware("http")
 async def enforce_rate_limits(request: Request, call_next):
     if request.method == "OPTIONS":
@@ -224,7 +237,10 @@ async def enforce_rate_limits(request: Request, call_next):
         return JSONResponse(
             status_code=429,
             content={"detail": "Rate limit exceeded. Try again later."},
-            headers={"Retry-After": str(retry_after)},
+            headers={
+                "Retry-After": str(retry_after),
+                **cors_headers_for(request),
+            },
         )
     return await call_next(request)
 
@@ -239,18 +255,41 @@ async def enforce_authentication(request: Request, call_next):
 
     authorization = request.headers.get("authorization", "")
     if not authorization.startswith("Bearer "):
-        return JSONResponse(status_code=401, content={"detail": "Authentication required"})
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Authentication required"},
+            headers=cors_headers_for(request),
+        )
 
     token = authorization.removeprefix("Bearer ").strip()
     if not token:
-        return JSONResponse(status_code=401, content={"detail": "Authentication required"})
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Authentication required"},
+            headers=cors_headers_for(request),
+        )
 
     try:
-        payload = decode_access_token(token)
-        subject = payload.get("sub")
-        if not isinstance(subject, str) or not subject:
-            raise InvalidTokenError("Missing token subject")
-        user_data = fetch_user_by_id(subject)
+        user_data = None
+        firebase_identity = None
+        try:
+            firebase_identity = verify_firebase_id_token(token)
+        except InvalidTokenError:
+            firebase_identity = None
+
+        if firebase_identity is not None:
+            user_data = create_or_update_firebase_user(
+                firebase_uid=firebase_identity.uid,
+                email=firebase_identity.email,
+                display_name=firebase_identity.display_name,
+            )
+        else:
+            payload = decode_access_token(token)
+            subject = payload.get("sub")
+            if not isinstance(subject, str) or not subject:
+                raise InvalidTokenError("Missing token subject")
+            user_data = fetch_user_by_id(subject)
+
         if user_data is None or not user_data.get("is_active", False):
             raise InvalidTokenError("User not found")
 
@@ -260,8 +299,18 @@ async def enforce_authentication(request: Request, call_next):
             display_name=user_data["display_name"],
             is_active=bool(user_data["is_active"]),
         )
-    except InvalidTokenError:
-        return JSONResponse(status_code=401, content={"detail": "Invalid authentication token"})
+    except ValueError as exc:
+        return JSONResponse(
+            status_code=409,
+            content={"detail": str(exc)},
+            headers=cors_headers_for(request),
+        )
+    except (InvalidTokenError, SQLAlchemyError):
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Invalid authentication token"},
+            headers=cors_headers_for(request),
+        )
 
     return await call_next(request)
 

@@ -47,6 +47,7 @@ class UserORM(Base):
     __tablename__ = "users"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    firebase_uid: Mapped[str | None] = mapped_column(String(128), unique=True, index=True, nullable=True)
     email: Mapped[str] = mapped_column(String(254), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(Text)
     display_name: Mapped[str] = mapped_column(String(64))

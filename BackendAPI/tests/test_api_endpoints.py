@@ -366,6 +366,39 @@ class ApiEndpointsTestCase(unittest.TestCase):
         unauthorized = self.client.get("/scenario/catalog")
         self.assertEqual(unauthorized.status_code, 401)
 
+    def test_auth_error_responses_include_cors_headers(self) -> None:
+        response = self.client.get(
+            "/auth/me",
+            headers={"Origin": "http://localhost:8081"},
+        )
+        self.assertEqual(response.status_code, 401)
+        self.assertIn("access-control-allow-origin", response.headers)
+        self.assertIn(response.headers["access-control-allow-origin"], {"*", "http://localhost:8081"})
+
+    def test_firebase_user_mapping_error_includes_cors_headers(self) -> None:
+        class StubFirebaseIdentity:
+            uid = "firebase-conflict"
+            email = "conflict@example.com"
+            display_name = "Conflict"
+
+        original_verify = main.verify_firebase_id_token
+        original_create_or_update = main.create_or_update_firebase_user
+        main.verify_firebase_id_token = lambda _: StubFirebaseIdentity()
+        main.create_or_update_firebase_user = lambda **_: (_ for _ in ()).throw(ValueError("conflict"))
+        self.addCleanup(setattr, main, "verify_firebase_id_token", original_verify)
+        self.addCleanup(setattr, main, "create_or_update_firebase_user", original_create_or_update)
+
+        response = self.client.get(
+            "/auth/me",
+            headers={
+                "Origin": "http://localhost:8081",
+                "Authorization": "Bearer firebase-token",
+            },
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("access-control-allow-origin", response.headers)
+        self.assertEqual(response.json()["detail"], "conflict")
+
     def test_session_ownership_blocks_cross_user_access(self) -> None:
         first = self.client.post(
             "/scenario/generate",
