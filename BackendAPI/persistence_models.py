@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Float, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db import Base
@@ -16,6 +16,9 @@ class TrainingSessionORM(Base):
     __tablename__ = "training_sessions"
 
     session_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True, index=True
+    )
     total_score: Mapped[int] = mapped_column(Integer, default=0)
     total_attempts: Mapped[int] = mapped_column(Integer, default=0)
     total_correct: Mapped[int] = mapped_column(Integer, default=0)
@@ -37,6 +40,59 @@ class TrainingSessionORM(Base):
         back_populates="session",
         cascade="all, delete-orphan",
     )
+    owner: Mapped["UserORM | None"] = relationship(back_populates="sessions")
+
+
+class UserORM(Base):
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    email: Mapped[str] = mapped_column(String(254), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(Text)
+    display_name: Mapped[str] = mapped_column(String(64))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+    sessions: Mapped[list[TrainingSessionORM]] = relationship(back_populates="owner")
+    mastery_profiles: Mapped[list["UserLearningProfileORM"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+
+
+class UserLearningProfileORM(Base):
+    __tablename__ = "user_learning_profiles"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "attack_type",
+            "difficulty",
+            name="uq_user_learning_profiles_user_attack_difficulty",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    attack_type: Mapped[str] = mapped_column(String(32))
+    difficulty: Mapped[str] = mapped_column(String(16))
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    correct: Mapped[int] = mapped_column(Integer, default=0)
+    mastery_score: Mapped[float] = mapped_column(Float, default=50.0)
+    last_result_correct: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+    user: Mapped["UserORM"] = relationship(back_populates="mastery_profiles")
 
 
 class ScenarioAttemptORM(Base):

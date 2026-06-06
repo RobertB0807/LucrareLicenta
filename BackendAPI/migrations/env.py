@@ -31,7 +31,8 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     section = config.get_section(config.config_ini_section, {})
-    section["sqlalchemy.url"] = section.get("sqlalchemy.url", DATABASE_URL)
+    if not section.get("sqlalchemy.url"):
+        section["sqlalchemy.url"] = DATABASE_URL
 
     connectable = engine_from_config(
         section,

@@ -1,13 +1,25 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useEffect, useMemo, useState } from 'react';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { useAuth } from '@/features/auth/auth-context';
 import { askAssistant } from '@/features/training/api';
+import {
+  ASSISTANT_MESSAGES_STORAGE_KEY,
+  buildUserStorageKey,
+  clearTrainingLocalCache,
+} from '@/features/training/local-cache';
 import { TrainingColors } from '@/features/training/ui-theme';
 
 type Msg = { id: string; role: 'user' | 'assistant'; text: string };
-const ASSISTANT_MESSAGES_STORAGE_KEY = 'assistant-messages-v1';
+const ASSISTANT_MESSAGES_TTL_MS = 1000 * 60 * 60 * 24 * 7;
+const ASSISTANT_MESSAGES_MAX_ITEMS = 40;
+
+type PersistedAssistantMessages = {
+  messages: Msg[];
+  updatedAt: number;
+};
 
 const defaultMessages: Msg[] = [
   {
@@ -25,25 +37,56 @@ const suggestions = [
 ];
 
 export default function AssistantScreen() {
+  const { user } = useAuth();
   const [messages, setMessages] = useState<Msg[]>(defaultMessages);
   const [draft, setDraft] = useState('');
   const [thinking, setThinking] = useState(false);
+  const [isHydrated, setIsHydrated] = useState(false);
+  const storageKey = useMemo(
+    () => buildUserStorageKey(ASSISTANT_MESSAGES_STORAGE_KEY, user?.id),
+    [user?.id]
+  );
 
   useEffect(() => {
     let cancelled = false;
 
+    setMessages(defaultMessages);
+    setDraft('');
+    setThinking(false);
+    setIsHydrated(false);
+
     const hydrate = async () => {
       try {
-        const raw = await AsyncStorage.getItem(ASSISTANT_MESSAGES_STORAGE_KEY);
+        const raw = await AsyncStorage.getItem(storageKey);
         if (!raw || cancelled) {
           return;
         }
-        const parsed = JSON.parse(raw) as Msg[];
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setMessages(parsed.slice(-40));
+
+        const parsed = JSON.parse(raw) as Msg[] | PersistedAssistantMessages;
+        if (Array.isArray(parsed)) {
+          if (parsed.length > 0) {
+            setMessages(parsed.slice(-ASSISTANT_MESSAGES_MAX_ITEMS));
+          }
+          return;
         }
+
+        if (
+          typeof parsed.updatedAt === 'number' &&
+          Date.now() - parsed.updatedAt <= ASSISTANT_MESSAGES_TTL_MS &&
+          Array.isArray(parsed.messages) &&
+          parsed.messages.length > 0
+        ) {
+          setMessages(parsed.messages.slice(-ASSISTANT_MESSAGES_MAX_ITEMS));
+          return;
+        }
+
+        await AsyncStorage.removeItem(storageKey);
       } catch {
         // Ignore local cache read errors.
+      } finally {
+        if (!cancelled) {
+          setIsHydrated(true);
+        }
       }
     };
 
@@ -51,11 +94,27 @@ export default function AssistantScreen() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [storageKey]);
 
   useEffect(() => {
-    void AsyncStorage.setItem(ASSISTANT_MESSAGES_STORAGE_KEY, JSON.stringify(messages.slice(-40)));
-  }, [messages]);
+    if (!isHydrated) {
+      return;
+    }
+
+    const stateToPersist: PersistedAssistantMessages = {
+      messages: messages.slice(-ASSISTANT_MESSAGES_MAX_ITEMS),
+      updatedAt: Date.now(),
+    };
+    void AsyncStorage.setItem(storageKey, JSON.stringify(stateToPersist));
+  }, [isHydrated, messages, storageKey]);
+
+  const clearLocalCache = async () => {
+    await clearTrainingLocalCache(user?.id);
+    setMessages(defaultMessages);
+    setDraft('');
+    setThinking(false);
+    Alert.alert('Cache șters', 'Datele locale ale asistentului au fost resetate.');
+  };
 
   const send = async (text: string) => {
     const value = text.trim();
@@ -87,13 +146,19 @@ export default function AssistantScreen() {
   return (
     <View style={styles.screen}>
       <View style={styles.header}>
-        <View style={styles.headerIcon}>
-          <Ionicons name="sparkles" size={18} color="#EFF6FF" />
+        <View style={styles.headerLeft}>
+          <View style={styles.headerIcon}>
+            <Ionicons name="sparkles" size={18} color="#EFF6FF" />
+          </View>
+          <View>
+            <Text style={styles.title}>Asistent Sentinel</Text>
+            <Text style={styles.subtitle}>Coach-ul tău cyber mereu activ</Text>
+          </View>
         </View>
-        <View>
-          <Text style={styles.title}>Asistent Sentinel</Text>
-          <Text style={styles.subtitle}>Coach-ul tău cyber mereu activ</Text>
-        </View>
+        <Pressable onPress={() => void clearLocalCache()} style={styles.clearCacheButton}>
+          <Ionicons name="trash-outline" size={14} color={TrainingColors.textSecondary} />
+          <Text style={styles.clearCacheText}>Șterge cache</Text>
+        </Pressable>
       </View>
 
       <ScrollView style={styles.messages} contentContainerStyle={styles.messageContent}>
@@ -167,7 +232,16 @@ export default function AssistantScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: TrainingColors.pageBase },
-  header: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 20, paddingTop: 50, paddingBottom: 10 },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    paddingHorizontal: 20,
+    paddingTop: 50,
+    paddingBottom: 10,
+  },
+  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   headerIcon: {
     width: 40,
     height: 40,
@@ -180,6 +254,18 @@ const styles = StyleSheet.create({
   },
   title: { color: TrainingColors.textPrimary, fontSize: 23, fontWeight: '800' },
   subtitle: { color: TrainingColors.textSecondary, fontSize: 12 },
+  clearCacheButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: TrainingColors.border,
+    backgroundColor: TrainingColors.panel,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+  },
+  clearCacheText: { color: TrainingColors.textSecondary, fontSize: 11, fontWeight: '700' },
   messages: { flex: 1 },
   messageContent: { paddingHorizontal: 20, paddingBottom: 12, gap: 10 },
   assistantRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },

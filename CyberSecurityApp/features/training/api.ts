@@ -5,12 +5,38 @@ import type {
   AssistantAskApiResponse,
   AttackType,
   DifficultyLevel,
+  LearningProfileApiResponse,
   Evaluation,
   GenerateScenarioApiResponse,
   ScenarioCatalogApiResponse,
   SessionEventsApiResponse,
   SessionSnapshotApiResponse,
+  SessionTrendAggregatesApiResponse,
+  SessionTrendsApiResponse,
 } from './types';
+
+// ── Auth token injection ───────────────────────────────────────────────────────
+// The auth context calls setAuthTokenAccessor on mount so that all protected
+// API calls automatically include the Bearer token header.
+let _tokenAccessor: (() => string | null) | null = null;
+let _authFailureHandler: (() => void) | null = null;
+
+export function setAuthTokenAccessor(accessor: () => string | null): void {
+  _tokenAccessor = accessor;
+}
+
+export function setAuthFailureHandler(handler: (() => void) | null): void {
+  _authFailureHandler = handler;
+}
+
+function getAuthHeaders(): Record<string, string> {
+  const token = _tokenAccessor?.();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+function handleAuthFailure(): void {
+  _authFailureHandler?.();
+}
 
 type GenerateScenarioPayload = {
   attack_type: AttackType;
@@ -56,9 +82,27 @@ function getExpoLocalApiBaseUrl(): string | null {
   return `http://${host}:8000`;
 }
 
+function getWebApiBaseUrl(): string | null {
+  if (Platform.OS !== 'web') {
+    return null;
+  }
+
+  const host = globalThis.location?.hostname;
+  if (!host) {
+    return null;
+  }
+
+  if (host === 'localhost' || host === '127.0.0.1') {
+    return 'http://127.0.0.1:8000';
+  }
+
+  return null;
+}
+
 const API_BASE_URL_CANDIDATES = Array.from(
   new Set(
     [
+      getWebApiBaseUrl(),
       process.env.EXPO_PUBLIC_API_BASE_URL?.trim(),
       getExpoLocalApiBaseUrl(),
       DEFAULT_API_BASE_URL,
@@ -73,10 +117,14 @@ async function postJson<TResponse>(path: string, payload: unknown, fallbackError
     try {
       const response = await fetch(`${baseUrl}${path}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify(payload),
       });
 
+      if (response.status === 401) {
+        handleAuthFailure();
+        throw new Error('Sesiune expirată. Autentifică-te din nou.');
+      }
       if (!response.ok) {
         throw new Error(fallbackError);
       }
@@ -97,9 +145,13 @@ async function getJson<TResponse>(path: string, fallbackError: string): Promise<
     try {
       const response = await fetch(`${baseUrl}${path}`, {
         method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       });
 
+      if (response.status === 401) {
+        handleAuthFailure();
+        throw new Error('Sesiune expirată. Autentifică-te din nou.');
+      }
       if (!response.ok) {
         throw new Error(fallbackError);
       }
@@ -136,13 +188,71 @@ export async function getSessionSnapshot(sessionId: string): Promise<SessionSnap
 
 export async function getSessionEvents(
   sessionId: string,
-  options: { limit?: number; offset?: number } = {}
+  options: { limit?: number; offset?: number; since?: string; until?: string } = {}
 ): Promise<SessionEventsApiResponse> {
   const limit = options.limit ?? 20;
   const offset = options.offset ?? 0;
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
+  if (options.since) {
+    params.set('since', options.since);
+  }
+  if (options.until) {
+    params.set('until', options.until);
+  }
   return getJson<SessionEventsApiResponse>(
-    `/session/${encodeURIComponent(sessionId)}/events?limit=${limit}&offset=${offset}`,
+    `/session/${encodeURIComponent(sessionId)}/events?${params.toString()}`,
     'Nu am putut incarca evenimentele sesiunii.'
+  );
+}
+
+export async function getSessionTrends(
+  sessionId: string,
+  options: { limit?: number; offset?: number; attackType?: AttackType; since?: string; until?: string } = {}
+): Promise<SessionTrendsApiResponse> {
+  const limit = options.limit ?? 30;
+  const offset = options.offset ?? 0;
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
+  if (options.attackType) {
+    params.set('attack_type', options.attackType);
+  }
+  if (options.since) {
+    params.set('since', options.since);
+  }
+  if (options.until) {
+    params.set('until', options.until);
+  }
+  return getJson<SessionTrendsApiResponse>(
+    `/session/${encodeURIComponent(sessionId)}/trends?${params.toString()}`,
+    'Nu am putut incarca trendurile sesiunii.'
+  );
+}
+
+export async function getSessionTrendAggregates(
+  sessionId: string,
+  options: { attackType?: AttackType; since?: string; until?: string } = {}
+): Promise<SessionTrendAggregatesApiResponse> {
+  const params = new URLSearchParams();
+  if (options.attackType) {
+    params.set('attack_type', options.attackType);
+  }
+  if (options.since) {
+    params.set('since', options.since);
+  }
+  if (options.until) {
+    params.set('until', options.until);
+  }
+
+  const query = params.toString();
+  const path = `/session/${encodeURIComponent(sessionId)}/trends/aggregate${query ? `?${query}` : ''}`;
+  return getJson<SessionTrendAggregatesApiResponse>(
+    path,
+    'Nu am putut incarca sumarul agregat al trendurilor.'
   );
 }
 
@@ -158,5 +268,12 @@ export async function askAssistant(payload: AssistantAskPayload): Promise<Assist
     '/assistant/ask',
     payload,
     'Nu am putut obtine raspunsul asistentului.'
+  );
+}
+
+export async function getLearningProfile(): Promise<LearningProfileApiResponse> {
+  return getJson<LearningProfileApiResponse>(
+    '/learning/profile',
+    'Nu am putut incarca profilul adaptiv.'
   );
 }

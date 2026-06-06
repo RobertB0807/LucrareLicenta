@@ -1,9 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Link } from 'expo-router';
-import { useEffect, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useMemo, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 
-import { getScenarioCatalog } from '@/features/training/api';
 import { getDifficultyLabel } from '@/features/training/options';
 import type { AttackType, DifficultyLevel } from '@/features/training/types';
 import { TrainingColors } from '@/features/training/ui-theme';
@@ -71,57 +70,41 @@ function riskFromStats(
 }
 
 export default function ScenariosScreen() {
+  const { width } = useWindowDimensions();
+  const isCompact = width < 360;
+  const contentInsets = useMemo(
+    () => ({
+      paddingHorizontal: isCompact ? 16 : 20,
+      paddingTop: isCompact ? 40 : 50,
+      paddingBottom: isCompact ? 110 : 130,
+      gap: isCompact ? 10 : 12,
+    }),
+    [isCompact]
+  );
   const [query, setQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState<(typeof filters)[number]>('Toate');
-  const [scenarios, setScenarios] = useState<Scenario[]>([]);
-  const [isLoadingCatalog, setIsLoadingCatalog] = useState(true);
-  const [catalogError, setCatalogError] = useState<string | null>(null);
-  const { sessionId, perAttackStats, evaluation } = useTrainingSession();
+  const { sessionId, perAttackStats, evaluation, scenarioCatalog, isLoadingCatalog, catalogError } =
+    useTrainingSession();
 
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadCatalog = async () => {
-      setIsLoadingCatalog(true);
-      setCatalogError(null);
-      try {
-        const data = await getScenarioCatalog();
-        if (cancelled) {
-          return;
-        }
-
-        const mapped: Scenario[] = data.items.map((item) => {
-          const description = item.attacker_message_preview;
-          return {
-            id: item.id,
-            type: ATTACK_LABELS[item.attack_type],
-            title: buildScenarioTitle(description, item.attack_type, item.difficulty),
-            description,
-            difficulty: getDifficultyLabel(item.difficulty) as Scenario['difficulty'],
-            risk: fallbackRiskByDifficulty(item.difficulty),
-            time: estimateTimeByDifficulty(item.difficulty),
-            attackType: item.attack_type,
-            backendDifficulty: item.difficulty,
-            channel: channelLabel(item.channel),
-          };
-        });
-        setScenarios(mapped);
-      } catch {
-        if (!cancelled) {
-          setCatalogError('Nu am putut încărca catalogul de scenarii.');
-        }
-      } finally {
-        if (!cancelled) {
-          setIsLoadingCatalog(false);
-        }
-      }
-    };
-
-    void loadCatalog();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const scenarios = useMemo<Scenario[]>(
+    () =>
+      scenarioCatalog.map((item) => {
+        const description = item.attacker_message_preview;
+        return {
+          id: item.id,
+          type: ATTACK_LABELS[item.attack_type],
+          title: buildScenarioTitle(description, item.attack_type, item.difficulty),
+          description,
+          difficulty: getDifficultyLabel(item.difficulty) as Scenario['difficulty'],
+          risk: fallbackRiskByDifficulty(item.difficulty),
+          time: estimateTimeByDifficulty(item.difficulty),
+          attackType: item.attack_type,
+          backendDifficulty: item.difficulty,
+          channel: channelLabel(item.channel),
+        };
+      }),
+    [scenarioCatalog]
+  );
 
   const perAttackMap = useMemo(
     () =>
@@ -157,18 +140,20 @@ export default function ScenariosScreen() {
   }, [activeFilter, evaluation?.recommendation, perAttackMap, query, scenarios]);
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+    <ScrollView style={styles.screen} contentContainerStyle={[styles.content, contentInsets]}>
       <View style={styles.header}>
         <View style={styles.headerIcon}>
           <Ionicons name="shield-checkmark-outline" size={19} color="#EFF6FF" />
         </View>
         <View>
-          <Text style={styles.title}>Laborator de antrenament</Text>
-          <Text style={styles.subtitle}>Alege un scenariu și îți ascuți apărarea</Text>
+          <Text style={[styles.title, isCompact && styles.titleCompact]}>Laborator de antrenament</Text>
+          <Text style={[styles.subtitle, isCompact && styles.subtitleCompact]}>
+            Alege un scenariu și îți ascuți apărarea
+          </Text>
         </View>
       </View>
 
-      <View style={styles.searchBox}>
+      <View style={[styles.searchBox, isCompact && styles.searchBoxCompact]}>
         <Ionicons name="search" size={16} color={TrainingColors.textMuted} />
         <TextInput
           value={query}
@@ -234,13 +219,20 @@ export default function ScenariosScreen() {
               },
             }}
             asChild>
-            <Pressable style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}>
+            <Pressable
+              style={({ pressed }) => [
+                styles.card,
+                isCompact && styles.cardCompact,
+                pressed && styles.cardPressed,
+              ]}>
               <View style={styles.cardTop}>
                 <Text style={styles.cardType}>{scenario.type}</Text>
                 <RiskTag level={scenario.risk} />
               </View>
-              <Text style={styles.cardTitle}>{scenario.title}</Text>
-              <Text style={styles.cardDescription}>{scenario.description}</Text>
+              <Text style={[styles.cardTitle, isCompact && styles.cardTitleCompact]}>{scenario.title}</Text>
+              <Text style={[styles.cardDescription, isCompact && styles.cardDescriptionCompact]}>
+                {scenario.description}
+              </Text>
               <View style={styles.cardMeta}>
                 <View style={styles.metaItem}>
                   <Ionicons name="pulse-outline" size={12} color={TrainingColors.textMuted} />
@@ -286,6 +278,8 @@ const styles = StyleSheet.create({
   },
   title: { color: TrainingColors.textPrimary, fontSize: 24, fontWeight: '800' },
   subtitle: { color: TrainingColors.textSecondary, fontSize: 12 },
+  titleCompact: { fontSize: 21 },
+  subtitleCompact: { fontSize: 11 },
   searchBox: {
     borderRadius: 16,
     borderWidth: 1,
@@ -297,6 +291,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
   },
+  searchBoxCompact: { paddingVertical: 8 },
   searchInput: { flex: 1, color: TrainingColors.textPrimary, fontSize: 14 },
   filters: { gap: 8, paddingTop: 4, paddingBottom: 2 },
   filter: {
@@ -339,6 +334,7 @@ const styles = StyleSheet.create({
     padding: 14,
     gap: 8,
   },
+  cardCompact: { padding: 12, gap: 6 },
   cardPressed: { opacity: 0.92 },
   cardTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   cardType: {
@@ -349,7 +345,9 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   cardTitle: { color: TrainingColors.textPrimary, fontSize: 17, fontWeight: '800' },
+  cardTitleCompact: { fontSize: 15 },
   cardDescription: { color: TrainingColors.textSecondary, fontSize: 13, lineHeight: 18 },
+  cardDescriptionCompact: { fontSize: 12, lineHeight: 16 },
   cardMeta: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2 },
   metaItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   metaText: { color: TrainingColors.textMuted, fontSize: 11 },

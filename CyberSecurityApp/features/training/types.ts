@@ -48,6 +48,68 @@ export type Recommendation = {
   reason: string;
 };
 
+export type LearningProfileArea = {
+  attack_type: AttackType;
+  difficulty: DifficultyLevel;
+  attempts: number;
+  correct: number;
+  accuracy: number;
+  mastery_score: number;
+  last_attempt_at: string | null;
+};
+
+export type LearningProfileAttack = {
+  attack_type: AttackType;
+  attempts: number;
+  correct: number;
+  accuracy: number;
+  mastery_score: number;
+  weakest_difficulty: DifficultyLevel | null;
+};
+
+export type LearningProfileDifficulty = {
+  difficulty: DifficultyLevel;
+  attempts: number;
+  correct: number;
+  accuracy: number;
+  mastery_score: number;
+};
+
+export type ReviewQueueItemStatus = 'due_now' | 'due_soon' | 'scheduled';
+
+export type ReviewQueueItem = {
+  attack_type: AttackType;
+  difficulty: DifficultyLevel;
+  attempts: number;
+  correct: number;
+  accuracy: number;
+  mastery_score: number;
+  last_attempt_at: string | null;
+  due_at: string;
+  status: ReviewQueueItemStatus;
+  priority: number;
+};
+
+export type ReviewSummary = {
+  due_now: number;
+  due_soon: number;
+  scheduled: number;
+  next_due_at: string | null;
+};
+
+export type LearningProfile = {
+  user_id: string;
+  overall_mastery: number;
+  coverage: number;
+  by_attack: LearningProfileAttack[];
+  by_difficulty: LearningProfileDifficulty[];
+  weak_areas: LearningProfileArea[];
+  review_queue: ReviewQueueItem[];
+  review_summary: ReviewSummary;
+  recommended_next: Recommendation;
+  last_updated_at: string | null;
+};
+
 export type Evaluation = {
   is_correct: boolean;
   score_delta: number;
@@ -76,6 +138,50 @@ export type SessionEventsApiResponse = {
   events: SessionEvent[];
 };
 
+export type SessionTrendPointApiResponse = {
+  timestamp: string;
+  attack_type: AttackType;
+  difficulty: DifficultyLevel;
+  is_correct: boolean;
+  score_delta: number;
+  score_after: number;
+  accuracy_after: number;
+  attempt_index: number;
+};
+
+export type SessionTrendsApiResponse = {
+  session_id: string;
+  total: number;
+  limit: number;
+  offset: number;
+  points: SessionTrendPointApiResponse[];
+};
+
+export type SessionTrendAggregateByDayApiResponse = {
+  day: string;
+  attempts: number;
+  correct: number;
+  accuracy: number;
+  score_delta_total: number;
+  cumulative_score_after: number;
+};
+
+export type SessionTrendAggregateByAttackApiResponse = {
+  attack_type: AttackType;
+  attempts: number;
+  correct: number;
+  accuracy: number;
+  score_delta_total: number;
+  average_score_delta: number;
+};
+
+export type SessionTrendAggregatesApiResponse = {
+  session_id: string;
+  total_attempts: number;
+  by_day: SessionTrendAggregateByDayApiResponse[];
+  by_attack: SessionTrendAggregateByAttackApiResponse[];
+};
+
 export type AssistantAskApiResponse = {
   answer: string;
   quick_tips: string[];
@@ -93,3 +199,5 @@ export type ScenarioCatalogItemApiResponse = {
 export type ScenarioCatalogApiResponse = {
   items: ScenarioCatalogItemApiResponse[];
 };
+
+export type LearningProfileApiResponse = LearningProfile;

@@ -1,22 +1,51 @@
 from __future__ import annotations
 
+import os
+from getpass import getuser
 from pathlib import Path
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 BASE_DIR = Path(__file__).resolve().parent
-DATABASE_URL = f"sqlite:///{BASE_DIR / 'training_data.db'}"
+
+
+def build_default_postgres_url() -> str:
+    default_user = getuser()
+    user = os.getenv("POSTGRES_USER", default_user)
+    password = os.getenv("POSTGRES_PASSWORD", "")
+    host = os.getenv("POSTGRES_HOST", "localhost")
+    port = os.getenv("POSTGRES_PORT", "5432")
+    database = os.getenv("POSTGRES_DB", user)
+    auth = f"{user}:{password}@" if password else f"{user}@"
+    return f"postgresql+psycopg://{auth}{host}:{port}/{database}"
+
+
+def normalize_database_url(raw_url: str) -> str:
+    if raw_url.startswith("postgres://"):
+        return raw_url.replace("postgres://", "postgresql+psycopg://", 1)
+    if raw_url.startswith("postgresql://"):
+        return raw_url.replace("postgresql://", "postgresql+psycopg://", 1)
+    return raw_url
+
+
+DATABASE_URL = normalize_database_url(
+    os.getenv("DATABASE_URL", build_default_postgres_url()).strip()
+)
 
 
 class Base(DeclarativeBase):
     pass
 
 
-engine = create_engine(
-    DATABASE_URL,
-    connect_args={"check_same_thread": False},
-)
+def build_engine(database_url: str):
+    engine_kwargs: dict[str, object] = {}
+    if database_url.startswith("sqlite"):
+        engine_kwargs["connect_args"] = {"check_same_thread": False}
+    return create_engine(database_url, **engine_kwargs)
+
+
+engine = build_engine(DATABASE_URL)
 
 SessionLocal = sessionmaker(
     bind=engine,

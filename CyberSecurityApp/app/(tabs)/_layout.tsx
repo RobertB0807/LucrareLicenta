@@ -1,11 +1,26 @@
-import { Tabs } from 'expo-router';
-import React from 'react';
+import { Redirect, Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { ActivityIndicator, View } from 'react-native';
 
 import { HapticTab } from '@/components/haptic-tab';
+import { useAuth } from '@/features/auth/auth-context';
 import { TrainingColors } from '@/features/training/ui-theme';
 
 export default function TabLayout() {
+  const { isAuthenticated, isLoading } = useAuth();
+
+  if (isLoading) {
+    return (
+      <View style={styles.loader}>
+        <ActivityIndicator size="large" color={TrainingColors.accentTeal} />
+      </View>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return <Redirect href="/login" />;
+  }
+
   return (
     <Tabs
       initialRouteName="dashboard"
@@ -83,6 +98,15 @@ export default function TabLayout() {
           href: null,
         }}
       />
-    </Tabs>
+      </Tabs>
   );
 }
+
+const styles = {
+  loader: {
+    flex: 1,
+    backgroundColor: TrainingColors.pageBase,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+  },
+};

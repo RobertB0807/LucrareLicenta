@@ -1,25 +1,80 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { Link, router, useLocalSearchParams } from 'expo-router';
+import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { useAuth } from '@/features/auth/auth-context';
+import { buildUserStorageKey, FEEDBACK_CONTEXT_STORAGE_KEY } from '@/features/training/local-cache';
+import type { AttackType, DifficultyLevel, Recommendation } from '@/features/training/types';
 import { TrainingColors } from '@/features/training/ui-theme';
 import { useTrainingSession } from '@/features/training/useTrainingSession';
+
+const FEEDBACK_CONTEXT_TTL_MS = 1000 * 60 * 60 * 24 * 7;
+
+type PersistedFeedbackContext = {
+  scenarioId: string | null;
+  sessionId: string | null;
+  attackType: AttackType;
+  difficulty: DifficultyLevel;
+  isCorrect: boolean;
+  scoreDelta: number;
+  explanation: string;
+  redFlags: string[];
+  recommendation?: Recommendation;
+  savedAt: number;
+};
 
 export default function FeedbackScreen() {
   const { scenarioId: routeScenarioId, sessionId: routeSessionId } = useLocalSearchParams<{
     scenarioId?: string;
     sessionId?: string;
   }>();
+  const { user } = useAuth();
   const { evaluation, scenario, stats, sessionId } = useTrainingSession();
-  const activeSessionId = sessionId ?? routeSessionId;
-  const activeScenarioId = scenario?.scenario_id ?? routeScenarioId ?? 'live-session';
+  const [persistedContext, setPersistedContext] = useState<PersistedFeedbackContext | null>(null);
+  const feedbackStorageKey = useMemo(
+    () => buildUserStorageKey(FEEDBACK_CONTEXT_STORAGE_KEY, user?.id),
+    [user?.id]
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const hydrateFeedbackContext = async () => {
+      try {
+        const raw = await AsyncStorage.getItem(feedbackStorageKey);
+        if (!raw || cancelled) {
+          return;
+        }
+        const parsed = JSON.parse(raw) as PersistedFeedbackContext;
+        if (typeof parsed.savedAt !== 'number' || Date.now() - parsed.savedAt > FEEDBACK_CONTEXT_TTL_MS) {
+          await AsyncStorage.removeItem(feedbackStorageKey);
+          return;
+        }
+        setPersistedContext(parsed);
+      } catch {
+        // Keep screen usable with in-memory fallback.
+      }
+    };
+
+    void hydrateFeedbackContext();
+    return () => {
+      cancelled = true;
+    };
+  }, [feedbackStorageKey]);
+
+  const activeSessionId = sessionId ?? routeSessionId ?? persistedContext?.sessionId ?? null;
+  const activeScenarioId = scenario?.scenario_id ?? routeScenarioId ?? persistedContext?.scenarioId ?? 'live-session';
+  const fallbackAttackType = scenario?.attack_type ?? persistedContext?.attackType ?? 'phishing';
+  const fallbackDifficulty = scenario?.difficulty ?? persistedContext?.difficulty ?? 'easy';
+  const recommendation = evaluation?.recommendation ?? persistedContext?.recommendation;
 
   // Determine verdict from real evaluation
-  const isCorrect = evaluation?.is_correct ?? false;
-  const scoreDelta = evaluation?.score_delta ?? 0;
-  const explanation = evaluation?.explanation ?? 'Nu există date de evaluare.';
-  const redFlags = scenario?.red_flags ?? [];
-  const recommendation = evaluation?.recommendation;
+  const isCorrect = evaluation?.is_correct ?? persistedContext?.isCorrect ?? false;
+  const scoreDelta = evaluation?.score_delta ?? persistedContext?.scoreDelta ?? 0;
+  const explanation = evaluation?.explanation ?? persistedContext?.explanation ?? 'Nu există date de evaluare.';
+  const redFlags = scenario?.red_flags ?? persistedContext?.redFlags ?? [];
 
   // Dynamic hero config based on real result
   const heroConfig = isCorrect
@@ -163,8 +218,8 @@ export default function FeedbackScreen() {
               pathname: '/chat/[scenarioId]',
               params: {
                 scenarioId: activeScenarioId,
-                attackType: scenario?.attack_type ?? 'phishing',
-                difficulty: scenario?.difficulty ?? 'easy',
+                attackType: fallbackAttackType,
+                difficulty: fallbackDifficulty,
                 sessionId: activeSessionId ?? undefined,
               },
             });

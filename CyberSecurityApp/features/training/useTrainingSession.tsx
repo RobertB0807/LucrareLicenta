@@ -1,16 +1,25 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 
-import { evaluateScenario, generateScenario } from './api';
+import {
+  evaluateScenario,
+  generateScenario,
+  getLearningProfile,
+  getScenarioCatalog,
+  getSessionSnapshot,
+} from './api';
 import { ATTACK_TYPE_OPTIONS } from './options';
+import { useAuth } from '../auth/auth-context';
 import type {
   AttackStats,
   AttackType,
   DifficultyLevel,
   Evaluation,
+  ScenarioCatalogItemApiResponse,
   SessionEvent,
   Scenario,
   SessionStats,
+  LearningProfile,
 } from './types';
 
 type ActivityItem = {
@@ -22,6 +31,7 @@ type ActivityItem = {
 };
 
 const TRAINING_SESSION_STORAGE_KEY = 'training-session-state-v1';
+const AUTH_REQUIRED_ERROR = 'Trebuie să te autentifici pentru această acțiune.';
 
 type PersistedTrainingSessionState = {
   sessionId: string | null;
@@ -29,6 +39,8 @@ type PersistedTrainingSessionState = {
   attackType: AttackType;
   difficulty: DifficultyLevel;
   evaluation: Evaluation | null;
+  scenario: Scenario | null;
+  selectedOptionId: string | null;
   activityLog: ActivityItem[];
 };
 
@@ -79,6 +91,14 @@ type TrainingSessionContextValue = {
     label: string;
     value?: AttackStats;
   }>;
+  scenarioCatalog: ScenarioCatalogItemApiResponse[];
+  isLoadingCatalog: boolean;
+  catalogError: string | null;
+  refreshScenarioCatalog: () => Promise<void>;
+  adaptiveProfile: LearningProfile | null;
+  isLoadingAdaptiveProfile: boolean;
+  adaptiveProfileError: string | null;
+  refreshAdaptiveProfile: () => Promise<void>;
   setSelectedOptionId: (optionId: string | null) => void;
   setAttackType: (attackType: AttackType) => void;
   setDifficulty: (difficulty: DifficultyLevel) => void;
@@ -88,7 +108,7 @@ type TrainingSessionContextValue = {
     nextSessionId?: string | null
   ) => Promise<void>;
   evaluateAnswer: () => Promise<void>;
-  evaluateWithOptionId: (optionId: string) => Promise<void>;
+  evaluateWithOptionId: (optionId: string) => Promise<boolean>;
   runCurrentSelection: () => Promise<void>;
   runRecommendedScenario: () => Promise<void>;
   resetSession: () => void;
@@ -108,6 +128,18 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [activityLog, setActivityLog] = useState<ActivityItem[]>([]);
   const [isHydrated, setIsHydrated] = useState(false);
+  const [scenarioCatalog, setScenarioCatalog] = useState<ScenarioCatalogItemApiResponse[]>([]);
+  const [isLoadingCatalog, setIsLoadingCatalog] = useState(true);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [adaptiveProfile, setAdaptiveProfile] = useState<LearningProfile | null>(null);
+  const [isLoadingAdaptiveProfile, setIsLoadingAdaptiveProfile] = useState(false);
+  const [adaptiveProfileError, setAdaptiveProfileError] = useState<string | null>(null);
+  const { isAuthenticated, user } = useAuth();
+
+  // Per-user storage key so each account gets its own training state.
+  const userStorageKey = user
+    ? `${TRAINING_SESSION_STORAGE_KEY}:${user.id}`
+    : TRAINING_SESSION_STORAGE_KEY;
 
   const pushActivity = useCallback(
     (entry: { title: string; detail: string; tone: 'neutral' | 'good' | 'warning' }) => {
@@ -164,8 +196,14 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
 
     const hydrate = async () => {
+      // Don't hydrate until we know who the user is.
+      if (!user) {
+        setIsHydrated(true);
+        return;
+      }
+
       try {
-        const raw = await AsyncStorage.getItem(TRAINING_SESSION_STORAGE_KEY);
+        const raw = await AsyncStorage.getItem(userStorageKey);
         if (!raw || cancelled) {
           return;
         }
@@ -181,6 +219,12 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
           setAttackType(parsed.attackType);
           setDifficulty(parsed.difficulty);
           setEvaluation(parsed.evaluation ?? null);
+          setScenario(parsed.scenario ?? null);
+          setSelectedOptionId(
+            parsed.selectedOptionId === null || typeof parsed.selectedOptionId === 'string'
+              ? parsed.selectedOptionId
+              : null
+          );
           setActivityLog(Array.isArray(parsed.activityLog) ? parsed.activityLog.slice(0, 8) : []);
         }
       } catch {
@@ -192,11 +236,23 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
       }
     };
 
+    // Reset in-memory state when user changes before hydrating new data.
+    setScenario(null);
+    setEvaluation(null);
+    setSessionId(null);
+    setSessionStats(null);
+    setSelectedOptionId(null);
+    setError(null);
+    setAttackType('phishing');
+    setDifficulty('easy');
+    setActivityLog([]);
+    setIsHydrated(false);
+
     void hydrate();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [userStorageKey, user]);
 
   useEffect(() => {
     if (!isHydrated) {
@@ -209,17 +265,109 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
       attackType,
       difficulty,
       evaluation,
+      scenario,
+      selectedOptionId,
       activityLog: activityLog.slice(0, 8),
     };
 
-    void AsyncStorage.setItem(TRAINING_SESSION_STORAGE_KEY, JSON.stringify(stateToPersist));
-  }, [activityLog, attackType, difficulty, evaluation, isHydrated, sessionId, sessionStats]);
+    void AsyncStorage.setItem(userStorageKey, JSON.stringify(stateToPersist));
+  }, [
+    activityLog,
+    attackType,
+    difficulty,
+    evaluation,
+    isHydrated,
+    scenario,
+    selectedOptionId,
+    sessionId,
+    sessionStats,
+    userStorageKey,
+  ]);
+
+  const refreshScenarioCatalog = useCallback(async () => {
+    setIsLoadingCatalog(true);
+    setCatalogError(null);
+    try {
+      const data = await getScenarioCatalog();
+      setScenarioCatalog(data.items);
+    } catch {
+      setCatalogError('Nu am putut încărca catalogul de scenarii.');
+      setScenarioCatalog([]);
+    } finally {
+      setIsLoadingCatalog(false);
+    }
+  }, []);
+
+  const refreshAdaptiveProfile = useCallback(async () => {
+    if (!isAuthenticated) {
+      setAdaptiveProfile(null);
+      setAdaptiveProfileError(null);
+      setIsLoadingAdaptiveProfile(false);
+      return;
+    }
+
+    setIsLoadingAdaptiveProfile(true);
+    setAdaptiveProfileError(null);
+
+    try {
+      const data = await getLearningProfile();
+      setAdaptiveProfile(data);
+    } catch {
+      setAdaptiveProfile(null);
+      setAdaptiveProfileError('Nu am putut încărca profilul adaptiv.');
+    } finally {
+      setIsLoadingAdaptiveProfile(false);
+    }
+  }, [isAuthenticated]);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      return;
+    }
+    void refreshScenarioCatalog();
+  }, [isAuthenticated, refreshScenarioCatalog]);
+
+  useEffect(() => {
+    void refreshAdaptiveProfile();
+  }, [refreshAdaptiveProfile]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const syncSessionFromBackend = async () => {
+      if (!isHydrated || !sessionId || !isAuthenticated) {
+        return;
+      }
+
+      try {
+        const snapshot = await getSessionSnapshot(sessionId);
+        if (cancelled) {
+          return;
+        }
+
+        setSessionStats(snapshot.session_stats);
+        applyServerEvents(snapshot.session_stats.recent_events);
+      } catch {
+        // Keep locally available state when backend snapshot cannot be fetched.
+      }
+    };
+
+    void syncSessionFromBackend();
+    return () => {
+      cancelled = true;
+    };
+  }, [applyServerEvents, isAuthenticated, isHydrated, sessionId]);
 
   const startSimulation = async (
     nextAttackType: AttackType = attackType,
     nextDifficulty: DifficultyLevel = difficulty,
     nextSessionId?: string | null
   ) => {
+    if (!isAuthenticated) {
+      setError(AUTH_REQUIRED_ERROR);
+      return;
+    }
+
     setIsLoading(true);
     setError(null);
     setEvaluation(null);
@@ -256,6 +404,10 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
     if (!scenario || !selectedOptionId || evaluation) {
       return;
     }
+    if (!isAuthenticated) {
+      setError(AUTH_REQUIRED_ERROR);
+      return;
+    }
 
     setIsLoading(true);
     setError(null);
@@ -268,6 +420,7 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
 
       setEvaluation(data);
       setSessionStats(data.session_stats);
+      void refreshAdaptiveProfile();
       if (data.session_stats.recent_events?.length) {
         applyServerEvents(data.session_stats.recent_events);
       } else {
@@ -284,9 +437,13 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const evaluateWithOptionId = async (optionId: string) => {
+  const evaluateWithOptionId = async (optionId: string): Promise<boolean> => {
     if (!scenario || evaluation) {
-      return;
+      return false;
+    }
+    if (!isAuthenticated) {
+      setError(AUTH_REQUIRED_ERROR);
+      return false;
     }
 
     setSelectedOptionId(optionId);
@@ -301,6 +458,7 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
 
       setEvaluation(data);
       setSessionStats(data.session_stats);
+      void refreshAdaptiveProfile();
       if (data.session_stats.recent_events?.length) {
         applyServerEvents(data.session_stats.recent_events);
       } else {
@@ -310,8 +468,10 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
           tone: data.is_correct ? 'good' : 'warning',
         });
       }
+      return true;
     } catch {
       setError('Eroare la evaluare. Incearca din nou.');
+      return false;
     } finally {
       setIsLoading(false);
     }
@@ -355,6 +515,14 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
     activityLog,
     stats,
     perAttackStats,
+    scenarioCatalog,
+    isLoadingCatalog,
+    catalogError,
+    refreshScenarioCatalog,
+    adaptiveProfile,
+    isLoadingAdaptiveProfile,
+    adaptiveProfileError,
+    refreshAdaptiveProfile,
     setSelectedOptionId,
     setAttackType,
     setDifficulty,
