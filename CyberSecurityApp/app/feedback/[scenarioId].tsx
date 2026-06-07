@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
-import { Link, router, useLocalSearchParams } from 'expo-router';
+import { Link, Redirect, router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
@@ -33,6 +33,7 @@ export default function FeedbackScreen() {
   const { user } = useAuth();
   const { evaluation, scenario, stats, sessionId } = useTrainingSession();
   const [persistedContext, setPersistedContext] = useState<PersistedFeedbackContext | null>(null);
+  const [isFeedbackHydrated, setIsFeedbackHydrated] = useState(false);
   const feedbackStorageKey = useMemo(
     () => buildUserStorageKey(FEEDBACK_CONTEXT_STORAGE_KEY, user?.id),
     [user?.id]
@@ -40,6 +41,8 @@ export default function FeedbackScreen() {
 
   useEffect(() => {
     let cancelled = false;
+    setPersistedContext(null);
+    setIsFeedbackHydrated(false);
 
     const hydrateFeedbackContext = async () => {
       try {
@@ -55,6 +58,10 @@ export default function FeedbackScreen() {
         setPersistedContext(parsed);
       } catch {
         // Keep screen usable with in-memory fallback.
+      } finally {
+        if (!cancelled) {
+          setIsFeedbackHydrated(true);
+        }
       }
     };
 
@@ -75,6 +82,10 @@ export default function FeedbackScreen() {
   const scoreDelta = evaluation?.score_delta ?? persistedContext?.scoreDelta ?? 0;
   const explanation = evaluation?.explanation ?? persistedContext?.explanation ?? 'Nu există date de evaluare.';
   const redFlags = scenario?.red_flags ?? persistedContext?.redFlags ?? [];
+
+  if (isFeedbackHydrated && !evaluation && !persistedContext) {
+    return <Redirect href="/(tabs)/dashboard" />;
+  }
 
   // Dynamic hero config based on real result
   const heroConfig = isCorrect
@@ -201,6 +212,7 @@ export default function FeedbackScreen() {
                 pathname: '/chat/[scenarioId]',
                 params: {
                   scenarioId: activeScenarioId,
+                  generateNew: 'true',
                   attackType: recommendation.attack_type,
                   difficulty: recommendation.difficulty,
                   sessionId: activeSessionId ?? undefined,
@@ -218,6 +230,7 @@ export default function FeedbackScreen() {
               pathname: '/chat/[scenarioId]',
               params: {
                 scenarioId: activeScenarioId,
+                generateNew: 'true',
                 attackType: fallbackAttackType,
                 difficulty: fallbackDifficulty,
                 sessionId: activeSessionId ?? undefined,

@@ -87,6 +87,7 @@ Inlocuieste `192.168.1.XX` cu IP-ul local real al laptop-ului.
 ## 2.1 Migrations (Alembic)
 
 Schema DB este gestionata prin Alembic si se aplica automat la startup.
+Pentru porniri cu `--lifespan off`, ruleaza explicit `alembic upgrade head` inainte de Uvicorn.
 
 Comenzi utile:
 
@@ -105,12 +106,18 @@ alembic downgrade -1
 - `POST /scenario/generate`
 - `POST /scenario/evaluate`
 - `GET /scenario/catalog`
+- `GET /scenario/{scenario_id}`
 - `POST /assistant/ask`
 - `GET /learning/profile`
 - `GET /session/{session_id}`
 - `GET /session/{session_id}/events?limit=20&offset=0`
 - `GET /session/{session_id}/trends?limit=30&offset=0`
 - `GET /session/{session_id}/trends/aggregate?attack_type=phishing&since=<iso>&until=<iso>`
+
+`POST /scenario/evaluate` este idempotent per `scenario_id`:
+- retrimiterea aceleiasi optiuni intoarce rezultatul salvat cu `was_already_evaluated: true`
+- retrimiterea unei alte optiuni intoarce `409 Conflict`
+- scorul, progresul adaptiv si evenimentul sesiunii sunt aplicate o singura data
 
 Toate endpoint-urile in afara de `GET /health`, `POST /auth/register` si `POST /auth/login`
 necesita header:

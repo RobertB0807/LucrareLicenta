@@ -213,6 +213,7 @@ export default function ScenariosScreen() {
               pathname: '/chat/[scenarioId]',
               params: {
                 scenarioId: scenario.id,
+                templateId: scenario.id,
                 attackType: scenario.attackType,
                 difficulty: scenario.backendDifficulty,
                 sessionId: sessionId ?? undefined,

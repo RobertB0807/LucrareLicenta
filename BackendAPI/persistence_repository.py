@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Iterator
 from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from db import SessionLocal
@@ -221,38 +221,59 @@ def record_user_learning_attempt(
     attempted_at: datetime | None = None,
 ) -> None:
     with session_scope() as db:
-        row = db.scalar(
-            select(UserLearningProfileORM).where(
-                UserLearningProfileORM.user_id == user_id,
-                UserLearningProfileORM.attack_type == attack_type,
-                UserLearningProfileORM.difficulty == difficulty,
-            )
+        _apply_user_learning_attempt(
+            db,
+            user_id=user_id,
+            attack_type=attack_type,
+            difficulty=difficulty,
+            is_correct=is_correct,
+            attempted_at=attempted_at,
         )
 
-        if row is None:
-            row = UserLearningProfileORM(
-                user_id=user_id,
-                attack_type=attack_type,
-                difficulty=difficulty,
-                mastery_score=50.0,
-                attempts=0,
-                correct=0,
-            )
-            db.add(row)
 
-        row.attempts = int(row.attempts or 0) + 1
-        if is_correct:
-            row.correct = int(row.correct or 0) + 1
-
-        row.mastery_score = compute_mastery_score(
-            float(row.mastery_score or 50.0),
-            row.attempts,
-            is_correct,
-            difficulty,
+def _apply_user_learning_attempt(
+    db: Session,
+    *,
+    user_id: str,
+    attack_type: str,
+    difficulty: str,
+    is_correct: bool,
+    attempted_at: datetime | None = None,
+) -> None:
+    row = db.scalar(
+        select(UserLearningProfileORM)
+        .where(
+            UserLearningProfileORM.user_id == user_id,
+            UserLearningProfileORM.attack_type == attack_type,
+            UserLearningProfileORM.difficulty == difficulty,
         )
-        row.last_result_correct = is_correct
-        row.last_attempt_at = attempted_at or utc_now()
-        row.updated_at = utc_now()
+        .with_for_update()
+    )
+
+    if row is None:
+        row = UserLearningProfileORM(
+            user_id=user_id,
+            attack_type=attack_type,
+            difficulty=difficulty,
+            mastery_score=50.0,
+            attempts=0,
+            correct=0,
+        )
+        db.add(row)
+
+    row.attempts = int(row.attempts or 0) + 1
+    if is_correct:
+        row.correct = int(row.correct or 0) + 1
+
+    row.mastery_score = compute_mastery_score(
+        float(row.mastery_score or 50.0),
+        row.attempts,
+        is_correct,
+        difficulty,
+    )
+    row.last_result_correct = is_correct
+    row.last_attempt_at = attempted_at or utc_now()
+    row.updated_at = utc_now()
 
 
 def fetch_user_learning_profiles(user_id: str) -> list[dict[str, Any]]:
@@ -315,6 +336,11 @@ def record_generated_scenario(
     scenario_id: str,
     attack_type: str,
     difficulty: str,
+    template_id: str,
+    channel: str,
+    attacker_message: str,
+    options: list[dict[str, str]],
+    red_flags: list[str],
     correct_option_id: str,
     correct_explanation: str,
     incorrect_explanation: str,
@@ -331,11 +357,56 @@ def record_generated_scenario(
             session_id=session_id,
             attack_type=attack_type,
             difficulty=difficulty,
+            template_id=template_id,
+            channel=channel,
+            attacker_message=attacker_message,
+            options_json=json.dumps(options),
+            red_flags_json=json.dumps(red_flags),
             correct_option_id=correct_option_id,
             correct_explanation=correct_explanation,
             incorrect_explanation=incorrect_explanation,
         )
         db.add(row)
+
+
+def fetch_generated_scenario(scenario_id: str) -> dict[str, Any] | None:
+    db = SessionLocal()
+    try:
+        row = db.scalar(
+            select(ScenarioAttemptORM).where(ScenarioAttemptORM.scenario_id == scenario_id)
+        )
+        if row is None:
+            return None
+        if (
+            row.channel is None
+            or row.attacker_message is None
+            or row.options_json is None
+            or row.red_flags_json is None
+        ):
+            return None
+
+        try:
+            options = json.loads(row.options_json)
+            red_flags = json.loads(row.red_flags_json)
+        except (TypeError, json.JSONDecodeError):
+            return None
+
+        if not isinstance(options, list) or not isinstance(red_flags, list):
+            return None
+
+        return {
+            "session_id": row.session_id,
+            "scenario_id": row.scenario_id,
+            "template_id": row.template_id,
+            "attack_type": row.attack_type,
+            "difficulty": row.difficulty,
+            "channel": row.channel,
+            "attacker_message": row.attacker_message,
+            "options": options,
+            "red_flags": red_flags,
+        }
+    finally:
+        db.close()
 
 
 def fetch_scenario_context(scenario_id: str) -> dict[str, str] | None:
@@ -398,6 +469,137 @@ def record_scenario_evaluation(
         row.recommendation_attack_type = recommendation_attack_type
         row.recommendation_difficulty = recommendation_difficulty
         row.evaluated_at = utc_now()
+
+
+def apply_scenario_evaluation_once(
+    *,
+    scenario_id: str,
+    session_id: str,
+    attack_type: str,
+    difficulty: str,
+    selected_option_id: str,
+    is_correct: bool,
+    score_delta: int,
+    explanation: str,
+    event_id: str,
+    event_timestamp_iso: str,
+    event_type: str,
+    event_title: str,
+    event_detail: str,
+    event_tone: str,
+    owner_user_id: str | None = None,
+) -> dict[str, Any]:
+    evaluated_at = utc_now()
+
+    with session_scope() as db:
+        claim = db.execute(
+            update(ScenarioAttemptORM)
+            .where(
+                ScenarioAttemptORM.scenario_id == scenario_id,
+                ScenarioAttemptORM.evaluated_at.is_(None),
+            )
+            .values(
+                selected_option_id=selected_option_id,
+                is_correct=is_correct,
+                score_delta=score_delta,
+                explanation=explanation,
+                evaluated_at=evaluated_at,
+            )
+        )
+
+        if claim.rowcount != 1:
+            existing = db.scalar(
+                select(ScenarioAttemptORM).where(ScenarioAttemptORM.scenario_id == scenario_id)
+            )
+            if existing is None:
+                return {"status": "missing"}
+            return {
+                "status": "duplicate",
+                "selected_option_id": existing.selected_option_id,
+                "is_correct": bool(existing.is_correct),
+                "score_delta": int(existing.score_delta or 0),
+                "explanation": existing.explanation or "",
+            }
+
+        session = db.scalar(
+            select(TrainingSessionORM)
+            .where(TrainingSessionORM.session_id == session_id)
+            .with_for_update()
+        )
+        if session is None:
+            raise ValueError("Training session not found")
+
+        raw_per_attack = (
+            json.loads(session.per_attack_stats_json)
+            if session.per_attack_stats_json
+            else {}
+        )
+        per_attack = normalize_per_attack_stats(raw_per_attack)
+        attack_stats = per_attack[attack_type]
+
+        session.total_attempts = int(session.total_attempts or 0) + 1
+        session.total_score = int(session.total_score or 0) + score_delta
+        attack_stats["attempts"] += 1
+
+        if is_correct:
+            session.total_correct = int(session.total_correct or 0) + 1
+            session.correct_streak = int(session.correct_streak or 0) + 1
+            session.incorrect_streak = 0
+            attack_stats["correct"] += 1
+        else:
+            session.incorrect_streak = int(session.incorrect_streak or 0) + 1
+            session.correct_streak = 0
+
+        if owner_user_id and session.owner_user_id is None:
+            session.owner_user_id = owner_user_id
+        session.per_attack_stats_json = json.dumps(per_attack)
+        session.updated_at = evaluated_at
+
+        db.add(
+            SessionEventORM(
+                id=event_id,
+                session_id=session_id,
+                timestamp=datetime.fromisoformat(event_timestamp_iso),
+                event_type=event_type,
+                title=event_title,
+                detail=event_detail,
+                tone=event_tone,
+            )
+        )
+
+        if owner_user_id is not None:
+            _apply_user_learning_attempt(
+                db,
+                user_id=owner_user_id,
+                attack_type=attack_type,
+                difficulty=difficulty,
+                is_correct=is_correct,
+                attempted_at=evaluated_at,
+            )
+
+        return {
+            "status": "applied",
+            "selected_option_id": selected_option_id,
+            "is_correct": is_correct,
+            "score_delta": score_delta,
+            "explanation": explanation,
+        }
+
+
+def update_scenario_recommendation(
+    *,
+    scenario_id: str,
+    recommendation_attack_type: str,
+    recommendation_difficulty: str,
+) -> None:
+    with session_scope() as db:
+        row = db.scalar(
+            select(ScenarioAttemptORM).where(ScenarioAttemptORM.scenario_id == scenario_id)
+        )
+        if row is None:
+            return
+        row.recommendation_attack_type = recommendation_attack_type
+        row.recommendation_difficulty = recommendation_difficulty
 
 
 def record_session_event(

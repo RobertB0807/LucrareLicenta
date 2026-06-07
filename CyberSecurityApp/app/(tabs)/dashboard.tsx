@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Link } from 'expo-router';
+import { Link, useRouter } from 'expo-router';
 import { useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
@@ -46,6 +46,7 @@ export default function DashboardScreen() {
   const { stats, perAttackStats, evaluation, sessionId, scenarioCatalog, adaptiveProfile, isLoadingAdaptiveProfile } =
     useTrainingSession();
   const { user, logout } = useAuth();
+  const router = useRouter();
   const { width } = useWindowDimensions();
   const isCompact = width < 360;
   const contentInsets = useMemo(
@@ -171,7 +172,11 @@ export default function DashboardScreen() {
         </View>
         <Pressable
           style={({ pressed }) => [styles.logoutButton, pressed && styles.pressableFeedback]}
-          onPress={logout}
+          onPress={() => {
+            void logout().catch(() => undefined).then(() => {
+              router.replace('/login');
+            });
+          }}
         >
           <Ionicons name="log-out-outline" size={17} color={TrainingColors.textMuted} />
         </Pressable>

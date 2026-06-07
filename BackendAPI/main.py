@@ -42,7 +42,9 @@ from training_service import (
     SessionSnapshotResponse,
     SessionTrendAggregatesResponse,
     SessionTrendsResponse,
+    ScenarioEvaluationConflictError,
     get_learning_profile as get_training_learning_profile,
+    get_generated_scenario as get_training_generated_scenario,
     get_scenario_catalog as get_training_scenario_catalog,
     evaluate_scenario as evaluate_training_scenario,
     generate_scenario as generate_training_scenario,
@@ -61,6 +63,10 @@ OptionId = Annotated[
     StringConstraints(strip_whitespace=True, min_length=1, max_length=64, pattern=ID_PATTERN),
 ]
 ScenarioId = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=128, pattern=ID_PATTERN),
+]
+TemplateId = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=128, pattern=ID_PATTERN),
 ]
@@ -153,6 +159,7 @@ class GenerateScenarioRequest(BaseModel):
     attack_type: AttackType = "phishing"
     difficulty: DifficultyLevel = "easy"
     session_id: SessionId | None = None
+    template_id: TemplateId | None = None
 
 
 class EvaluateScenarioRequest(BaseModel):
@@ -413,12 +420,16 @@ def generate_scenario(
         if payload.session_id and not ensure_session_owner(payload.session_id, current_user.id):
             raise HTTPException(status_code=404, detail="Session not found")
 
-    return generate_training_scenario(
-        attack_type=payload.attack_type,
-        difficulty=payload.difficulty,
-        session_id=payload.session_id,
-        owner_user_id=owner_user_id,
-    )
+    try:
+        return generate_training_scenario(
+            attack_type=payload.attack_type,
+            difficulty=payload.difficulty,
+            session_id=payload.session_id,
+            owner_user_id=owner_user_id,
+            template_id=payload.template_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/scenario/evaluate", response_model=EvaluateScenarioResponse)
@@ -441,6 +452,8 @@ def evaluate_scenario(
     except KeyError as exc:
         detail = exc.args[0] if exc.args else "Scenario not found"
         raise HTTPException(status_code=404, detail=detail) from exc
+    except ScenarioEvaluationConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.get("/scenario/catalog", response_model=ScenarioCatalogResponse)
@@ -448,6 +461,23 @@ def get_scenario_catalog(request: Request = None) -> ScenarioCatalogResponse:
     if request is not None:
         require_authenticated_user(request)
     return get_training_scenario_catalog()
+
+
+@app.get("/scenario/{scenario_id}", response_model=GenerateScenarioResponse)
+def get_scenario(
+    scenario_id: Annotated[str, Path(min_length=1, max_length=128, pattern=ID_PATTERN)],
+    request: Request = None,
+) -> GenerateScenarioResponse:
+    if request is not None:
+        current_user = require_authenticated_user(request)
+        context = fetch_scenario_session_owner(scenario_id)
+        if context is None or not ensure_session_owner(context["session_id"], current_user.id):
+            raise HTTPException(status_code=404, detail="Scenario not found")
+
+    scenario = get_training_generated_scenario(scenario_id)
+    if scenario is None:
+        raise HTTPException(status_code=404, detail="Scenario not found")
+    return scenario
 
 
 @app.post("/assistant/ask", response_model=AssistantAskResponse)

@@ -2,9 +2,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 
 import {
+  ApiRequestError,
   evaluateScenario,
   generateScenario,
   getLearningProfile,
+  getScenario,
   getScenarioCatalog,
   getSessionSnapshot,
 } from './api';
@@ -105,8 +107,10 @@ type TrainingSessionContextValue = {
   startSimulation: (
     nextAttackType?: AttackType,
     nextDifficulty?: DifficultyLevel,
-    nextSessionId?: string | null
+    nextSessionId?: string | null,
+    templateId?: string
   ) => Promise<void>;
+  restoreScenario: (scenarioId: string) => Promise<boolean>;
   evaluateAnswer: () => Promise<void>;
   evaluateWithOptionId: (optionId: string) => Promise<boolean>;
   runCurrentSelection: () => Promise<void>;
@@ -358,47 +362,80 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
     };
   }, [applyServerEvents, isAuthenticated, isHydrated, sessionId]);
 
-  const startSimulation = async (
-    nextAttackType: AttackType = attackType,
-    nextDifficulty: DifficultyLevel = difficulty,
-    nextSessionId?: string | null
-  ) => {
-    if (!isAuthenticated) {
-      setError(AUTH_REQUIRED_ERROR);
-      return;
-    }
+  const startSimulation = useCallback(
+    async (
+      nextAttackType: AttackType = attackType,
+      nextDifficulty: DifficultyLevel = difficulty,
+      nextSessionId?: string | null,
+      templateId?: string
+    ) => {
+      if (!isAuthenticated) {
+        setError(AUTH_REQUIRED_ERROR);
+        return;
+      }
 
-    setIsLoading(true);
-    setError(null);
-    setEvaluation(null);
-    setSelectedOptionId(null);
+      setIsLoading(true);
+      setError(null);
+      setEvaluation(null);
+      setSelectedOptionId(null);
 
-    const activeSessionId = nextSessionId ?? sessionId;
+      const activeSessionId = nextSessionId ?? sessionId;
 
-    try {
-      const data = await generateScenario({
-        attack_type: nextAttackType,
-        difficulty: nextDifficulty,
-        session_id: activeSessionId,
-      });
+      try {
+        const data = await generateScenario({
+          attack_type: nextAttackType,
+          difficulty: nextDifficulty,
+          session_id: activeSessionId,
+          template_id: templateId,
+        });
 
-      setScenario(data);
-      setSessionId(data.session_id);
-      setAttackType(nextAttackType);
-      setDifficulty(nextDifficulty);
-      pushActivity({
-        title: 'Scenariu generat',
-        detail: `Scenariul ${nextAttackType} la dificultatea ${nextDifficulty} este acum activ.`,
-        tone: 'neutral',
-      });
-    } catch {
-      setError(
-        'Conexiune esuata cu backend-ul. Verifica daca FastAPI ruleaza pe portul 8000 si endpoint-ul este accesibil.'
-      );
-    } finally {
-      setIsLoading(false);
-    }
-  };
+        setScenario(data);
+        setSessionId(data.session_id);
+        setAttackType(nextAttackType);
+        setDifficulty(nextDifficulty);
+        pushActivity({
+          title: 'Scenariu generat',
+          detail: `Scenariul ${nextAttackType} la dificultatea ${nextDifficulty} este acum activ.`,
+          tone: 'neutral',
+        });
+      } catch {
+        setError(
+          'Conexiune esuata cu backend-ul. Verifica daca FastAPI ruleaza pe portul 8000 si endpoint-ul este accesibil.'
+        );
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [attackType, difficulty, isAuthenticated, pushActivity, sessionId]
+  );
+
+  const restoreScenario = useCallback(
+    async (scenarioId: string): Promise<boolean> => {
+      if (!isAuthenticated) {
+        setError(AUTH_REQUIRED_ERROR);
+        return false;
+      }
+
+      setIsLoading(true);
+      setError(null);
+
+      try {
+        const data = await getScenario(scenarioId);
+        setScenario(data);
+        setSessionId(data.session_id);
+        setAttackType(data.attack_type);
+        setDifficulty(data.difficulty);
+        setEvaluation(null);
+        setSelectedOptionId(null);
+        return true;
+      } catch {
+        return false;
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [isAuthenticated]
+  );
 
   const evaluateAnswer = async () => {
     if (!scenario || !selectedOptionId || evaluation) {
@@ -430,8 +467,12 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
           tone: data.is_correct ? 'good' : 'warning',
         });
       }
-    } catch {
-      setError('Eroare la evaluare. Incearca din nou.');
+    } catch (error) {
+      setError(
+        error instanceof ApiRequestError && error.status === 409
+          ? 'Acest scenariu a fost deja evaluat cu un alt răspuns.'
+          : 'Eroare la evaluare. Încearcă din nou.'
+      );
     } finally {
       setIsLoading(false);
     }
@@ -469,8 +510,12 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
         });
       }
       return true;
-    } catch {
-      setError('Eroare la evaluare. Incearca din nou.');
+    } catch (error) {
+      setError(
+        error instanceof ApiRequestError && error.status === 409
+          ? 'Acest scenariu a fost deja evaluat cu un alt răspuns.'
+          : 'Eroare la evaluare. Încearcă din nou.'
+      );
       return false;
     } finally {
       setIsLoading(false);
@@ -527,6 +572,7 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
     setAttackType,
     setDifficulty,
     startSimulation,
+    restoreScenario,
     evaluateAnswer,
     evaluateWithOptionId,
     runCurrentSelection,

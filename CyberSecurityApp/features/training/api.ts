@@ -38,10 +38,31 @@ function handleAuthFailure(): void {
   _authFailureHandler?.();
 }
 
+export class ApiRequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number
+  ) {
+    super(message);
+    this.name = 'ApiRequestError';
+  }
+}
+
+async function getResponseError(response: Response, fallbackError: string): Promise<ApiRequestError> {
+  try {
+    const payload = (await response.json()) as { detail?: unknown };
+    const detail = typeof payload.detail === 'string' ? payload.detail : fallbackError;
+    return new ApiRequestError(detail, response.status);
+  } catch {
+    return new ApiRequestError(fallbackError, response.status);
+  }
+}
+
 type GenerateScenarioPayload = {
   attack_type: AttackType;
   difficulty: DifficultyLevel;
   session_id?: string | null;
+  template_id?: string;
 };
 
 type EvaluateScenarioPayload = {
@@ -123,14 +144,17 @@ async function postJson<TResponse>(path: string, payload: unknown, fallbackError
 
       if (response.status === 401) {
         handleAuthFailure();
-        throw new Error('Sesiune expirată. Autentifică-te din nou.');
+        throw new ApiRequestError('Sesiune expirată. Autentifică-te din nou.', 401);
       }
       if (!response.ok) {
-        throw new Error(fallbackError);
+        throw await getResponseError(response, fallbackError);
       }
 
       return (await response.json()) as TResponse;
     } catch (error) {
+      if (error instanceof ApiRequestError && error.status >= 400 && error.status < 500) {
+        throw error;
+      }
       lastError = error instanceof Error ? error : new Error(fallbackError);
     }
   }
@@ -150,14 +174,17 @@ async function getJson<TResponse>(path: string, fallbackError: string): Promise<
 
       if (response.status === 401) {
         handleAuthFailure();
-        throw new Error('Sesiune expirată. Autentifică-te din nou.');
+        throw new ApiRequestError('Sesiune expirată. Autentifică-te din nou.', 401);
       }
       if (!response.ok) {
-        throw new Error(fallbackError);
+        throw await getResponseError(response, fallbackError);
       }
 
       return (await response.json()) as TResponse;
     } catch (error) {
+      if (error instanceof ApiRequestError && error.status >= 400 && error.status < 500) {
+        throw error;
+      }
       lastError = error instanceof Error ? error : new Error(fallbackError);
     }
   }
@@ -172,6 +199,13 @@ export async function generateScenario(
     '/scenario/generate',
     payload,
     'Nu am putut genera scenariul.'
+  );
+}
+
+export async function getScenario(scenarioId: string): Promise<GenerateScenarioApiResponse> {
+  return getJson<GenerateScenarioApiResponse>(
+    `/scenario/${encodeURIComponent(scenarioId)}`,
+    'Nu am putut restaura scenariul.'
   );
 }
 

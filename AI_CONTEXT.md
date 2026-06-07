@@ -42,6 +42,7 @@ Backend features currently implemented:
 - `GET /scenario/catalog`
 - `POST /scenario/generate`
 - `POST /scenario/evaluate`
+- `GET /scenario/{scenario_id}`
 - `POST /assistant/ask`
 - `GET /session/{session_id}`
 - `GET /session/{session_id}/events`
@@ -110,6 +111,22 @@ Current integration level:
 - protected API calls in `useTrainingSession` are gated on `isAuthenticated` — no backend calls are made before login
 
 ## Recent Progress (April-May 2026)
+- Fixed stale feedback navigation across logout/account changes:
+  - root stack now protects tabs, chat, feedback, and modal routes with `Stack.Protected`
+  - logout explicitly replaces the active route with `/login`
+  - delayed chat-to-feedback navigation is cancelled when auth/user/component state changes
+  - feedback redirects to Home when neither current evaluation nor user-scoped persisted context exists
+- Added deterministic scenario generation from catalog selections:
+  - `POST /scenario/generate` accepts optional `template_id`
+  - catalog template IDs resolve through the same shared helper used to build catalog responses
+  - mismatched template/attack/difficulty requests return `422`
+  - the frontend catalog passes the selected template ID through the chat route and training provider
+  - dashboard and adaptive flows keep random template selection when no `template_id` is supplied
+- Added full generated-scenario persistence and restoration:
+  - Alembic revision `20260607_0006` stores `template_id`, channel, attacker message, options, and red flags
+  - `GET /scenario/{scenario_id}` restores the exact generated payload with per-user ownership enforcement
+  - chat recovery loads persisted generated scenarios before falling back to fresh generation
+  - backend tests cover payload serialization, restart restoration, unknown scenarios, and cross-user access
 - Backend refactor completed: service layer extracted from `main.py` into `training_service.py`.
 - Added session timeline events in backend for `scenario_generated` and `answer_evaluated`.
 - Extended API contract with `session_stats.recent_events`.
@@ -246,8 +263,9 @@ Current integration level:
   - backend `/auth/me` now surfaces validation conflicts with explicit `409` instead of masking them as generic auth errors
 - Added Firebase / env / run-script support:
   - backend loads `BackendAPI/.env` via `python-dotenv`
-  - `run-all.sh` now validates `.env`, `.env.local`, `.venv`, and `node_modules` before startup
-  - `run-all.sh` starts backend on `127.0.0.1:8000` with `--lifespan off` and waits for `/health`
+- `run-all.sh` now validates `.env`, `.env.local`, `.venv`, and `node_modules` before startup
+- `run-all.sh` applies `alembic upgrade head` before starting Uvicorn
+  - `run-all.sh` starts backend on `127.0.0.1:8000`, keeps FastAPI lifespan hooks enabled, and waits for `/health`
   - Expo package versions were aligned to the installed SDK
 - Added Alembic migration `20260513_0003`:
   - creates `users` table
@@ -313,6 +331,7 @@ Current integration level:
 - `BackendAPI/migrations/versions/20260507_0001_initial_schema.py`
 - `BackendAPI/migrations/versions/20260511_0002_persist_scenario_rule.py`
 - `BackendAPI/migrations/versions/20260513_0003_add_users_and_session_ownership.py`
+- `BackendAPI/migrations/versions/20260607_0006_persist_generated_scenario_payload.py`
 - `BackendAPI/auth_service.py`
 - `BackendAPI/tests/test_api_endpoints.py`
 - `BackendAPI/tests/test_persistence_repository.py`
@@ -398,13 +417,15 @@ Current approach:
 - dual-write mode (existing in-memory flow + DB writes)
 - existing `/scenario/generate` and `/scenario/evaluate` contracts preserved
 - persisted reads available via `/session/{session_id}`, `/session/{session_id}/events`, and `/session/{session_id}/trends`
+- generated scenarios are persisted with their complete render payload and restored via `/scenario/{scenario_id}`
 - when a known `session_id` is reused after restart, in-memory state is restored from persisted snapshot before new updates
 - Alembic migration tooling is now in place and wired in startup flow
 - PostgreSQL is now the default (via `POSTGRES_*` or `DATABASE_URL`); SQLite is opt-in only
 - session progress reads now use persisted state as source of truth (no in-memory progress cache)
+- scenario evaluation is idempotent: score, mastery, and timeline events commit atomically once per `scenario_id`
+- same-option retries return the stored result; retries with a different option return `409 Conflict`
 
 Next persistence step:
-- reduce remaining transient in-memory dependencies (primarily scenario context lifecycle) where practical
 - expand repository-level tests for trend/event query behavior and pagination edge cases
 
 ### 7. Extract reusable hooks or subcomponents further
@@ -470,6 +491,7 @@ Implemented:
 ```bash
 cd /Users/robertbalasoiu/Robert/Licenta2026/LucrareLicenta/BackendAPI
 source .venv/bin/activate
+alembic upgrade head
 uvicorn main:app --host 127.0.0.1 --port 8000 --lifespan off
 ```
 
@@ -490,9 +512,6 @@ npx expo start
 Focus on incremental improvements only.
 
 Good next tasks:
-- make scenario generation deterministic from the catalog card selection (`template_id`), not only by attack type/difficulty
-- persist and restore the full generated scenario payload from the backend, including options, red flags, and channel
-- make `/scenario/evaluate` idempotent and block duplicate scoring for the same `scenario_id`
 - add a real session history screen with backend-backed session list and latest-session resume
 - harden auth/session handling further, especially deep links and stale-session cleanup
 - add LLM integration with strict schema validation + fallback once the deterministic scenario flow is stable

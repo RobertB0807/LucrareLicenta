@@ -594,9 +594,43 @@ def validate_scenario_library() -> None:
         raise RuntimeError(f"Each combination must have at least 2 templates: {insufficient}")
 
 
-def get_scenario_template(attack_type: AttackType, difficulty: DifficultyLevel) -> ScenarioTemplate:
+def build_scenario_template_id(
+    attack_type: AttackType,
+    difficulty: DifficultyLevel,
+    template_index: int,
+) -> str:
+    return f"{attack_type}-{difficulty}-{template_index + 1}"
+
+
+def get_scenario_template(
+    attack_type: AttackType,
+    difficulty: DifficultyLevel,
+    template_id: str | None = None,
+) -> ScenarioTemplate:
+    _, template = get_scenario_template_selection(attack_type, difficulty, template_id)
+    return template
+
+
+def get_scenario_template_selection(
+    attack_type: AttackType,
+    difficulty: DifficultyLevel,
+    template_id: str | None = None,
+) -> tuple[str, ScenarioTemplate]:
     templates = SCENARIO_LIBRARY[(attack_type, difficulty)]
-    return choice(templates).model_copy(deep=True)
+
+    if template_id is not None:
+        for template_index, template in enumerate(templates):
+            if build_scenario_template_id(attack_type, difficulty, template_index) == template_id:
+                return template_id, template.model_copy(deep=True)
+        raise ValueError(
+            f"Template '{template_id}' does not match attack type '{attack_type}' "
+            f"and difficulty '{difficulty}'"
+        )
+
+    selected_index = choice(range(len(templates)))
+    selected_template = templates[selected_index]
+    resolved_template_id = build_scenario_template_id(attack_type, difficulty, selected_index)
+    return resolved_template_id, selected_template.model_copy(deep=True)
 
 
 validate_scenario_library()

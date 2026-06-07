@@ -5,6 +5,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="$ROOT_DIR/BackendAPI"
 MOBILE_DIR="$ROOT_DIR/CyberSecurityApp"
+BACKEND_HOST="${BACKEND_HOST:-127.0.0.1}"
+BACKEND_PORT="${BACKEND_PORT:-8000}"
+BACKEND_HEALTH_URL="http://127.0.0.1:${BACKEND_PORT}/health"
 
 require_dir() {
   local path="$1"
@@ -41,6 +44,13 @@ if [[ ! -x "$BACKEND_PY" ]]; then
   exit 1
 fi
 
+BACKEND_ALEMBIC="$BACKEND_DIR/.venv/bin/alembic"
+if [[ ! -x "$BACKEND_ALEMBIC" ]]; then
+  echo "Alembic executable not found at $BACKEND_ALEMBIC" >&2
+  echo "Install backend dependencies first: cd BackendAPI && source .venv/bin/activate && python3 -m pip install -r requirements.txt" >&2
+  exit 1
+fi
+
 if [[ ! -f "$BACKEND_DIR/.env" ]]; then
   echo "Backend .env not found at $BACKEND_DIR/.env" >&2
   echo "Create it from BackendAPI/.env.example and set DATABASE_URL plus Firebase settings." >&2
@@ -62,6 +72,8 @@ PIDS=()
 
 cleanup() {
   local code=$?
+  trap - EXIT INT TERM
+
   if [[ "${#PIDS[@]}" -gt 0 ]]; then
     echo
     echo "Stopping services..."
@@ -70,30 +82,53 @@ cleanup() {
         kill "$pid" >/dev/null 2>&1 || true
       fi
     done
+    for pid in "${PIDS[@]}"; do
+      wait "$pid" >/dev/null 2>&1 || true
+    done
   fi
+
   exit "$code"
 }
 
 trap cleanup INT TERM EXIT
 
-echo "Starting Backend API on http://127.0.0.1:8000 ..."
+echo "Applying backend database migrations ..."
 (
   cd "$BACKEND_DIR"
-  "$BACKEND_PY" -m uvicorn main:app --host 127.0.0.1 --port 8000 --lifespan off
+  "$BACKEND_ALEMBIC" upgrade head
+)
+
+if curl -fsS "$BACKEND_HEALTH_URL" >/dev/null 2>&1; then
+  echo "Backend API is already running at $BACKEND_HEALTH_URL." >&2
+  echo "Stop the existing process before running this script." >&2
+  exit 1
+fi
+
+echo "Starting Backend API on ${BACKEND_HOST}:${BACKEND_PORT} ..."
+(
+  cd "$BACKEND_DIR"
+  "$BACKEND_PY" -m uvicorn main:app --host "$BACKEND_HOST" --port "$BACKEND_PORT"
 ) &
-PIDS+=("$!")
+BACKEND_PID="$!"
+PIDS+=("$BACKEND_PID")
 
 echo "Waiting for Backend API health check ..."
 for _ in {1..30}; do
-  if curl -fsS "http://127.0.0.1:8000/health" >/dev/null 2>&1; then
+  if ! kill -0 "$BACKEND_PID" >/dev/null 2>&1; then
+    wait "$BACKEND_PID" || true
+    echo "Backend API exited before becoming ready." >&2
+    exit 1
+  fi
+
+  if curl -fsS "$BACKEND_HEALTH_URL" >/dev/null 2>&1; then
     echo "Backend API is ready."
     break
   fi
   sleep 0.5
 done
 
-if ! curl -fsS "http://127.0.0.1:8000/health" >/dev/null 2>&1; then
-  echo "Backend API did not become ready on http://127.0.0.1:8000." >&2
+if ! curl -fsS "$BACKEND_HEALTH_URL" >/dev/null 2>&1; then
+  echo "Backend API did not become ready at $BACKEND_HEALTH_URL." >&2
   exit 1
 fi
 
@@ -102,7 +137,22 @@ echo "Starting Expo app ..."
   cd "$MOBILE_DIR"
   npm run start
 ) &
-PIDS+=("$!")
+MOBILE_PID="$!"
+PIDS+=("$MOBILE_PID")
 
 echo "All services started. Press Ctrl+C to stop everything."
-wait
+while true; do
+  if ! kill -0 "$BACKEND_PID" >/dev/null 2>&1; then
+    wait "$BACKEND_PID" || backend_code=$?
+    echo "Backend API stopped unexpectedly." >&2
+    exit "${backend_code:-1}"
+  fi
+
+  if ! kill -0 "$MOBILE_PID" >/dev/null 2>&1; then
+    wait "$MOBILE_PID" || mobile_code=$?
+    echo "Expo app stopped." >&2
+    exit "${mobile_code:-1}"
+  fi
+
+  sleep 1
+done

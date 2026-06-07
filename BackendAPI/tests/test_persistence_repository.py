@@ -177,6 +177,41 @@ class PersistenceRepositoryTestCase(unittest.TestCase):
         self.assertIsNone(persistence_repository.fetch_session_trends("missing-session", limit=20, offset=0))
         self.assertIsNone(persistence_repository.fetch_session_trend_aggregates("missing-session"))
 
+    def test_generated_scenario_payload_is_persisted_and_restored(self) -> None:
+        session_id = "repo-generated-scenario-session"
+        scenario_id = "repo-generated-scenario"
+        self._seed_session(session_id)
+
+        persistence_repository.record_generated_scenario(
+            session_id=session_id,
+            scenario_id=scenario_id,
+            attack_type="phishing",
+            difficulty="medium",
+            template_id="phishing-medium-2",
+            channel="email",
+            attacker_message="Mesaj de test",
+            options=[
+                {"id": "click", "text": "Deschid linkul"},
+                {"id": "report", "text": "Raportez mesajul"},
+            ],
+            red_flags=["Domeniu suspect", "Urgenta artificiala"],
+            correct_option_id="report",
+            correct_explanation="Corect",
+            incorrect_explanation="Incorect",
+        )
+
+        restored = persistence_repository.fetch_generated_scenario(scenario_id)
+        self.assertIsNotNone(restored)
+        assert restored is not None
+        self.assertEqual(restored["session_id"], session_id)
+        self.assertEqual(restored["template_id"], "phishing-medium-2")
+        self.assertEqual(restored["channel"], "email")
+        self.assertEqual(restored["attacker_message"], "Mesaj de test")
+        self.assertEqual(restored["options"][1]["id"], "report")
+        self.assertEqual(restored["red_flags"], ["Domeniu suspect", "Urgenta artificiala"])
+
+        self.assertIsNone(persistence_repository.fetch_generated_scenario("missing-scenario"))
+
     def test_user_creation_and_session_ownership(self) -> None:
         user = persistence_repository.create_user(
             email="owner@example.com",

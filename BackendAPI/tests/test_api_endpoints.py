@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -179,6 +180,176 @@ class ApiEndpointsTestCase(unittest.TestCase):
         self.assertIn("is_correct", evaluated_payload)
         self.assertIn(evaluated_payload["score_delta"], {-5, 0, 10})
 
+    def test_evaluate_retry_with_same_option_is_idempotent(self) -> None:
+        generated = self.client.post(
+            "/scenario/generate",
+            json={"attack_type": "phishing", "difficulty": "easy"},
+            headers=self.auth_headers,
+        )
+        self.assertEqual(generated.status_code, 200)
+        generated_payload = generated.json()
+        request_payload = {
+            "scenario_id": generated_payload["scenario_id"],
+            "selected_option_id": generated_payload["options"][0]["id"],
+        }
+
+        first = self.client.post(
+            "/scenario/evaluate",
+            json=request_payload,
+            headers=self.auth_headers,
+        )
+        retry = self.client.post(
+            "/scenario/evaluate",
+            json=request_payload,
+            headers=self.auth_headers,
+        )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(retry.status_code, 200)
+        self.assertFalse(first.json()["was_already_evaluated"])
+        self.assertTrue(retry.json()["was_already_evaluated"])
+        self.assertEqual(retry.json()["is_correct"], first.json()["is_correct"])
+        self.assertEqual(retry.json()["score_delta"], first.json()["score_delta"])
+        self.assertEqual(retry.json()["explanation"], first.json()["explanation"])
+        self.assertEqual(retry.json()["session_stats"]["total_attempts"], 1)
+
+        events = self.client.get(
+            f"/session/{generated_payload['session_id']}/events",
+            headers=self.auth_headers,
+        ).json()["events"]
+        evaluated_events = [
+            event for event in events if event["event_type"] == "answer_evaluated"
+        ]
+        self.assertEqual(len(evaluated_events), 1)
+
+        learning_rows = persistence_repository.fetch_user_learning_profiles(self.auth_user_id)
+        matching_rows = [
+            row
+            for row in learning_rows
+            if row["attack_type"] == "phishing" and row["difficulty"] == "easy"
+        ]
+        self.assertEqual(len(matching_rows), 1)
+        self.assertEqual(matching_rows[0]["attempts"], 1)
+
+    def test_evaluate_retry_with_different_option_returns_conflict(self) -> None:
+        generated = self.client.post(
+            "/scenario/generate",
+            json={"attack_type": "smishing", "difficulty": "medium"},
+            headers=self.auth_headers,
+        )
+        self.assertEqual(generated.status_code, 200)
+        generated_payload = generated.json()
+        options = generated_payload["options"]
+        self.assertGreaterEqual(len(options), 2)
+
+        first = self.client.post(
+            "/scenario/evaluate",
+            json={
+                "scenario_id": generated_payload["scenario_id"],
+                "selected_option_id": options[0]["id"],
+            },
+            headers=self.auth_headers,
+        )
+        conflict = self.client.post(
+            "/scenario/evaluate",
+            json={
+                "scenario_id": generated_payload["scenario_id"],
+                "selected_option_id": options[1]["id"],
+            },
+            headers=self.auth_headers,
+        )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(conflict.status_code, 409)
+        self.assertIn("already evaluated", conflict.json()["detail"])
+
+        snapshot = self.client.get(
+            f"/session/{generated_payload['session_id']}",
+            headers=self.auth_headers,
+        ).json()
+        self.assertEqual(snapshot["session_stats"]["total_attempts"], 1)
+        self.assertEqual(snapshot["evaluated_scenarios"], 1)
+
+    def test_concurrent_same_option_evaluations_apply_once(self) -> None:
+        generated = main.generate_scenario(
+            main.GenerateScenarioRequest(
+                attack_type="impersonation",
+                difficulty="hard",
+            )
+        ).model_dump()
+        request_payload = main.EvaluateScenarioRequest(
+            scenario_id=generated["scenario_id"],
+            selected_option_id=generated["options"][0]["id"],
+        )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [
+                executor.submit(main.evaluate_scenario, request_payload)
+                for _ in range(2)
+            ]
+            results = [future.result().model_dump() for future in futures]
+
+        self.assertEqual(
+            sorted(result["was_already_evaluated"] for result in results),
+            [False, True],
+        )
+        snapshot = main.get_session_snapshot(generated["session_id"]).model_dump()
+        self.assertEqual(snapshot["session_stats"]["total_attempts"], 1)
+        self.assertEqual(snapshot["evaluated_scenarios"], 1)
+        evaluated_events = [
+            event
+            for event in snapshot["session_stats"]["recent_events"]
+            if event["event_type"] == "answer_evaluated"
+        ]
+        self.assertEqual(len(evaluated_events), 1)
+
+    def test_generated_scenario_can_be_restored_after_context_cache_reset(self) -> None:
+        generated = self.client.post(
+            "/scenario/generate",
+            json={
+                "attack_type": "phishing",
+                "difficulty": "easy",
+                "template_id": "phishing-easy-2",
+            },
+            headers=self.auth_headers,
+        )
+        self.assertEqual(generated.status_code, 200)
+        generated_payload = generated.json()
+
+        training_service.scenario_contexts.clear()
+
+        restored = self.client.get(
+            f"/scenario/{generated_payload['scenario_id']}",
+            headers=self.auth_headers,
+        )
+        self.assertEqual(restored.status_code, 200)
+        self.assertEqual(restored.json(), generated_payload)
+
+    def test_generated_scenario_read_is_owner_scoped(self) -> None:
+        generated = self.client.post(
+            "/scenario/generate",
+            json={"attack_type": "smishing", "difficulty": "hard"},
+            headers=self.auth_headers,
+        )
+        self.assertEqual(generated.status_code, 200)
+        scenario_id = generated.json()["scenario_id"]
+        other_user_headers = self._register_and_auth_headers("scenario-reader@example.com")
+
+        blocked = self.client.get(
+            f"/scenario/{scenario_id}",
+            headers=other_user_headers,
+        )
+        self.assertEqual(blocked.status_code, 404)
+        self.assertEqual(blocked.json()["detail"], "Scenario not found")
+
+    def test_unknown_generated_scenario_returns_404(self) -> None:
+        response = self.client.get(
+            "/scenario/does-not-exist",
+            headers=self.auth_headers,
+        )
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["detail"], "Scenario not found")
+
     def test_session_reads_do_not_depend_on_mutated_in_memory_progress(self) -> None:
         first_generated = main.generate_scenario(
             main.GenerateScenarioRequest(attack_type="phishing", difficulty="easy")
@@ -278,6 +449,46 @@ class ApiEndpointsTestCase(unittest.TestCase):
         self.assertIn("difficulty", first_item)
         self.assertIn("channel", first_item)
         self.assertIn("attacker_message_preview", first_item)
+
+    def test_generate_uses_exact_catalog_template_when_template_id_is_provided(self) -> None:
+        catalog = self.client.get("/scenario/catalog", headers=self.auth_headers).json()
+        selected_item = next(
+            item
+            for item in catalog["items"]
+            if item["id"] == "phishing-easy-2"
+        )
+
+        response = self.client.post(
+            "/scenario/generate",
+            json={
+                "attack_type": selected_item["attack_type"],
+                "difficulty": selected_item["difficulty"],
+                "template_id": selected_item["id"],
+            },
+            headers=self.auth_headers,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        expected_template = training_service.SCENARIO_LIBRARY[("phishing", "easy")][1]
+        self.assertEqual(payload["attacker_message"], expected_template.attacker_message)
+        self.assertEqual(payload["channel"], expected_template.channel)
+        self.assertEqual(payload["options"], [option.model_dump() for option in expected_template.options])
+        self.assertEqual(payload["red_flags"], expected_template.red_flags)
+
+    def test_generate_rejects_template_id_for_different_selection(self) -> None:
+        response = self.client.post(
+            "/scenario/generate",
+            json={
+                "attack_type": "phishing",
+                "difficulty": "easy",
+                "template_id": "smishing-easy-1",
+            },
+            headers=self.auth_headers,
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("does not match", response.json()["detail"])
 
     def test_assistant_ask_rejects_empty_message(self) -> None:
         response = self.client.post(

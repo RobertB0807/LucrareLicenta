@@ -8,6 +8,7 @@ export type ScenarioOption = {
 
 export type Scenario = {
   scenario_id: string;
+  template_id?: string | null;
   attack_type: AttackType;
   difficulty: DifficultyLevel;
   channel: string;
@@ -116,6 +117,7 @@ export type Evaluation = {
   explanation: string;
   session_stats: SessionStats;
   recommendation: Recommendation;
+  was_already_evaluated?: boolean;
 };
 
 export type GenerateScenarioApiResponse = Scenario & {

@@ -22,6 +22,8 @@ type Msg =
 
 const CHAT_PROGRESS_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 const CHAT_PROGRESS_MAX_ENTRIES = 12;
+const GENERATED_SCENARIO_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type PersistedChatProgress = {
   messages: Msg[];
@@ -131,19 +133,29 @@ function extractUrl(text: string): { cleanText: string; url: string } | null {
 }
 
 export default function ChatScenarioScreen() {
-  const { scenarioId, attackType, difficulty, sessionId: routeSessionId } = useLocalSearchParams<{
+  const {
+    scenarioId,
+    templateId,
+    generateNew,
+    attackType,
+    difficulty,
+    sessionId: routeSessionId,
+  } = useLocalSearchParams<{
     scenarioId: string;
+    templateId?: string;
+    generateNew?: string;
     attackType?: string;
     difficulty?: string;
     sessionId?: string;
   }>();
 
-  const { user } = useAuth();
+  const { user, isAuthenticated } = useAuth();
   const {
     scenario,
     isLoading,
     error,
     startSimulation,
+    restoreScenario,
     evaluateWithOptionId,
     evaluation,
     sessionId,
@@ -165,8 +177,8 @@ export default function ChatScenarioScreen() {
   );
   const chatStorageKey = useMemo(
     () =>
-      `${chatProgressPrefix}:${String(scenarioId ?? 'unknown')}:${String(attackType ?? 'phishing')}:${String(difficulty ?? 'easy')}:${String(routeSessionId ?? 'new')}`,
-    [attackType, chatProgressPrefix, difficulty, routeSessionId, scenarioId]
+      `${chatProgressPrefix}:${String(scenarioId ?? 'unknown')}:${String(attackType ?? 'phishing')}:${String(difficulty ?? 'easy')}:${String(routeSessionId ?? 'new')}:${generateNew === 'true' ? 'fresh' : 'restore'}`,
+    [attackType, chatProgressPrefix, difficulty, generateNew, routeSessionId, scenarioId]
   );
   const feedbackStorageKey = useMemo(
     () => buildUserStorageKey(FEEDBACK_CONTEXT_STORAGE_KEY, user?.id),
@@ -224,28 +236,64 @@ export default function ChatScenarioScreen() {
     );
   }, [chatProgressPrefix, chatStorageKey, isChatStateHydrated, messages, scenario?.scenario_id, scriptDone]);
 
-  // Generate scenario on mount
+  // Restore an existing generated scenario before creating a replacement.
   useEffect(() => {
     if (!isChatStateHydrated) return;
     if (hasGeneratedRef.current) return;
-    if (hasRestoredChatState && restoredScenarioId && scenario?.scenario_id === restoredScenarioId) {
+
+    const directScenarioId =
+      !templateId &&
+      generateNew !== 'true' &&
+      GENERATED_SCENARIO_ID_PATTERN.test(String(scenarioId ?? ''))
+        ? String(scenarioId)
+        : null;
+    const scenarioIdToRestore =
+      (hasRestoredChatState ? restoredScenarioId : null) ?? directScenarioId;
+
+    if (scenarioIdToRestore && scenario?.scenario_id === scenarioIdToRestore) {
       hasGeneratedRef.current = true;
       return;
     }
     hasGeneratedRef.current = true;
 
-    const at = (attackType as AttackType) || 'phishing';
-    const diff = (difficulty as DifficultyLevel) || 'easy';
-    startSimulation(at, diff, routeSessionId ?? null);
+    let cancelled = false;
+    const restoreOrGenerate = async () => {
+      if (scenarioIdToRestore) {
+        const restored = await restoreScenario(scenarioIdToRestore);
+        if (cancelled || restored) {
+          return;
+        }
+
+        if (hasRestoredChatState) {
+          setMessages([]);
+          setScriptDone(false);
+          setHasRestoredChatState(false);
+          setRestoredScenarioId(null);
+        }
+      }
+
+      const at = (attackType as AttackType) || 'phishing';
+      const diff = (difficulty as DifficultyLevel) || 'easy';
+      await startSimulation(at, diff, routeSessionId ?? null, templateId);
+    };
+
+    void restoreOrGenerate();
+    return () => {
+      cancelled = true;
+    };
   }, [
     attackType,
     difficulty,
+    generateNew,
     hasRestoredChatState,
     isChatStateHydrated,
+    restoreScenario,
     restoredScenarioId,
     routeSessionId,
     scenario?.scenario_id,
+    scenarioId,
     startSimulation,
+    templateId,
   ]);
 
   // When scenario arrives from backend, animate the attacker messages
@@ -310,39 +358,58 @@ export default function ChatScenarioScreen() {
 
   // After evaluation completes, navigate to feedback
   useEffect(() => {
-    if (evaluation && evaluating) {
-      void AsyncStorage.setItem(
-        feedbackStorageKey,
-        JSON.stringify({
-          scenarioId: scenario?.scenario_id ?? null,
-          sessionId: sessionId ?? routeSessionId ?? null,
-          attackType: scenario?.attack_type ?? ((attackType as AttackType) || 'phishing'),
-          difficulty: scenario?.difficulty ?? ((difficulty as DifficultyLevel) || 'easy'),
-          isCorrect: evaluation.is_correct,
-          scoreDelta: evaluation.score_delta,
-          explanation: evaluation.explanation,
-          recommendation: evaluation.recommendation,
-          redFlags: scenario?.red_flags ?? [],
-          savedAt: Date.now(),
-        })
-      ).finally(() => {
-        if (feedbackNavigationTimeoutRef.current) {
-          clearTimeout(feedbackNavigationTimeoutRef.current);
-        }
-
-        feedbackNavigationTimeoutRef.current = setTimeout(() => {
-          feedbackNavigationTimeoutRef.current = null;
-          router.push({
-            pathname: '/feedback/[scenarioId]',
-            params: {
-              scenarioId: scenario?.scenario_id ?? 'unknown',
-              sessionId: sessionId ?? undefined,
-            },
-          });
-        }, 600);
-      });
+    if (!evaluation || !evaluating || !isAuthenticated || !user?.id) {
+      return;
     }
+
+    let cancelled = false;
+    const persistAndNavigate = async () => {
+      try {
+        await AsyncStorage.setItem(
+          feedbackStorageKey,
+          JSON.stringify({
+            scenarioId: scenario?.scenario_id ?? null,
+            sessionId: sessionId ?? routeSessionId ?? null,
+            attackType: scenario?.attack_type ?? ((attackType as AttackType) || 'phishing'),
+            difficulty: scenario?.difficulty ?? ((difficulty as DifficultyLevel) || 'easy'),
+            isCorrect: evaluation.is_correct,
+            scoreDelta: evaluation.score_delta,
+            explanation: evaluation.explanation,
+            recommendation: evaluation.recommendation,
+            redFlags: scenario?.red_flags ?? [],
+            savedAt: Date.now(),
+          })
+        );
+      } catch {
+        // Navigation can continue even when the local feedback fallback cannot be saved.
+      }
+
+      if (cancelled) {
+        return;
+      }
+
+      if (feedbackNavigationTimeoutRef.current) {
+        clearTimeout(feedbackNavigationTimeoutRef.current);
+      }
+
+      feedbackNavigationTimeoutRef.current = setTimeout(() => {
+        feedbackNavigationTimeoutRef.current = null;
+        if (cancelled) {
+          return;
+        }
+        router.push({
+          pathname: '/feedback/[scenarioId]',
+          params: {
+            scenarioId: scenario?.scenario_id ?? 'unknown',
+            sessionId: sessionId ?? undefined,
+          },
+        });
+      }, 600);
+    };
+
+    void persistAndNavigate();
     return () => {
+      cancelled = true;
       if (feedbackNavigationTimeoutRef.current) {
         clearTimeout(feedbackNavigationTimeoutRef.current);
         feedbackNavigationTimeoutRef.current = null;
@@ -353,6 +420,7 @@ export default function ChatScenarioScreen() {
     difficulty,
     evaluation,
     evaluating,
+    isAuthenticated,
     routeSessionId,
     scenario?.attack_type,
     scenario?.difficulty,
@@ -360,6 +428,7 @@ export default function ChatScenarioScreen() {
     scenario?.scenario_id,
     feedbackStorageKey,
     sessionId,
+    user?.id,
   ]);
 
   const onChoice = async (optionId: string, label: string) => {
@@ -407,7 +476,7 @@ export default function ChatScenarioScreen() {
               hasGeneratedRef.current = false;
               const at = (attackType as AttackType) || 'phishing';
               const diff = (difficulty as DifficultyLevel) || 'easy';
-              startSimulation(at, diff, routeSessionId ?? null);
+              startSimulation(at, diff, routeSessionId ?? null, templateId);
             }}>
             <Text style={styles.retryText}>Încearcă din nou</Text>
           </Pressable>
