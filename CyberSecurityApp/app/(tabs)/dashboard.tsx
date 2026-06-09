@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Link, useRouter } from 'expo-router';
-import { useMemo } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
+import { Link, useRouter, type Href } from 'expo-router';
+import { useCallback, useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
 import { useAuth } from '@/features/auth/auth-context';
@@ -43,8 +44,20 @@ function adaptiveDifficulty(masteryScore: number, attempts: number): DifficultyL
 }
 
 export default function DashboardScreen() {
-  const { stats, perAttackStats, evaluation, sessionId, scenarioCatalog, adaptiveProfile, isLoadingAdaptiveProfile } =
-    useTrainingSession();
+  const {
+    stats,
+    perAttackStats,
+    evaluation,
+    sessionId,
+    scenarioCatalog,
+    adaptiveProfile,
+    isLoadingAdaptiveProfile,
+    learningPath,
+    isLoadingLearningPath,
+    refreshActiveSession,
+    refreshAdaptiveProfile,
+    refreshLearningPath,
+  } = useTrainingSession();
   const { user, logout } = useAuth();
   const router = useRouter();
   const { width } = useWindowDimensions();
@@ -78,7 +91,15 @@ export default function DashboardScreen() {
     return map;
   }, [adaptiveProfile?.by_attack]);
 
-  const cyberScore = Math.max(0, Math.min(100, stats.accuracy));
+  useFocusEffect(
+    useCallback(() => {
+      void refreshActiveSession();
+      void refreshAdaptiveProfile();
+      void refreshLearningPath();
+    }, [refreshActiveSession, refreshAdaptiveProfile, refreshLearningPath])
+  );
+
+  const sessionScore = stats.totalScore;
   const estimatedDetected = Math.round((stats.totalAttempts * stats.accuracy) / 100);
   const mistakes = Math.max(0, stats.totalAttempts - estimatedDetected);
 
@@ -170,34 +191,76 @@ export default function DashboardScreen() {
             </Text>
           </View>
         </View>
-        <Pressable
-          style={({ pressed }) => [styles.logoutButton, pressed && styles.pressableFeedback]}
-          onPress={() => {
-            void logout().catch(() => undefined).then(() => {
-              router.replace('/login');
-            });
-          }}
-        >
-          <Ionicons name="log-out-outline" size={17} color={TrainingColors.textMuted} />
-        </Pressable>
+        <View style={styles.headerActions}>
+          <Pressable
+            accessibilityLabel="Istoricul sesiunilor"
+            style={({ pressed }) => [styles.logoutButton, pressed && styles.pressableFeedback]}
+            onPress={() => router.push('/sessions' as Href)}>
+            <Ionicons name="time-outline" size={18} color={TrainingColors.accentTeal} />
+          </Pressable>
+          <Pressable
+            accessibilityLabel="Deconectare"
+            style={({ pressed }) => [styles.logoutButton, pressed && styles.pressableFeedback]}
+            onPress={() => {
+              void logout().catch(() => undefined).then(() => {
+                router.replace('/login');
+              });
+            }}>
+            <Ionicons name="log-out-outline" size={17} color={TrainingColors.textMuted} />
+          </Pressable>
+        </View>
       </View>
 
       <View style={[styles.scoreCard, isCompact && styles.scoreCardCompact]}>
         <View style={styles.scoreGlow} />
         <View style={[styles.scoreRing, isCompact && styles.scoreRingCompact]}>
-          <Text style={[styles.scoreRingText, isCompact && styles.scoreRingTextCompact]}>{cyberScore}</Text>
+          <Text style={[styles.scoreRingText, isCompact && styles.scoreRingTextCompact]}>{sessionScore}</Text>
         </View>
         <View style={styles.scoreContent}>
-          <Text style={styles.eyebrow}>Scor de securitate</Text>
+          <Text style={styles.eyebrow}>Scor sesiune</Text>
           <Text style={[styles.scoreValue, isCompact && styles.scoreValueCompact]}>
-            {cyberScore}
-            <Text style={styles.scoreOutOf}> / 100</Text>
+            {sessionScore}
+            <Text style={styles.scoreOutOf}> puncte</Text>
           </Text>
           <Text style={styles.scoreMeta}>
-            {stats.totalAttempts} încercări · <Text style={styles.successText}>Sesiune activă</Text>
+            {stats.totalAttempts} încercări ·{' '}
+            <Text style={styles.successText}>{stats.accuracy}% acuratețe</Text>
           </Text>
         </View>
       </View>
+
+      <Pressable
+        style={({ pressed }) => [styles.pathCard, pressed && styles.pressableFeedback]}
+        onPress={() => router.push('/learning-path' as Href)}>
+        <View style={styles.pathIcon}>
+          <Ionicons name="map-outline" size={21} color="#EFF6FF" />
+        </View>
+        <View style={styles.pathContent}>
+          <View style={styles.pathTopRow}>
+            <Text style={styles.pathEyebrow}>TRASEU DE ÎNVĂȚARE</Text>
+            <Text style={styles.pathLevel}>
+              {learningPath ? `Nivel ${learningPath.level}` : isLoadingLearningPath ? '...' : 'Nivel 1'}
+            </Text>
+          </View>
+          <Text style={styles.pathTitle}>
+            {learningPath?.next_action?.title ?? 'Construiește-ți progresul pas cu pas'}
+          </Text>
+          <View style={styles.pathProgressTrack}>
+            <View
+              style={[
+                styles.pathProgressFill,
+                { width: `${learningPath?.overall_progress ?? 0}%` },
+              ]}
+            />
+          </View>
+          <Text style={styles.pathMeta}>
+            {learningPath
+              ? `${learningPath.completed_modules}/${learningPath.total_modules} module · ${learningPath.xp} XP`
+              : 'Module, obiective, niveluri și insigne'}
+          </Text>
+        </View>
+        <Ionicons name="chevron-forward" size={18} color={TrainingColors.accentTeal} />
+      </Pressable>
 
       <View style={styles.adaptiveCard}>
         <View style={styles.adaptiveTopRow}>
@@ -305,12 +368,21 @@ export default function DashboardScreen() {
             value: `${estimatedDetected}`,
             icon: 'shield-checkmark' as keyof typeof Ionicons.glyphMap,
             tone: 'success' as const,
+            timeframe: 'Sesiunea curentă',
           },
           {
             label: 'Greșeli făcute',
             value: `${mistakes}`,
             icon: 'warning' as keyof typeof Ionicons.glyphMap,
             tone: 'warning' as const,
+            timeframe: 'Sesiunea curentă',
+          },
+          {
+            label: 'Record zile active',
+            value: `${learningPath?.longest_streak ?? 0}`,
+            icon: 'trophy' as keyof typeof Ionicons.glyphMap,
+            tone: 'success' as const,
+            timeframe: 'Progres total',
           },
         ].map((s) => (
           <View key={s.label} style={[styles.metricCard, isCompact && styles.metricCardCompact]}>
@@ -320,7 +392,7 @@ export default function DashboardScreen() {
                 size={16}
                 color={s.tone === 'success' ? TrainingColors.accentTeal : TrainingColors.accentAmber}
               />
-              <Text style={styles.metricTime}>Luna aceasta</Text>
+              <Text style={styles.metricTime}>{s.timeframe}</Text>
             </View>
             <Text style={styles.metricValue}>{s.value}</Text>
             <Text style={styles.metricLabel}>{s.label}</Text>
@@ -434,6 +506,7 @@ const styles = StyleSheet.create({
   content: { paddingHorizontal: 20, paddingTop: 50, paddingBottom: 130, gap: 14 },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   headerIcon: {
     width: 40,
     height: 40,
@@ -471,6 +544,39 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   scoreCardCompact: { padding: 14, gap: 10, borderRadius: 20 },
+  pathCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(69,224,177,0.35)',
+    backgroundColor: 'rgba(69,224,177,0.07)',
+    padding: 14,
+  },
+  pathIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: TrainingColors.buttonPrimary,
+    borderWidth: 1,
+    borderColor: TrainingColors.buttonPrimaryBorder,
+  },
+  pathContent: { flex: 1, gap: 4 },
+  pathTopRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 },
+  pathEyebrow: { color: TrainingColors.accentTeal, fontSize: 9, fontWeight: '800', letterSpacing: 1.1 },
+  pathLevel: { color: TrainingColors.accentAmber, fontSize: 10, fontWeight: '800' },
+  pathTitle: { color: TrainingColors.textPrimary, fontSize: 13, fontWeight: '800' },
+  pathProgressTrack: {
+    height: 5,
+    borderRadius: 4,
+    backgroundColor: TrainingColors.panelSoft,
+    overflow: 'hidden',
+  },
+  pathProgressFill: { height: '100%', backgroundColor: TrainingColors.accentTeal },
+  pathMeta: { color: TrainingColors.textSecondary, fontSize: 9 },
   adaptiveCard: {
     borderRadius: 20,
     borderWidth: 1,
@@ -628,7 +734,7 @@ const styles = StyleSheet.create({
   },
   challengeTitle: { color: '#EFF6FF', fontWeight: '700', marginTop: 1 },
   challengeMeta: { color: '#CFE0F8', fontSize: 12, marginTop: 1 },
-  metricGrid: { flexDirection: 'row', gap: 10 },
+  metricGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   metricGridCompact: { flexWrap: 'wrap' },
   metricCard: {
     flex: 1,
@@ -638,6 +744,7 @@ const styles = StyleSheet.create({
     backgroundColor: TrainingColors.panel,
     padding: 12,
     gap: 6,
+    minWidth: 105,
   },
   metricCardCompact: { padding: 10 },
   metricTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },

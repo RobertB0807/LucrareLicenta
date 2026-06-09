@@ -26,13 +26,18 @@ const GENERATED_SCENARIO_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type PersistedChatProgress = {
+  ownerUserId: string;
   messages: Msg[];
   scriptDone: boolean;
   scenarioId: string | null;
   updatedAt: number;
 };
 
-async function cleanupChatProgressStorage(currentKey: string, chatProgressPrefix: string): Promise<void> {
+async function cleanupChatProgressStorage(
+  currentKey: string,
+  chatProgressPrefix: string,
+  expectedUserId: string | null
+): Promise<void> {
   const storage = AsyncStorage as typeof AsyncStorage & {
     multiGet?: (keys: readonly string[]) => Promise<[string, string | null][]>;
     multiRemove?: (keys: readonly string[]) => Promise<void>;
@@ -60,7 +65,11 @@ async function cleanupChatProgressStorage(currentKey: string, chatProgressPrefix
 
     try {
       const parsed = JSON.parse(raw) as PersistedChatProgress;
-      if (typeof parsed.updatedAt !== 'number' || now - parsed.updatedAt > CHAT_PROGRESS_TTL_MS) {
+      if (
+        parsed.ownerUserId !== expectedUserId ||
+        typeof parsed.updatedAt !== 'number' ||
+        now - parsed.updatedAt > CHAT_PROGRESS_TTL_MS
+      ) {
         keysToRemove.push(key);
         continue;
       }
@@ -166,6 +175,7 @@ export default function ChatScenarioScreen() {
   const [scriptDone, setScriptDone] = useState(false);
   const [evaluating, setEvaluating] = useState(false);
   const [isChatStateHydrated, setIsChatStateHydrated] = useState(false);
+  const [hydratedUserId, setHydratedUserId] = useState<string | null>(null);
   const [hasRestoredChatState, setHasRestoredChatState] = useState(false);
   const [restoredScenarioId, setRestoredScenarioId] = useState<string | null>(null);
   const hasGeneratedRef = useRef(false);
@@ -187,10 +197,21 @@ export default function ChatScenarioScreen() {
 
   useEffect(() => {
     let cancelled = false;
+    const hydrationUserId = user?.id ?? null;
+
+    setMessages([]);
+    setTyping(false);
+    setScriptDone(false);
+    setEvaluating(false);
+    setHasRestoredChatState(false);
+    setRestoredScenarioId(null);
+    setHydratedUserId(null);
+    setIsChatStateHydrated(false);
+    hasGeneratedRef.current = false;
 
     const hydrateChatProgress = async () => {
       try {
-        await cleanupChatProgressStorage(chatStorageKey, chatProgressPrefix);
+        await cleanupChatProgressStorage(chatStorageKey, chatProgressPrefix, hydrationUserId);
 
         const raw = await AsyncStorage.getItem(chatStorageKey);
         if (!raw || cancelled) {
@@ -198,6 +219,10 @@ export default function ChatScenarioScreen() {
         }
 
         const parsed = JSON.parse(raw) as PersistedChatProgress;
+        if (parsed.ownerUserId !== hydrationUserId) {
+          await AsyncStorage.removeItem(chatStorageKey);
+          return;
+        }
         if (Array.isArray(parsed.messages)) {
           setMessages(parsed.messages);
         }
@@ -209,6 +234,7 @@ export default function ChatScenarioScreen() {
         setRestoredScenarioId(null);
       } finally {
         if (!cancelled) {
+          setHydratedUserId(hydrationUserId);
           setIsChatStateHydrated(true);
         }
       }
@@ -218,23 +244,33 @@ export default function ChatScenarioScreen() {
     return () => {
       cancelled = true;
     };
-  }, [chatProgressPrefix, chatStorageKey]);
+  }, [chatProgressPrefix, chatStorageKey, user?.id]);
 
   useEffect(() => {
-    if (!isChatStateHydrated) {
+    if (!isChatStateHydrated || !user || hydratedUserId !== user.id) {
       return;
     }
 
     const stateToPersist: PersistedChatProgress = {
+      ownerUserId: user.id,
       messages,
       scriptDone,
       scenarioId: scenario?.scenario_id ?? null,
       updatedAt: Date.now(),
     };
     void AsyncStorage.setItem(chatStorageKey, JSON.stringify(stateToPersist)).then(() =>
-      cleanupChatProgressStorage(chatStorageKey, chatProgressPrefix)
+      cleanupChatProgressStorage(chatStorageKey, chatProgressPrefix, user.id)
     );
-  }, [chatProgressPrefix, chatStorageKey, isChatStateHydrated, messages, scenario?.scenario_id, scriptDone]);
+  }, [
+    chatProgressPrefix,
+    chatStorageKey,
+    hydratedUserId,
+    isChatStateHydrated,
+    messages,
+    scenario?.scenario_id,
+    scriptDone,
+    user,
+  ]);
 
   // Restore an existing generated scenario before creating a replacement.
   useEffect(() => {
@@ -368,6 +404,7 @@ export default function ChatScenarioScreen() {
         await AsyncStorage.setItem(
           feedbackStorageKey,
           JSON.stringify({
+            ownerUserId: user.id,
             scenarioId: scenario?.scenario_id ?? null,
             sessionId: sessionId ?? routeSessionId ?? null,
             attackType: scenario?.attack_type ?? ((attackType as AttackType) || 'phishing'),

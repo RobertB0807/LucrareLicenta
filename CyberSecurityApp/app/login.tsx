@@ -25,6 +25,7 @@ export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -39,7 +40,7 @@ export default function LoginScreen() {
     setIsSubmitting(true);
 
     try {
-      await login(email.trim().toLowerCase(), password);
+      await login(email.trim().toLowerCase(), password, rememberMe);
       router.replace('/(tabs)/dashboard' as const);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Eroare la autentificare.');
@@ -152,6 +153,26 @@ export default function LoginScreen() {
                 </Pressable>
               </View>
             </View>
+
+            <Pressable
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: rememberMe }}
+              disabled={isSubmitting}
+              onPress={() => setRememberMe((value) => !value)}
+              style={styles.rememberRow}
+            >
+              <Ionicons
+                name={rememberMe ? 'checkbox' : 'square-outline'}
+                size={22}
+                color={rememberMe ? TrainingColors.accentTeal : TrainingColors.textMuted}
+              />
+              <View style={styles.rememberTextContainer}>
+                <Text style={styles.rememberLabel}>Ține-mă minte</Text>
+                <Text style={styles.rememberHint}>
+                  Păstrează sesiunea securizat timp de maximum 7 zile.
+                </Text>
+              </View>
+            </Pressable>
 
             <Pressable
               style={[styles.submitButton, !canSubmit && styles.submitButtonDisabled]}
@@ -315,6 +336,26 @@ const styles = StyleSheet.create({
   eyeButton: {
     paddingLeft: 8,
     paddingVertical: 4,
+  },
+  rememberRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    marginBottom: 18,
+  },
+  rememberTextContainer: {
+    flex: 1,
+  },
+  rememberLabel: {
+    color: TrainingColors.textSecondary,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  rememberHint: {
+    color: TrainingColors.textMuted,
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 2,
   },
 
   // Submit

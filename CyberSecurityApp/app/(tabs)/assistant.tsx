@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { useAuth } from '@/features/auth/auth-context';
@@ -17,6 +17,7 @@ const ASSISTANT_MESSAGES_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 const ASSISTANT_MESSAGES_MAX_ITEMS = 40;
 
 type PersistedAssistantMessages = {
+  ownerUserId: string;
   messages: Msg[];
   updatedAt: number;
 };
@@ -42,6 +43,10 @@ export default function AssistantScreen() {
   const [draft, setDraft] = useState('');
   const [thinking, setThinking] = useState(false);
   const [isHydrated, setIsHydrated] = useState(false);
+  const [hydratedUserId, setHydratedUserId] = useState<string | null>(null);
+  const currentUserId = user?.id ?? null;
+  const activeUserIdRef = useRef<string | null>(currentUserId);
+  activeUserIdRef.current = currentUserId;
   const storageKey = useMemo(
     () => buildUserStorageKey(ASSISTANT_MESSAGES_STORAGE_KEY, user?.id),
     [user?.id]
@@ -49,10 +54,12 @@ export default function AssistantScreen() {
 
   useEffect(() => {
     let cancelled = false;
+    const hydrationUserId = user?.id ?? null;
 
     setMessages(defaultMessages);
     setDraft('');
     setThinking(false);
+    setHydratedUserId(null);
     setIsHydrated(false);
 
     const hydrate = async () => {
@@ -62,11 +69,9 @@ export default function AssistantScreen() {
           return;
         }
 
-        const parsed = JSON.parse(raw) as Msg[] | PersistedAssistantMessages;
-        if (Array.isArray(parsed)) {
-          if (parsed.length > 0) {
-            setMessages(parsed.slice(-ASSISTANT_MESSAGES_MAX_ITEMS));
-          }
+        const parsed = JSON.parse(raw) as PersistedAssistantMessages;
+        if (parsed.ownerUserId !== hydrationUserId) {
+          await AsyncStorage.removeItem(storageKey);
           return;
         }
 
@@ -85,6 +90,7 @@ export default function AssistantScreen() {
         // Ignore local cache read errors.
       } finally {
         if (!cancelled) {
+          setHydratedUserId(hydrationUserId);
           setIsHydrated(true);
         }
       }
@@ -94,19 +100,20 @@ export default function AssistantScreen() {
     return () => {
       cancelled = true;
     };
-  }, [storageKey]);
+  }, [storageKey, user?.id]);
 
   useEffect(() => {
-    if (!isHydrated) {
+    if (!isHydrated || !user || hydratedUserId !== user.id) {
       return;
     }
 
     const stateToPersist: PersistedAssistantMessages = {
+      ownerUserId: user.id,
       messages: messages.slice(-ASSISTANT_MESSAGES_MAX_ITEMS),
       updatedAt: Date.now(),
     };
     void AsyncStorage.setItem(storageKey, JSON.stringify(stateToPersist));
-  }, [isHydrated, messages, storageKey]);
+  }, [hydratedUserId, isHydrated, messages, storageKey, user]);
 
   const clearLocalCache = async () => {
     await clearTrainingLocalCache(user?.id);
@@ -118,7 +125,8 @@ export default function AssistantScreen() {
 
   const send = async (text: string) => {
     const value = text.trim();
-    if (!value || thinking) return;
+    const requestUserId = user?.id ?? null;
+    if (!value || thinking || !requestUserId) return;
 
     setMessages((m) => [...m, { id: `u-${Date.now()}`, role: 'user', text: value }]);
     setDraft('');
@@ -126,20 +134,27 @@ export default function AssistantScreen() {
 
     try {
       const data = await askAssistant({ message: value });
+      if (activeUserIdRef.current !== requestUserId) {
+        return;
+      }
       const tipsText = data.quick_tips.map((tip, index) => `${index + 1}. ${tip}`).join('\n');
       const assistantText = tipsText ? `${data.answer}\n\n${tipsText}` : data.answer;
       setMessages((m) => [...m, { id: `a-${Date.now()}`, role: 'assistant', text: assistantText }]);
     } catch {
-      setMessages((m) => [
-        ...m,
-        {
-          id: `a-${Date.now()}`,
-          role: 'assistant',
-          text: 'Nu am putut contacta asistentul acum. Verifică backend-ul și încearcă din nou.',
-        },
-      ]);
+      if (activeUserIdRef.current === requestUserId) {
+        setMessages((m) => [
+          ...m,
+          {
+            id: `a-${Date.now()}`,
+            role: 'assistant',
+            text: 'Nu am putut contacta asistentul acum. Verifică backend-ul și încearcă din nou.',
+          },
+        ]);
+      }
     } finally {
-      setThinking(false);
+      if (activeUserIdRef.current === requestUserId) {
+        setThinking(false);
+      }
     }
   };
 

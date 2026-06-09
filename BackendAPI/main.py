@@ -10,20 +10,30 @@ from typing import Annotated
 from fastapi import FastAPI, HTTPException, Path, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, NonNegativeInt, StringConstraints
+from pydantic import BaseModel, Field, NonNegativeInt, StringConstraints
 from jwt import InvalidTokenError
 from sqlalchemy.exc import SQLAlchemyError
 
 from assistant_service import build_assistant_answer
 from auth_service import (
     AuthenticatedUser,
+    JWT_ACCESS_EXPIRATION_MINUTES,
     create_access_token,
+    create_refresh_token,
     decode_access_token,
+    decode_refresh_token,
     hash_password,
     verify_password,
 )
 from db import init_db
 from firebase_auth_service import verify_firebase_id_token
+from learning_path_service import (
+    LearningPathLessonCompletionResponse,
+    LearningPathLockedError,
+    LearningPathResponse,
+    build_learning_path,
+    complete_lesson,
+)
 from persistence_repository import (
     create_or_update_firebase_user,
     create_user,
@@ -42,6 +52,7 @@ from training_service import (
     SessionSnapshotResponse,
     SessionTrendAggregatesResponse,
     SessionTrendsResponse,
+    UserSessionsResponse,
     ScenarioEvaluationConflictError,
     get_learning_profile as get_training_learning_profile,
     get_generated_scenario as get_training_generated_scenario,
@@ -52,6 +63,7 @@ from training_service import (
     get_session_snapshot as get_training_session_snapshot,
     get_session_trend_aggregates as get_training_session_trend_aggregates,
     get_session_trends as get_training_session_trends,
+    get_user_sessions as get_training_user_sessions,
 )
 
 app = FastAPI(title="CyberSecurity Training API", version="0.2.0")
@@ -67,6 +79,10 @@ ScenarioId = Annotated[
     StringConstraints(strip_whitespace=True, min_length=1, max_length=128, pattern=ID_PATTERN),
 ]
 TemplateId = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=128, pattern=ID_PATTERN),
+]
+LessonId = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=128, pattern=ID_PATTERN),
 ]
@@ -196,6 +212,10 @@ class AuthLoginRequest(BaseModel):
     password: UserPassword
 
 
+class AuthRefreshRequest(BaseModel):
+    refresh_token: str = Field(min_length=1, max_length=4096)
+
+
 class UserResponse(BaseModel):
     id: str
     email: str
@@ -205,12 +225,14 @@ class UserResponse(BaseModel):
 
 class AuthTokenResponse(BaseModel):
     access_token: str
+    refresh_token: str
+    expires_in: int = JWT_ACCESS_EXPIRATION_MINUTES * 60
     token_type: str = "bearer"
     user: UserResponse
 
 
 def is_public_path(path: str) -> bool:
-    if path in {"/health", "/auth/register", "/auth/login"}:
+    if path in {"/health", "/auth/register", "/auth/login", "/auth/refresh"}:
         return True
     if path.startswith("/docs") or path.startswith("/openapi") or path.startswith("/redoc"):
         return True
@@ -355,8 +377,10 @@ def register(payload: AuthRegisterRequest) -> AuthTokenResponse:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     token = create_access_token(user_id=user["id"], email=user["email"])
+    refresh_token = create_refresh_token(user_id=user["id"], email=user["email"])
     return AuthTokenResponse(
         access_token=token,
+        refresh_token=refresh_token,
         user=UserResponse(
             id=user["id"],
             email=user["email"],
@@ -375,8 +399,10 @@ def login(payload: AuthLoginRequest) -> AuthTokenResponse:
         raise HTTPException(status_code=403, detail="User account is inactive")
 
     token = create_access_token(user_id=user["id"], email=user["email"])
+    refresh_token = create_refresh_token(user_id=user["id"], email=user["email"])
     return AuthTokenResponse(
         access_token=token,
+        refresh_token=refresh_token,
         user=UserResponse(
             id=user["id"],
             email=user["email"],
@@ -387,12 +413,29 @@ def login(payload: AuthLoginRequest) -> AuthTokenResponse:
 
 
 @app.post("/auth/refresh", response_model=AuthTokenResponse)
-def refresh_token(request: Request) -> AuthTokenResponse:
-    current_user = require_authenticated_user(request)
-    token = create_access_token(user_id=current_user.id, email=current_user.email)
+def refresh_token(payload: AuthRefreshRequest) -> AuthTokenResponse:
+    try:
+        token_payload = decode_refresh_token(payload.refresh_token)
+        subject = token_payload.get("sub")
+        if not isinstance(subject, str) or not subject:
+            raise InvalidTokenError("Missing token subject")
+        user = fetch_user_by_id(subject)
+        if user is None or not user.get("is_active", False):
+            raise InvalidTokenError("User not found")
+    except InvalidTokenError as exc:
+        raise HTTPException(status_code=401, detail="Invalid refresh token") from exc
+
+    token = create_access_token(user_id=user["id"], email=user["email"])
+    next_refresh_token = create_refresh_token(user_id=user["id"], email=user["email"])
     return AuthTokenResponse(
         access_token=token,
-        user=UserResponse.model_validate(current_user.model_dump()),
+        refresh_token=next_refresh_token,
+        user=UserResponse(
+            id=user["id"],
+            email=user["email"],
+            display_name=user["display_name"],
+            is_active=bool(user["is_active"]),
+        ),
     )
 
 
@@ -406,6 +449,29 @@ def get_me(request: Request) -> UserResponse:
 def get_learning_profile(request: Request = None) -> LearningProfileResponse:
     current_user = require_authenticated_user(request)
     return get_training_learning_profile(current_user.id)
+
+
+@app.get("/learning/path", response_model=LearningPathResponse)
+def get_learning_path(request: Request = None) -> LearningPathResponse:
+    current_user = require_authenticated_user(request)
+    return build_learning_path(current_user.id)
+
+
+@app.post(
+    "/learning/path/lessons/{lesson_id}/complete",
+    response_model=LearningPathLessonCompletionResponse,
+)
+def complete_learning_path_lesson(
+    lesson_id: LessonId,
+    request: Request = None,
+) -> LearningPathLessonCompletionResponse:
+    current_user = require_authenticated_user(request)
+    try:
+        return complete_lesson(current_user.id, lesson_id)
+    except LearningPathLockedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.post("/scenario/generate", response_model=GenerateScenarioResponse)
@@ -496,6 +562,16 @@ def assistant_ask(
         difficulty=payload.difficulty,
     )
     return AssistantAskResponse(answer=answer, quick_tips=quick_tips)
+
+
+@app.get("/sessions", response_model=UserSessionsResponse)
+def get_sessions(
+    limit: int = Query(default=20, gt=0, le=100),
+    offset: NonNegativeInt = 0,
+    request: Request = None,
+) -> UserSessionsResponse:
+    current_user = require_authenticated_user(request)
+    return get_training_user_sessions(current_user.id, limit=limit, offset=offset)
 
 
 @app.get("/session/{session_id}", response_model=SessionSnapshotResponse)

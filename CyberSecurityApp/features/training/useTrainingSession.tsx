@@ -1,10 +1,21 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 
 import {
   ApiRequestError,
+  completeLearningPathLesson,
   evaluateScenario,
   generateScenario,
+  getLearningPath,
   getLearningProfile,
   getScenario,
   getScenarioCatalog,
@@ -22,6 +33,7 @@ import type {
   Scenario,
   SessionStats,
   LearningProfile,
+  LearningPathApiResponse,
 } from './types';
 
 type ActivityItem = {
@@ -36,6 +48,7 @@ const TRAINING_SESSION_STORAGE_KEY = 'training-session-state-v1';
 const AUTH_REQUIRED_ERROR = 'Trebuie să te autentifici pentru această acțiune.';
 
 type PersistedTrainingSessionState = {
+  ownerUserId: string;
   sessionId: string | null;
   sessionStats: SessionStats | null;
   attackType: AttackType;
@@ -101,6 +114,12 @@ type TrainingSessionContextValue = {
   isLoadingAdaptiveProfile: boolean;
   adaptiveProfileError: string | null;
   refreshAdaptiveProfile: () => Promise<void>;
+  learningPath: LearningPathApiResponse | null;
+  isLoadingLearningPath: boolean;
+  learningPathError: string | null;
+  refreshLearningPath: () => Promise<void>;
+  refreshActiveSession: () => Promise<void>;
+  completePathLesson: (lessonId: string) => Promise<boolean>;
   setSelectedOptionId: (optionId: string | null) => void;
   setAttackType: (attackType: AttackType) => void;
   setDifficulty: (difficulty: DifficultyLevel) => void;
@@ -110,6 +129,11 @@ type TrainingSessionContextValue = {
     nextSessionId?: string | null,
     templateId?: string
   ) => Promise<void>;
+  activateSession: (
+    nextSessionId: string,
+    nextAttackType?: AttackType | null,
+    nextDifficulty?: DifficultyLevel | null
+  ) => Promise<boolean>;
   restoreScenario: (scenarioId: string) => Promise<boolean>;
   evaluateAnswer: () => Promise<void>;
   evaluateWithOptionId: (optionId: string) => Promise<boolean>;
@@ -132,13 +156,23 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [activityLog, setActivityLog] = useState<ActivityItem[]>([]);
   const [isHydrated, setIsHydrated] = useState(false);
+  const [hydratedUserId, setHydratedUserId] = useState<string | null>(null);
   const [scenarioCatalog, setScenarioCatalog] = useState<ScenarioCatalogItemApiResponse[]>([]);
   const [isLoadingCatalog, setIsLoadingCatalog] = useState(true);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [adaptiveProfile, setAdaptiveProfile] = useState<LearningProfile | null>(null);
   const [isLoadingAdaptiveProfile, setIsLoadingAdaptiveProfile] = useState(false);
   const [adaptiveProfileError, setAdaptiveProfileError] = useState<string | null>(null);
+  const [learningPath, setLearningPath] = useState<LearningPathApiResponse | null>(null);
+  const [isLoadingLearningPath, setIsLoadingLearningPath] = useState(false);
+  const [learningPathError, setLearningPathError] = useState<string | null>(null);
   const { isAuthenticated, user } = useAuth();
+  const currentUserId = user?.id ?? null;
+  const activeUserIdRef = useRef<string | null>(currentUserId);
+  const adaptiveProfileRequestRef = useRef(0);
+  const learningPathRequestRef = useRef(0);
+  const activeSessionRequestRef = useRef(0);
+  activeUserIdRef.current = currentUserId;
 
   // Per-user storage key so each account gets its own training state.
   const userStorageKey = user
@@ -198,11 +232,11 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
+    const hydrationUserId = user?.id ?? null;
 
     const hydrate = async () => {
       // Don't hydrate until we know who the user is.
-      if (!user) {
-        setIsHydrated(true);
+      if (!hydrationUserId) {
         return;
       }
 
@@ -212,6 +246,11 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
           return;
         }
         const parsed = JSON.parse(raw) as PersistedTrainingSessionState;
+
+        if (parsed.ownerUserId !== hydrationUserId) {
+          await AsyncStorage.removeItem(userStorageKey);
+          return;
+        }
 
         if (
           parsed.attackType &&
@@ -235,6 +274,7 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
         // Ignore corrupt local cache and continue with defaults.
       } finally {
         if (!cancelled) {
+          setHydratedUserId(hydrationUserId);
           setIsHydrated(true);
         }
       }
@@ -250,6 +290,7 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
     setAttackType('phishing');
     setDifficulty('easy');
     setActivityLog([]);
+    setHydratedUserId(null);
     setIsHydrated(false);
 
     void hydrate();
@@ -259,11 +300,12 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
   }, [userStorageKey, user]);
 
   useEffect(() => {
-    if (!isHydrated) {
+    if (!isHydrated || !user || hydratedUserId !== user.id) {
       return;
     }
 
     const stateToPersist: PersistedTrainingSessionState = {
+      ownerUserId: user.id,
       sessionId,
       sessionStats,
       attackType,
@@ -280,11 +322,13 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
     attackType,
     difficulty,
     evaluation,
+    hydratedUserId,
     isHydrated,
     scenario,
     selectedOptionId,
     sessionId,
     sessionStats,
+    user,
     userStorageKey,
   ]);
 
@@ -303,7 +347,10 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refreshAdaptiveProfile = useCallback(async () => {
-    if (!isAuthenticated) {
+    const requestUserId = user?.id ?? null;
+    const requestId = adaptiveProfileRequestRef.current + 1;
+    adaptiveProfileRequestRef.current = requestId;
+    if (!isAuthenticated || !requestUserId) {
       setAdaptiveProfile(null);
       setAdaptiveProfileError(null);
       setIsLoadingAdaptiveProfile(false);
@@ -315,14 +362,171 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
 
     try {
       const data = await getLearningProfile();
+      if (
+        adaptiveProfileRequestRef.current !== requestId ||
+        activeUserIdRef.current !== requestUserId ||
+        data.user_id !== requestUserId
+      ) {
+        return;
+      }
       setAdaptiveProfile(data);
     } catch {
+      if (
+        adaptiveProfileRequestRef.current !== requestId ||
+        activeUserIdRef.current !== requestUserId
+      ) {
+        return;
+      }
       setAdaptiveProfile(null);
       setAdaptiveProfileError('Nu am putut încărca profilul adaptiv.');
     } finally {
-      setIsLoadingAdaptiveProfile(false);
+      if (
+        adaptiveProfileRequestRef.current === requestId &&
+        activeUserIdRef.current === requestUserId
+      ) {
+        setIsLoadingAdaptiveProfile(false);
+      }
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, user?.id]);
+
+  const refreshLearningPath = useCallback(async () => {
+    const requestUserId = user?.id ?? null;
+    const requestId = learningPathRequestRef.current + 1;
+    learningPathRequestRef.current = requestId;
+    if (!isAuthenticated || !requestUserId) {
+      setLearningPath(null);
+      setLearningPathError(null);
+      setIsLoadingLearningPath(false);
+      return;
+    }
+
+    setIsLoadingLearningPath(true);
+    setLearningPathError(null);
+    try {
+      const data = await getLearningPath();
+      if (
+        learningPathRequestRef.current === requestId &&
+        activeUserIdRef.current === requestUserId &&
+        data.user_id === requestUserId
+      ) {
+        setLearningPath(data);
+      }
+    } catch {
+      if (
+        learningPathRequestRef.current === requestId &&
+        activeUserIdRef.current === requestUserId
+      ) {
+        setLearningPathError('Nu am putut încărca traseul de învățare.');
+      }
+    } finally {
+      if (
+        learningPathRequestRef.current === requestId &&
+        activeUserIdRef.current === requestUserId
+      ) {
+        setIsLoadingLearningPath(false);
+      }
+    }
+  }, [isAuthenticated, user?.id]);
+
+  const completePathLesson = useCallback(
+    async (lessonId: string): Promise<boolean> => {
+      const requestUserId = user?.id ?? null;
+      const requestId = learningPathRequestRef.current + 1;
+      learningPathRequestRef.current = requestId;
+      if (!isAuthenticated || !requestUserId) {
+        setLearningPathError(AUTH_REQUIRED_ERROR);
+        return false;
+      }
+      setIsLoadingLearningPath(true);
+      setLearningPathError(null);
+      try {
+        const response = await completeLearningPathLesson(lessonId);
+        if (
+          learningPathRequestRef.current === requestId &&
+          activeUserIdRef.current === requestUserId &&
+          response.path.user_id === requestUserId
+        ) {
+          setLearningPath(response.path);
+        }
+        return (
+          learningPathRequestRef.current === requestId &&
+          activeUserIdRef.current === requestUserId
+        );
+      } catch {
+        if (
+          learningPathRequestRef.current === requestId &&
+          activeUserIdRef.current === requestUserId
+        ) {
+          setLearningPathError('Nu am putut finaliza lecția.');
+        }
+        return false;
+      } finally {
+        if (
+          learningPathRequestRef.current === requestId &&
+          activeUserIdRef.current === requestUserId
+        ) {
+          setIsLoadingLearningPath(false);
+        }
+      }
+    },
+    [isAuthenticated, user?.id]
+  );
+
+  const refreshActiveSession = useCallback(async () => {
+    const requestUserId = user?.id ?? null;
+    const requestSessionId = sessionId;
+    const requestId = activeSessionRequestRef.current + 1;
+    activeSessionRequestRef.current = requestId;
+
+    if (
+      !isHydrated ||
+      hydratedUserId !== requestUserId ||
+      !requestSessionId ||
+      !isAuthenticated ||
+      !requestUserId
+    ) {
+      return;
+    }
+
+    try {
+      const snapshot = await getSessionSnapshot(requestSessionId);
+      if (
+        activeSessionRequestRef.current !== requestId ||
+        activeUserIdRef.current !== requestUserId ||
+        snapshot.session_id !== requestSessionId
+      ) {
+        return;
+      }
+
+      setSessionStats(snapshot.session_stats);
+      if (snapshot.session_stats.recent_events.length) {
+        applyServerEvents(snapshot.session_stats.recent_events);
+      } else {
+        setActivityLog([]);
+      }
+    } catch {
+      // Keep the latest local state when the persisted snapshot is temporarily unavailable.
+    }
+  }, [
+    applyServerEvents,
+    hydratedUserId,
+    isAuthenticated,
+    isHydrated,
+    sessionId,
+    user?.id,
+  ]);
+
+  useEffect(() => {
+    adaptiveProfileRequestRef.current += 1;
+    learningPathRequestRef.current += 1;
+    activeSessionRequestRef.current += 1;
+    setAdaptiveProfile(null);
+    setAdaptiveProfileError(null);
+    setIsLoadingAdaptiveProfile(false);
+    setLearningPath(null);
+    setLearningPathError(null);
+    setIsLoadingLearningPath(false);
+  }, [user?.id]);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -336,31 +540,12 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
   }, [refreshAdaptiveProfile]);
 
   useEffect(() => {
-    let cancelled = false;
+    void refreshLearningPath();
+  }, [refreshLearningPath]);
 
-    const syncSessionFromBackend = async () => {
-      if (!isHydrated || !sessionId || !isAuthenticated) {
-        return;
-      }
-
-      try {
-        const snapshot = await getSessionSnapshot(sessionId);
-        if (cancelled) {
-          return;
-        }
-
-        setSessionStats(snapshot.session_stats);
-        applyServerEvents(snapshot.session_stats.recent_events);
-      } catch {
-        // Keep locally available state when backend snapshot cannot be fetched.
-      }
-    };
-
-    void syncSessionFromBackend();
-    return () => {
-      cancelled = true;
-    };
-  }, [applyServerEvents, isAuthenticated, isHydrated, sessionId]);
+  useEffect(() => {
+    void refreshActiveSession();
+  }, [refreshActiveSession]);
 
   const startSimulation = useCallback(
     async (
@@ -369,7 +554,8 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
       nextSessionId?: string | null,
       templateId?: string
     ) => {
-      if (!isAuthenticated) {
+      const requestUserId = user?.id ?? null;
+      if (!isAuthenticated || !requestUserId) {
         setError(AUTH_REQUIRED_ERROR);
         return;
       }
@@ -389,6 +575,9 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
           template_id: templateId,
         });
 
+        if (activeUserIdRef.current !== requestUserId) {
+          return;
+        }
         setScenario(data);
         setSessionId(data.session_id);
         setAttackType(nextAttackType);
@@ -399,19 +588,71 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
           tone: 'neutral',
         });
       } catch {
-        setError(
-          'Conexiune esuata cu backend-ul. Verifica daca FastAPI ruleaza pe portul 8000 si endpoint-ul este accesibil.'
-        );
+        if (activeUserIdRef.current === requestUserId) {
+          setError(
+            'Conexiune esuata cu backend-ul. Verifica daca FastAPI ruleaza pe portul 8000 si endpoint-ul este accesibil.'
+          );
+        }
       } finally {
-        setIsLoading(false);
+        if (activeUserIdRef.current === requestUserId) {
+          setIsLoading(false);
+        }
       }
     },
-    [attackType, difficulty, isAuthenticated, pushActivity, sessionId]
+    [attackType, difficulty, isAuthenticated, pushActivity, sessionId, user?.id]
+  );
+
+  const activateSession = useCallback(
+    async (
+      nextSessionId: string,
+      nextAttackType?: AttackType | null,
+      nextDifficulty?: DifficultyLevel | null
+    ): Promise<boolean> => {
+      const requestUserId = user?.id ?? null;
+      if (!isAuthenticated || !requestUserId) {
+        setError(AUTH_REQUIRED_ERROR);
+        return false;
+      }
+
+      setIsLoading(true);
+      setError(null);
+
+      try {
+        const snapshot = await getSessionSnapshot(nextSessionId);
+        if (activeUserIdRef.current !== requestUserId) {
+          return false;
+        }
+        setSessionId(snapshot.session_id);
+        setSessionStats(snapshot.session_stats);
+        setScenario(null);
+        setEvaluation(null);
+        setSelectedOptionId(null);
+        if (nextAttackType) {
+          setAttackType(nextAttackType);
+        }
+        if (nextDifficulty) {
+          setDifficulty(nextDifficulty);
+        }
+        applyServerEvents(snapshot.session_stats.recent_events);
+        return true;
+      } catch {
+        if (activeUserIdRef.current === requestUserId) {
+          setError('Nu am putut activa sesiunea selectată.');
+        }
+        return false;
+      } finally {
+        if (activeUserIdRef.current === requestUserId) {
+          setIsLoading(false);
+        }
+      }
+    },
+    [applyServerEvents, isAuthenticated, user?.id]
   );
 
   const restoreScenario = useCallback(
     async (scenarioId: string): Promise<boolean> => {
-      if (!isAuthenticated) {
+      const requestUserId = user?.id ?? null;
+      if (!isAuthenticated || !requestUserId) {
         setError(AUTH_REQUIRED_ERROR);
         return false;
       }
@@ -421,6 +662,9 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
 
       try {
         const data = await getScenario(scenarioId);
+        if (activeUserIdRef.current !== requestUserId) {
+          return false;
+        }
         setScenario(data);
         setSessionId(data.session_id);
         setAttackType(data.attack_type);
@@ -431,17 +675,20 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
       } catch {
         return false;
       } finally {
-        setIsLoading(false);
+        if (activeUserIdRef.current === requestUserId) {
+          setIsLoading(false);
+        }
       }
     },
-    [isAuthenticated]
+    [isAuthenticated, user?.id]
   );
 
   const evaluateAnswer = async () => {
     if (!scenario || !selectedOptionId || evaluation) {
       return;
     }
-    if (!isAuthenticated) {
+    const requestUserId = user?.id ?? null;
+    if (!isAuthenticated || !requestUserId) {
       setError(AUTH_REQUIRED_ERROR);
       return;
     }
@@ -455,9 +702,13 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
         selected_option_id: selectedOptionId,
       });
 
+      if (activeUserIdRef.current !== requestUserId) {
+        return;
+      }
       setEvaluation(data);
       setSessionStats(data.session_stats);
       void refreshAdaptiveProfile();
+      void refreshLearningPath();
       if (data.session_stats.recent_events?.length) {
         applyServerEvents(data.session_stats.recent_events);
       } else {
@@ -468,13 +719,17 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
         });
       }
     } catch (error) {
-      setError(
-        error instanceof ApiRequestError && error.status === 409
-          ? 'Acest scenariu a fost deja evaluat cu un alt răspuns.'
-          : 'Eroare la evaluare. Încearcă din nou.'
-      );
+      if (activeUserIdRef.current === requestUserId) {
+        setError(
+          error instanceof ApiRequestError && error.status === 409
+            ? 'Acest scenariu a fost deja evaluat cu un alt răspuns.'
+            : 'Eroare la evaluare. Încearcă din nou.'
+        );
+      }
     } finally {
-      setIsLoading(false);
+      if (activeUserIdRef.current === requestUserId) {
+        setIsLoading(false);
+      }
     }
   };
 
@@ -482,7 +737,8 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
     if (!scenario || evaluation) {
       return false;
     }
-    if (!isAuthenticated) {
+    const requestUserId = user?.id ?? null;
+    if (!isAuthenticated || !requestUserId) {
       setError(AUTH_REQUIRED_ERROR);
       return false;
     }
@@ -497,9 +753,13 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
         selected_option_id: optionId,
       });
 
+      if (activeUserIdRef.current !== requestUserId) {
+        return false;
+      }
       setEvaluation(data);
       setSessionStats(data.session_stats);
       void refreshAdaptiveProfile();
+      void refreshLearningPath();
       if (data.session_stats.recent_events?.length) {
         applyServerEvents(data.session_stats.recent_events);
       } else {
@@ -511,14 +771,18 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
       }
       return true;
     } catch (error) {
-      setError(
-        error instanceof ApiRequestError && error.status === 409
-          ? 'Acest scenariu a fost deja evaluat cu un alt răspuns.'
-          : 'Eroare la evaluare. Încearcă din nou.'
-      );
+      if (activeUserIdRef.current === requestUserId) {
+        setError(
+          error instanceof ApiRequestError && error.status === 409
+            ? 'Acest scenariu a fost deja evaluat cu un alt răspuns.'
+            : 'Eroare la evaluare. Încearcă din nou.'
+        );
+      }
       return false;
     } finally {
-      setIsLoading(false);
+      if (activeUserIdRef.current === requestUserId) {
+        setIsLoading(false);
+      }
     }
   };
 
@@ -568,10 +832,17 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
     isLoadingAdaptiveProfile,
     adaptiveProfileError,
     refreshAdaptiveProfile,
+    learningPath,
+    isLoadingLearningPath,
+    learningPathError,
+    refreshLearningPath,
+    refreshActiveSession,
+    completePathLesson,
     setSelectedOptionId,
     setAttackType,
     setDifficulty,
     startSimulation,
+    activateSession,
     restoreScenario,
     evaluateAnswer,
     evaluateWithOptionId,

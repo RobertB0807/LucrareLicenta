@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Float, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Float, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db import Base
@@ -64,6 +64,11 @@ class UserORM(Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+    learning_path_progress: Mapped["UserLearningPathProgressORM | None"] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
 
 
 class UserLearningProfileORM(Base):
@@ -96,6 +101,25 @@ class UserLearningProfileORM(Base):
     user: Mapped["UserORM"] = relationship(back_populates="mastery_profiles")
 
 
+class UserLearningPathProgressORM(Base):
+    __tablename__ = "user_learning_path_progress"
+
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    completed_lessons_json: Mapped[str] = mapped_column(Text, default="[]")
+    xp: Mapped[int] = mapped_column(Integer, default=0)
+    current_streak: Mapped[int] = mapped_column(Integer, default=0)
+    longest_streak: Mapped[int] = mapped_column(Integer, default=0)
+    last_activity_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+    )
+
+    user: Mapped["UserORM"] = relationship(back_populates="learning_path_progress")
+
+
 class ScenarioAttemptORM(Base):
     __tablename__ = "scenario_attempts"
 
@@ -105,6 +129,15 @@ class ScenarioAttemptORM(Base):
     attack_type: Mapped[str] = mapped_column(String(32))
     difficulty: Mapped[str] = mapped_column(String(16))
     template_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    content_source: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="rule_based",
+        server_default="rule_based",
+    )
+    llm_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    generation_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    fallback_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
     channel: Mapped[str | None] = mapped_column(String(32), nullable=True)
     attacker_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     options_json: Mapped[str | None] = mapped_column(Text, nullable=True)

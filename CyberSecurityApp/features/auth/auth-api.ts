@@ -13,7 +13,7 @@ export type AuthUserResponse = {
 export type AuthTokenResponse = {
   access_token: string;
   refresh_token?: string;
-  expires_in?: string;
+  expires_in?: string | number;
   token_type: string;
   user: AuthUserResponse;
 };
@@ -323,28 +323,26 @@ async function authGet<TResponse>(path: string, token: string, fallbackError: st
   throw lastError ?? new Error(fallbackError);
 }
 
-async function authPostWithToken<TResponse>(
-  path: string,
-  token: string,
+async function authRefreshPost<TResponse>(
+  refreshToken: string,
   fallbackError: string
 ): Promise<TResponse> {
   let lastError: Error | null = null;
 
   for (const baseUrl of API_BASE_URL_CANDIDATES) {
     try {
-      const response = await fetch(`${baseUrl}${path}`, {
+      const response = await fetch(`${baseUrl}/auth/refresh`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refreshToken }),
       });
 
       if (response.status === 401) {
         throw new Error('Sesiune expirată. Te rog autentifică-te din nou.');
       }
       if (!response.ok) {
-        throw new Error(fallbackError);
+        const body = await response.json().catch(() => ({}));
+        throw new Error((body as { detail?: string }).detail ?? fallbackError);
       }
 
       return (await response.json()) as TResponse;
@@ -397,7 +395,7 @@ export async function apiGetMe(token: string): Promise<AuthUserResponse> {
   );
 }
 
-export async function apiRefreshToken(token: string, refreshToken?: string | null): Promise<AuthTokenResponse> {
+export async function apiRefreshToken(_token: string, refreshToken?: string | null): Promise<AuthTokenResponse> {
   if (isFirebaseAuthEnabled()) {
     if (!refreshToken) {
       throw new Error('Sesiune expirată. Te rog autentifică-te din nou.');
@@ -405,11 +403,11 @@ export async function apiRefreshToken(token: string, refreshToken?: string | nul
     return firebaseRefreshAuthToken(refreshToken);
   }
 
-  return authPostWithToken<AuthTokenResponse>(
-    '/auth/refresh',
-    token,
-    'Nu am putut reînnoi sesiunea curentă.'
-  );
+  if (!refreshToken) {
+    throw new Error('Sesiune expirată. Te rog autentifică-te din nou.');
+  }
+
+  return authRefreshPost<AuthTokenResponse>(refreshToken, 'Nu am putut reînnoi sesiunea curentă.');
 }
 
 export async function apiSendPasswordReset(email: string): Promise<void> {

@@ -6,6 +6,8 @@ import type {
   AttackType,
   DifficultyLevel,
   LearningProfileApiResponse,
+  LearningPathApiResponse,
+  LearningPathLessonCompletionApiResponse,
   Evaluation,
   GenerateScenarioApiResponse,
   ScenarioCatalogApiResponse,
@@ -13,29 +15,31 @@ import type {
   SessionSnapshotApiResponse,
   SessionTrendAggregatesApiResponse,
   SessionTrendsApiResponse,
+  UserSessionsApiResponse,
 } from './types';
 
 // ── Auth token injection ───────────────────────────────────────────────────────
 // The auth context calls setAuthTokenAccessor on mount so that all protected
 // API calls automatically include the Bearer token header.
 let _tokenAccessor: (() => string | null) | null = null;
-let _authFailureHandler: (() => void) | null = null;
+let _authFailureHandler: ((failedToken: string | null) => void) | null = null;
 
 export function setAuthTokenAccessor(accessor: () => string | null): void {
   _tokenAccessor = accessor;
 }
 
-export function setAuthFailureHandler(handler: (() => void) | null): void {
+export function setAuthFailureHandler(
+  handler: ((failedToken: string | null) => void) | null
+): void {
   _authFailureHandler = handler;
 }
 
-function getAuthHeaders(): Record<string, string> {
-  const token = _tokenAccessor?.();
+function getAuthHeaders(token: string | null): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-function handleAuthFailure(): void {
-  _authFailureHandler?.();
+function handleAuthFailure(failedToken: string | null): void {
+  _authFailureHandler?.(failedToken);
 }
 
 export class ApiRequestError extends Error {
@@ -133,17 +137,18 @@ const API_BASE_URL_CANDIDATES = Array.from(
 
 async function postJson<TResponse>(path: string, payload: unknown, fallbackError: string): Promise<TResponse> {
   let lastError: Error | null = null;
+  const authToken = _tokenAccessor?.() ?? null;
 
   for (const baseUrl of API_BASE_URL_CANDIDATES) {
     try {
       const response = await fetch(`${baseUrl}${path}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders(authToken) },
         body: JSON.stringify(payload),
       });
 
       if (response.status === 401) {
-        handleAuthFailure();
+        handleAuthFailure(authToken);
         throw new ApiRequestError('Sesiune expirată. Autentifică-te din nou.', 401);
       }
       if (!response.ok) {
@@ -164,16 +169,17 @@ async function postJson<TResponse>(path: string, payload: unknown, fallbackError
 
 async function getJson<TResponse>(path: string, fallbackError: string): Promise<TResponse> {
   let lastError: Error | null = null;
+  const authToken = _tokenAccessor?.() ?? null;
 
   for (const baseUrl of API_BASE_URL_CANDIDATES) {
     try {
       const response = await fetch(`${baseUrl}${path}`, {
         method: 'GET',
-        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders(authToken) },
       });
 
       if (response.status === 401) {
-        handleAuthFailure();
+        handleAuthFailure(authToken);
         throw new ApiRequestError('Sesiune expirată. Autentifică-te din nou.', 401);
       }
       if (!response.ok) {
@@ -217,6 +223,19 @@ export async function getSessionSnapshot(sessionId: string): Promise<SessionSnap
   return getJson<SessionSnapshotApiResponse>(
     `/session/${encodeURIComponent(sessionId)}`,
     'Nu am putut incarca sumarul sesiunii.'
+  );
+}
+
+export async function getUserSessions(
+  options: { limit?: number; offset?: number } = {}
+): Promise<UserSessionsApiResponse> {
+  const params = new URLSearchParams({
+    limit: String(options.limit ?? 20),
+    offset: String(options.offset ?? 0),
+  });
+  return getJson<UserSessionsApiResponse>(
+    `/sessions?${params.toString()}`,
+    'Nu am putut încărca istoricul sesiunilor.'
   );
 }
 
@@ -309,5 +328,22 @@ export async function getLearningProfile(): Promise<LearningProfileApiResponse> 
   return getJson<LearningProfileApiResponse>(
     '/learning/profile',
     'Nu am putut incarca profilul adaptiv.'
+  );
+}
+
+export async function getLearningPath(): Promise<LearningPathApiResponse> {
+  return getJson<LearningPathApiResponse>(
+    '/learning/path',
+    'Nu am putut încărca traseul de învățare.'
+  );
+}
+
+export async function completeLearningPathLesson(
+  lessonId: string
+): Promise<LearningPathLessonCompletionApiResponse> {
+  return postJson<LearningPathLessonCompletionApiResponse>(
+    `/learning/path/lessons/${encodeURIComponent(lessonId)}/complete`,
+    {},
+    'Nu am putut finaliza lecția.'
   );
 }

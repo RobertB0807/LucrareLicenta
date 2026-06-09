@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { useAuth } from '@/features/auth/auth-context';
@@ -31,6 +31,7 @@ type LessonMessage = {
 type ActiveCategory = 'Toate' | 'Fundamente' | 'Phishing' | 'Smishing' | 'Vishing' | 'Escrocherii web' | 'Siguranța contului';
 
 type PersistedLearnState = {
+  ownerUserId: string;
   activeCat: ActiveCategory;
   openLessonId: string | null;
   lessonMessages: LessonMessage[];
@@ -124,6 +125,10 @@ export default function LearnScreen() {
   const [isAsking, setIsAsking] = useState(false);
   const [lessonError, setLessonError] = useState<string | null>(null);
   const [isHydrated, setIsHydrated] = useState(false);
+  const [hydratedUserId, setHydratedUserId] = useState<string | null>(null);
+  const currentUserId = user?.id ?? null;
+  const activeUserIdRef = useRef<string | null>(currentUserId);
+  activeUserIdRef.current = currentUserId;
   const storageKey = useMemo(
     () => buildUserStorageKey(LEARN_SCREEN_STORAGE_KEY, user?.id),
     [user?.id]
@@ -136,6 +141,7 @@ export default function LearnScreen() {
 
   useEffect(() => {
     let cancelled = false;
+    const hydrationUserId = user?.id ?? null;
 
     setActiveCat('Toate');
     setOpenLesson(null);
@@ -143,6 +149,7 @@ export default function LearnScreen() {
     setLessonMessages([]);
     setIsAsking(false);
     setLessonError(null);
+    setHydratedUserId(null);
     setIsHydrated(false);
 
     const hydrate = async () => {
@@ -153,6 +160,10 @@ export default function LearnScreen() {
         }
 
         const parsed = JSON.parse(raw) as PersistedLearnState;
+        if (parsed.ownerUserId !== hydrationUserId) {
+          await AsyncStorage.removeItem(storageKey);
+          return;
+        }
         if (typeof parsed.updatedAt !== 'number' || Date.now() - parsed.updatedAt > LEARN_STATE_TTL_MS) {
           await AsyncStorage.removeItem(storageKey);
           return;
@@ -176,6 +187,7 @@ export default function LearnScreen() {
         // Ignore local cache read errors.
       } finally {
         if (!cancelled) {
+          setHydratedUserId(hydrationUserId);
           setIsHydrated(true);
         }
       }
@@ -185,20 +197,21 @@ export default function LearnScreen() {
     return () => {
       cancelled = true;
     };
-  }, [storageKey]);
+  }, [storageKey, user?.id]);
 
   useEffect(() => {
-    if (!isHydrated) {
+    if (!isHydrated || !user || hydratedUserId !== user.id) {
       return;
     }
     const stateToPersist: PersistedLearnState = {
+      ownerUserId: user.id,
       activeCat,
       openLessonId: openLesson?.id ?? null,
       lessonMessages: lessonMessages.slice(-LEARN_MESSAGES_MAX_ITEMS),
       updatedAt: Date.now(),
     };
     void AsyncStorage.setItem(storageKey, JSON.stringify(stateToPersist));
-  }, [activeCat, isHydrated, lessonMessages, openLesson?.id, storageKey]);
+  }, [activeCat, hydratedUserId, isHydrated, lessonMessages, openLesson?.id, storageKey, user]);
 
   const clearLocalCache = async () => {
     await clearTrainingLocalCache(user?.id);
@@ -235,7 +248,8 @@ export default function LearnScreen() {
 
   const sendFollowUp = async () => {
     const value = input.trim();
-    if (!value || !openLesson || isAsking) {
+    const requestUserId = user?.id ?? null;
+    if (!value || !openLesson || isAsking || !requestUserId) {
       return;
     }
 
@@ -251,6 +265,9 @@ export default function LearnScreen() {
         difficulty: mapLessonLevelToDifficulty(openLesson.level),
       });
 
+      if (activeUserIdRef.current !== requestUserId) {
+        return;
+      }
       const tipsText = data.quick_tips.map((tip, index) => `${index + 1}. ${tip}`).join('\n');
       const assistantText = tipsText ? `${data.answer}\n\n${tipsText}` : data.answer;
       setLessonMessages((current) => [
@@ -258,9 +275,13 @@ export default function LearnScreen() {
         { id: `a-${Date.now()}`, role: 'assistant', text: assistantText },
       ]);
     } catch {
-      setLessonError('Nu am putut contacta asistentul. Încearcă din nou.');
+      if (activeUserIdRef.current === requestUserId) {
+        setLessonError('Nu am putut contacta asistentul. Încearcă din nou.');
+      }
     } finally {
-      setIsAsking(false);
+      if (activeUserIdRef.current === requestUserId) {
+        setIsAsking(false);
+      }
     }
   };
 

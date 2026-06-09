@@ -13,7 +13,7 @@ The goal is educational: users interact with scenarios, choose a response, recei
 ## Current Tech Stack
 - Frontend: React Native + Expo
 - Backend: FastAPI (Python)
-- AI: rule-based assistant endpoint implemented, LLM integration planned later
+- AI: Ollama-backed scenario generation with strict validation and rule-based fallback; assistant remains rule-based
 - Auth: Firebase Authentication on the frontend, Firebase token verification on the backend, local user/profile mapping in PostgreSQL or SQLite
 
 ## Current State
@@ -44,6 +44,9 @@ Backend features currently implemented:
 - `POST /scenario/evaluate`
 - `GET /scenario/{scenario_id}`
 - `POST /assistant/ask`
+- `GET /learning/path`
+- `POST /learning/path/lessons/{lesson_id}/complete`
+- `GET /sessions`
 - `GET /session/{session_id}`
 - `GET /session/{session_id}/events`
 - `GET /session/{session_id}/trends`
@@ -60,6 +63,11 @@ Backend features currently implemented:
   - attack type: phishing, smishing, impersonation
   - difficulty: easy, medium, hard
 - multiple templates per combination
+- local Ollama scenario generation for adaptive/random flows (`qwen3:8b` by default)
+- strict Pydantic validation for generated content, reserved `.invalid` domains, and fixed option IDs
+- automatic rule-based fallback when Ollama is disabled, unavailable, times out, or returns invalid content
+- deterministic catalog selections bypass the LLM when `template_id` is provided
+- persisted generation metadata: content source, model, duration, and fallback reason
 - adaptive session scoring
 - per-attack statistics
 - recommendation logic for the next scenario
@@ -67,6 +75,10 @@ Backend features currently implemented:
 - persistence for users, sessions, attempts and events via SQLAlchemy (PostgreSQL default via `DATABASE_URL` or `POSTGRES_*`; SQLite opt-in)
 - startup DB bootstrap now applies Alembic migrations (`upgrade head`) when available, with a safe ORM `create_all` fallback if Alembic is missing
 - scenario evaluation is restart-safe: when in-memory scenario context is missing, backend restores rule context from persisted `scenario_attempts` data
+- authenticated users can list their persisted sessions with pagination, summary metrics, latest scenario metadata, and pending scenario recovery
+- structured learning path with beginner/intermediate/advanced modules, lesson completion, scenario mastery requirements, XP, levels, streaks, goals, and badges
+- learning-path scenario progress reuses the persisted adaptive profile; lesson/gamification state is stored in `user_learning_path_progress`
+- scenario generation now persists the parent session before FK-dependent attempt/event records, keeping PostgreSQL writes valid
 - Firebase-linked users are stored with `firebase_uid` so a Firebase account maps to one local user record
 - `/auth/me` now returns explicit CORS-safe errors for missing/invalid tokens and backend mapping conflicts
 - `BackendAPI/.env` is loaded automatically through `python-dotenv`
@@ -82,35 +94,57 @@ The app now has a broader product-style tab shell and route flow:
 - `app/(tabs)/analytics.tsx` for progress/stats UI
 - `app/chat/[scenarioId].tsx` for chat-style scenario simulation
 - `app/feedback/[scenarioId].tsx` for post-scenario debrief
+- `app/sessions.tsx` for backend-backed session history and recovery
+- `app/learning-path.tsx` for structured modules, objectives, XP, streaks, and badges
 - `app/login.tsx` for user authentication
 - `app/register.tsx` for new account creation
 
 Navigation updates:
 - `app/(tabs)/_layout.tsx` now defines the new visible tabs and hides legacy routes (`index`, `training`, `explore`)
-- `app/_layout.tsx` wraps everything with `AuthProvider` (outermost) → `TrainingSessionProvider`, and includes stack routes for `login`, `register`, `chat/[scenarioId]`, and `feedback/[scenarioId]`
-- `app/(tabs)/index.tsx` now acts as an auth gate: redirects to `/login` when unauthenticated, shows a loading spinner during auth hydration, then redirects to `/(tabs)/dashboard`
+- `app/_layout.tsx` wraps everything with `AuthProvider` (outermost) → `TrainingSessionProvider`, and includes stack routes for `login`, `register`, `sessions`, `learning-path`, `chat/[scenarioId]`, and `feedback/[scenarioId]`
+- `app/(tabs)/index.tsx` acts as an auth gate and redirects unauthenticated users to `/login`
 
 The existing `features/training/*` architecture is still present and reusable.
 
 Auth feature module (`features/auth/`):
 - `auth-api.ts` — API client for auth endpoints and Firebase Auth REST flows; falls back to backend auth when Firebase is not configured
-- `auth-context.tsx` — React context provider managing login/register/logout, secure session persistence, token validation on hydration via `GET /auth/me`, silent refresh scheduling, and automatic token accessor wiring for the training API client
-- `secure-auth-storage.ts` — SecureStore-backed auth persistence with AsyncStorage fallback when SecureStore is unavailable
+- `auth-context.tsx` — React context provider managing login/register/logout, optional remembered sessions, silent refresh, and automatic token accessor wiring
+- `secure-auth-storage.ts` — Expo SecureStore persistence on native with AsyncStorage fallback on web and legacy migration support
 
 Current integration level:
-- frontend auth is fully wired: login/register screens, Firebase Auth when configured, JWT token persistence, automatic token injection on all protected API calls
+- frontend auth is fully wired: login/register screens, Firebase Auth when configured, and automatic token injection on all protected API calls
 - chat/feedback flow is now wired to real session continuity (`session_id` carried through routes)
 - analytics now consumes persisted backend session snapshot + recent events when a session is active
 - assistant and learn tabs now use real backend AI responses via `POST /assistant/ask`
 - dashboard and scenarios now consume backend scenario catalog (`GET /scenario/catalog`) through shared `useTrainingSession` state
 - dashboard header shows personalized greeting ("Bună, {displayName}") and logout button
 - local continuity is enabled via AsyncStorage for training session state, assistant/learn conversations, and in-progress chat/feedback continuity
-- auth session persistence now prefers `expo-secure-store` on supported platforms, with AsyncStorage fallback
+- login includes an enabled-by-default "Ține-mă minte" option; remembered sessions persist for a fixed maximum of 7 days, while unchecked sessions remain memory-only
 - local continuity keys for training, assistant, learn, chat, and feedback are scoped per-user (storage key includes user ID) so each account has isolated training data
 - silent auth refresh is scheduled before JWT expiry to reduce session drops
 - protected API calls in `useTrainingSession` are gated on `isAuthenticated` — no backend calls are made before login
+- the dashboard exposes session history; users can activate a previous session, open its analytics, or resume its latest pending scenario
+- the dashboard includes a learning-path card showing current level, XP, overall progress, and next required activity
 
 ## Recent Progress (April-May 2026)
+- Added a structured learning path:
+  - three sequential modules: beginner, intermediate, and advanced
+  - lesson steps plus attack/difficulty-specific scenario requirements
+  - module unlocking based on completed requirements and persisted adaptive mastery scores
+  - persistent XP, levels, current/longest streak, and completed lessons
+  - daily activity and weekly scenario objectives
+  - unlockable badges based on activity, accuracy, streaks, and module completion
+  - dedicated `/learning-path` screen with direct lesson/scenario actions
+  - migration `20260608_0007` adds `user_learning_path_progress`
+  - scenario evaluation awards XP atomically with score/mastery updates
+  - endpoint tests cover initial state, idempotent lesson completion, locked content, XP, and module unlocking
+- Added backend-backed session history and recovery:
+  - `GET /sessions` returns an ownership-scoped, paginated list ordered by latest update
+  - summaries include score, accuracy, generated/evaluated counts, latest attack/difficulty, and pending scenario ID
+  - `app/sessions.tsx` supports continuing a session, viewing its analytics, and resuming an unevaluated scenario
+  - `useTrainingSession.activateSession(...)` restores server stats/events and makes a historical session active
+  - backend tests cover pagination, ordering, ownership isolation, authentication, pending scenarios, and empty history
+  - scenario persistence order was corrected so PostgreSQL parent rows exist before attempt/event FK writes
 - Fixed stale feedback navigation across logout/account changes:
   - root stack now protects tabs, chat, feedback, and modal routes with `Stack.Protected`
   - logout explicitly replaces the active route with `/login`
@@ -286,7 +320,8 @@ Current integration level:
   - modified `app/(tabs)/dashboard.tsx` — personalized greeting ("Bună, {displayName}"), logout button replaces notification bell
   - modified `features/training/useTrainingSession.tsx` — all protected API calls gated on `isAuthenticated`, per-user storage key (includes user ID), state reset on user identity change
 - Added auth refresh support:
-  - backend `POST /auth/refresh` issues a new access token for authenticated users
+  - local backend auth uses separate typed JWTs: 60-minute access tokens and 7-day refresh tokens
+  - backend `POST /auth/refresh` validates a refresh token supplied in the request body and rotates both tokens
   - frontend schedules silent refresh before JWT expiry and retries gracefully on transient failures
 - Scoped assistant/learn/chat/feedback continuity keys per-user:
   - assistant, learn, chat progress, and feedback context storage keys now include user ID
@@ -309,11 +344,11 @@ Current integration level:
 8. User can log out (clears auth state, redirects to login).
 
 ## Important Design Decisions
-- The scenario content is still rule-based for now, not LLM-generated.
+- Adaptive/random scenario content uses local Ollama when enabled, with validated rule-based fallback.
 - The app keeps a stable API contract so the frontend will not break when LLM generation is added later.
 - The frontend is now organized feature-first for readability and future scalability.
 - The UI theme is intentionally cyber-themed with dark console-like styling.
-- Auth token is stored in AsyncStorage (acceptable for MVP; `expo-secure-store` recommended for production).
+- Remembered auth sessions are stored in Expo SecureStore on native; web uses the AsyncStorage fallback and should move to secure HTTP-only cookies for a production web deployment.
 - Training session state is scoped per-user in AsyncStorage to prevent cross-account data leakage.
 
 ## Main Files to Know
@@ -365,12 +400,14 @@ Current integration level:
 ## Remaining Tasks / Suggested Roadmap
 Priority order (next steps at top):
 
-### 1. Add LLM integration
-When ready:
-- use an LLM for generating scenario text
-- validate the output shape strictly (match `ScenarioTemplate` / `ScenarioRule`)
-- keep a rule-based fallback if AI output fails
-- expose provider/model via env (e.g., `LLM_API_KEY`, `LLM_MODEL`, `LLM_BASE_URL`)
+### 1. Extend LLM integration to the assistant
+Scenario generation status: implemented with local Ollama (`qwen3:8b`), strict Pydantic
+structured-output validation, deterministic catalog bypass, and rule-based fallback.
+
+Next:
+- upgrade `/assistant/ask` to use the same Ollama provider
+- validate assistant output and retain the existing deterministic coaching fallback
+- add conversation context limits and response latency metadata
 
 ### 2. Full responsive UI pass
 Focus:
@@ -451,13 +488,14 @@ Status: **COMPLETE**.
 
 Implemented:
 - login/register screens with cyber-themed UI and Romanian labels
-- `AuthProvider` context with JWT token persistence in AsyncStorage
+- `AuthProvider` with optional "Ține-mă minte" persistence, enabled by default and capped at 7 days
 - automatic token injection on all protected API calls via `setAuthTokenAccessor()`
 - auth gate in `(tabs)/index.tsx` redirecting unauthenticated users to `/login`
 - per-user training session storage (isolated by user ID)
 - personalized dashboard greeting + logout button
-- token validation on app startup via `GET /auth/me`
-- silent refresh before JWT expiry via `POST /auth/refresh`
+- unchecked sessions stay in memory and require login after a cold start
+- remembered sessions use SecureStore on native and are rehydrated through `/auth/me` or `/auth/refresh`
+- silent refresh before access-token expiry via a separate refresh token
 
 ### Recent fixes (2026-05-29)
 - Switched backend default DB config to PostgreSQL using `POSTGRES_*` (or `DATABASE_URL`), with SQLite available only when explicitly set.
@@ -512,7 +550,6 @@ npx expo start
 Focus on incremental improvements only.
 
 Good next tasks:
-- add a real session history screen with backend-backed session list and latest-session resume
 - harden auth/session handling further, especially deep links and stale-session cleanup
 - add LLM integration with strict schema validation + fallback once the deterministic scenario flow is stable
 - finish a full responsive UI pass across all screens

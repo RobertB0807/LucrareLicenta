@@ -6,13 +6,15 @@ import hmac
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from uuid import uuid4
 
 import jwt
 from pydantic import BaseModel
 
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "dev-insecure-secret-change-me")
 JWT_ALGORITHM = "HS256"
-JWT_EXPIRATION_HOURS = int(os.getenv("JWT_EXPIRATION_HOURS", "12"))
+JWT_ACCESS_EXPIRATION_MINUTES = int(os.getenv("JWT_ACCESS_EXPIRATION_MINUTES", "60"))
+JWT_REFRESH_EXPIRATION_DAYS = int(os.getenv("JWT_REFRESH_EXPIRATION_DAYS", "7"))
 SALT_BYTES = 16
 SCRYPT_N = 2**14
 SCRYPT_R = 8
@@ -75,8 +77,10 @@ def create_access_token(*, user_id: str, email: str) -> str:
     payload: dict[str, Any] = {
         "sub": user_id,
         "email": email,
+        "type": "access",
+        "jti": str(uuid4()),
         "iat": int(now.timestamp()),
-        "exp": int((now + timedelta(hours=JWT_EXPIRATION_HOURS)).timestamp()),
+        "exp": int((now + timedelta(minutes=JWT_ACCESS_EXPIRATION_MINUTES)).timestamp()),
     }
     return jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
 
@@ -85,4 +89,28 @@ def decode_access_token(token: str) -> dict[str, Any]:
     payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
     if not isinstance(payload, dict):
         raise jwt.InvalidTokenError("Invalid token payload")
+    if payload.get("type") != "access":
+        raise jwt.InvalidTokenError("Invalid access token type")
+    return payload
+
+
+def create_refresh_token(*, user_id: str, email: str) -> str:
+    now = datetime.now(timezone.utc)
+    payload: dict[str, Any] = {
+        "sub": user_id,
+        "email": email,
+        "type": "refresh",
+        "jti": str(uuid4()),
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(days=JWT_REFRESH_EXPIRATION_DAYS)).timestamp()),
+    }
+    return jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+
+
+def decode_refresh_token(token: str) -> dict[str, Any]:
+    payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+    if not isinstance(payload, dict):
+        raise jwt.InvalidTokenError("Invalid token payload")
+    if payload.get("type") != "refresh":
+        raise jwt.InvalidTokenError("Invalid refresh token type")
     return payload

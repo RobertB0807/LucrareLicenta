@@ -13,6 +13,7 @@ import { useTrainingSession } from '@/features/training/useTrainingSession';
 const FEEDBACK_CONTEXT_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 
 type PersistedFeedbackContext = {
+  ownerUserId: string;
   scenarioId: string | null;
   sessionId: string | null;
   attackType: AttackType;
@@ -41,6 +42,7 @@ export default function FeedbackScreen() {
 
   useEffect(() => {
     let cancelled = false;
+    const hydrationUserId = user?.id ?? null;
     setPersistedContext(null);
     setIsFeedbackHydrated(false);
 
@@ -51,7 +53,11 @@ export default function FeedbackScreen() {
           return;
         }
         const parsed = JSON.parse(raw) as PersistedFeedbackContext;
-        if (typeof parsed.savedAt !== 'number' || Date.now() - parsed.savedAt > FEEDBACK_CONTEXT_TTL_MS) {
+        if (
+          parsed.ownerUserId !== hydrationUserId ||
+          typeof parsed.savedAt !== 'number' ||
+          Date.now() - parsed.savedAt > FEEDBACK_CONTEXT_TTL_MS
+        ) {
           await AsyncStorage.removeItem(feedbackStorageKey);
           return;
         }
@@ -69,7 +75,7 @@ export default function FeedbackScreen() {
     return () => {
       cancelled = true;
     };
-  }, [feedbackStorageKey]);
+  }, [feedbackStorageKey, user?.id]);
 
   const activeSessionId = sessionId ?? routeSessionId ?? persistedContext?.sessionId ?? null;
   const activeScenarioId = scenario?.scenario_id ?? routeScenarioId ?? persistedContext?.scenarioId ?? 'live-session';

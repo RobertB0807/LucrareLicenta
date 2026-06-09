@@ -198,6 +198,9 @@ class PersistenceRepositoryTestCase(unittest.TestCase):
             correct_option_id="report",
             correct_explanation="Corect",
             incorrect_explanation="Incorect",
+            content_source="ollama",
+            llm_model="qwen3:8b",
+            generation_ms=1500,
         )
 
         restored = persistence_repository.fetch_generated_scenario(scenario_id)
@@ -205,6 +208,9 @@ class PersistenceRepositoryTestCase(unittest.TestCase):
         assert restored is not None
         self.assertEqual(restored["session_id"], session_id)
         self.assertEqual(restored["template_id"], "phishing-medium-2")
+        self.assertEqual(restored["content_source"], "ollama")
+        self.assertEqual(restored["llm_model"], "qwen3:8b")
+        self.assertEqual(restored["generation_ms"], 1500)
         self.assertEqual(restored["channel"], "email")
         self.assertEqual(restored["attacker_message"], "Mesaj de test")
         self.assertEqual(restored["options"][1]["id"], "report")
@@ -242,6 +248,26 @@ class PersistenceRepositoryTestCase(unittest.TestCase):
 
         self.assertTrue(persistence_repository.ensure_session_owner("owned-session", user["id"]))
         self.assertFalse(persistence_repository.ensure_session_owner("owned-session", "different-user"))
+
+        persistence_repository.upsert_session_progress(
+            session_id="legacy-ownerless-session",
+            total_score=0,
+            total_attempts=0,
+            total_correct=0,
+            correct_streak=0,
+            incorrect_streak=0,
+            per_attack_stats={
+                "phishing": {"attempts": 0, "correct": 0},
+                "smishing": {"attempts": 0, "correct": 0},
+                "impersonation": {"attempts": 0, "correct": 0},
+            },
+        )
+        self.assertFalse(
+            persistence_repository.ensure_session_owner(
+                "legacy-ownerless-session",
+                user["id"],
+            )
+        )
 
     def test_firebase_user_mapping_creates_and_links_local_user(self) -> None:
         firebase_user = persistence_repository.create_or_update_firebase_user(

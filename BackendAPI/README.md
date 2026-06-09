@@ -43,6 +43,33 @@ Pentru SQLite (optional), seteaza explicit:
 export DATABASE_URL='sqlite:///BackendAPI/training_data.db'
 ```
 
+### Generare locala cu Ollama
+
+Scenariile adaptive, generate fara `template_id`, pot folosi un model Ollama local.
+Instaleaza si porneste Ollama, apoi descarca modelul:
+
+```bash
+ollama pull qwen3:8b
+```
+
+Configureaza `BackendAPI/.env`:
+
+```env
+LLM_ENABLED=true
+LLM_PROVIDER=ollama
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=qwen3:8b
+LLM_TIMEOUT_SECONDS=60
+```
+
+Output-ul modelului este validat prin schema Pydantic inainte de utilizare. Daca Ollama
+nu este disponibil, raspunsul este invalid sau depaseste timeout-ul, backend-ul foloseste
+automat biblioteca rule-based. Selectiile explicite din catalog, care trimit `template_id`,
+raman deterministe si nu apeleaza modelul.
+
+Raspunsul de generare si persistenta includ `content_source`, `llm_model`,
+`generation_ms` si `fallback_reason` pentru observabilitate si evaluarea lucrarii.
+
 ### Firebase Auth optional
 
 Backend-ul accepta in continuare JWT-urile locale existente, dar poate valida si Firebase ID tokens.
@@ -67,6 +94,22 @@ Authorization: Bearer <firebase_id_token>
 ```
 
 FastAPI valideaza token-ul si creeaza/leaga automat utilizatorul local prin `firebase_uid`.
+
+### Sesiuni locale
+
+Pentru autentificarea locala, backend-ul emite doua token-uri distincte:
+
+- access token cu durata implicita de 60 minute, folosit in header-ul `Authorization`
+- refresh token cu durata implicita de 7 zile, folosit exclusiv la `POST /auth/refresh`
+
+Duratele se configureaza prin `JWT_ACCESS_EXPIRATION_MINUTES` si
+`JWT_REFRESH_EXPIRATION_DAYS`. Endpoint-ul de refresh primeste:
+
+```json
+{"refresh_token": "<refresh_token>"}
+```
+
+Access token-urile si refresh token-urile au tipuri JWT diferite si nu sunt interschimbabile.
 
 ### Rulare pentru telefon fizic
 
@@ -109,6 +152,9 @@ alembic downgrade -1
 - `GET /scenario/{scenario_id}`
 - `POST /assistant/ask`
 - `GET /learning/profile`
+- `GET /learning/path`
+- `POST /learning/path/lessons/{lesson_id}/complete`
+- `GET /sessions?limit=20&offset=0`
 - `GET /session/{session_id}`
 - `GET /session/{session_id}/events?limit=20&offset=0`
 - `GET /session/{session_id}/trends?limit=30&offset=0`
@@ -119,8 +165,16 @@ alembic downgrade -1
 - retrimiterea unei alte optiuni intoarce `409 Conflict`
 - scorul, progresul adaptiv si evenimentul sesiunii sunt aplicate o singura data
 
-Toate endpoint-urile in afara de `GET /health`, `POST /auth/register` si `POST /auth/login`
-necesita header:
+`GET /sessions` returneaza doar sesiunile utilizatorului autentificat, ordonate dupa
+ultima actualizare. Fiecare element include sumarul de scor, numarul de scenarii,
+ultimul tip de atac si optional ultimul scenariu neevaluat care poate fi reluat.
+
+Traseul de invatare combina lectii si cerinte de scenarii in trei module de dificultate.
+Progresul lectiilor, XP-ul si seriile zilnice sunt persistate per utilizator, iar progresul
+scenariilor este calculat din profilul adaptiv existent.
+
+Toate endpoint-urile in afara de `GET /health`, `POST /auth/register`, `POST /auth/login`
+si `POST /auth/refresh` necesita header:
 
 ```http
 Authorization: Bearer <access_token>

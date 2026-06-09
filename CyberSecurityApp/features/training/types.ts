@@ -9,6 +9,10 @@ export type ScenarioOption = {
 export type Scenario = {
   scenario_id: string;
   template_id?: string | null;
+  content_source?: 'ollama' | 'rule_based';
+  llm_model?: string | null;
+  generation_ms?: number | null;
+  fallback_reason?: string | null;
   attack_type: AttackType;
   difficulty: DifficultyLevel;
   channel: string;
@@ -132,6 +136,28 @@ export type SessionSnapshotApiResponse = {
   last_updated_at: string | null;
 };
 
+export type UserSessionSummaryApiResponse = {
+  session_id: string;
+  total_score: number;
+  total_attempts: number;
+  total_correct: number;
+  accuracy: number;
+  generated_scenarios: number;
+  evaluated_scenarios: number;
+  latest_attack_type: AttackType | null;
+  latest_difficulty: DifficultyLevel | null;
+  pending_scenario_id: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type UserSessionsApiResponse = {
+  total: number;
+  limit: number;
+  offset: number;
+  items: UserSessionSummaryApiResponse[];
+};
+
 export type SessionEventsApiResponse = {
   session_id: string;
   total: number;
@@ -203,3 +229,84 @@ export type ScenarioCatalogApiResponse = {
 };
 
 export type LearningProfileApiResponse = LearningProfile;
+
+export type LearningPathStepType = 'lesson' | 'scenario';
+export type LearningPathStepStatus = 'locked' | 'available' | 'in_progress' | 'completed';
+export type LearningPathModuleStatus = 'locked' | 'available' | 'in_progress' | 'completed';
+
+export type LearningPathStep = {
+  id: string;
+  step_type: LearningPathStepType;
+  title: string;
+  description: string;
+  status: LearningPathStepStatus;
+  progress_current: number;
+  progress_required: number;
+  lesson_id: string | null;
+  attack_type: AttackType | null;
+  difficulty: DifficultyLevel | null;
+  mastery_current: number | null;
+  minimum_mastery: number | null;
+};
+
+export type LearningPathModule = {
+  id: string;
+  title: string;
+  description: string;
+  level: 'beginner' | 'intermediate' | 'advanced';
+  status: LearningPathModuleStatus;
+  progress_percent: number;
+  completed_steps: number;
+  total_steps: number;
+  steps: LearningPathStep[];
+};
+
+export type LearningPathGoal = {
+  id: string;
+  title: string;
+  detail: string;
+  current: number;
+  target: number;
+  completed: boolean;
+};
+
+export type LearningPathBadge = {
+  id: string;
+  title: string;
+  description: string;
+  unlocked: boolean;
+};
+
+export type LearningPathNextAction = {
+  module_id: string;
+  step_id: string;
+  step_type: LearningPathStepType;
+  title: string;
+  lesson_id: string | null;
+  attack_type: AttackType | null;
+  difficulty: DifficultyLevel | null;
+};
+
+export type LearningPathApiResponse = {
+  user_id: string;
+  xp: number;
+  level: number;
+  level_progress: number;
+  level_target: number;
+  current_streak: number;
+  longest_streak: number;
+  completed_modules: number;
+  total_modules: number;
+  overall_progress: number;
+  daily_goal: LearningPathGoal;
+  weekly_goal: LearningPathGoal;
+  badges: LearningPathBadge[];
+  modules: LearningPathModule[];
+  next_action: LearningPathNextAction | null;
+};
+
+export type LearningPathLessonCompletionApiResponse = {
+  lesson_id: string;
+  was_already_completed: boolean;
+  path: LearningPathApiResponse;
+};

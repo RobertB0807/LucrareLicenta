@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Iterator
 from uuid import uuid4
 
@@ -14,6 +14,7 @@ from persistence_models import (
     ScenarioAttemptORM,
     SessionEventORM,
     TrainingSessionORM,
+    UserLearningPathProgressORM,
     UserLearningProfileORM,
     UserORM,
 )
@@ -276,6 +277,167 @@ def _apply_user_learning_attempt(
     row.updated_at = utc_now()
 
 
+def _update_learning_path_activity_row(
+    row: UserLearningPathProgressORM,
+    *,
+    xp_delta: int,
+    activity_at: datetime | None = None,
+) -> None:
+    current_time = activity_at or utc_now()
+    activity_date = current_time.astimezone(timezone.utc).date()
+    if row.last_activity_date is None:
+        row.current_streak = 1
+    elif row.last_activity_date == activity_date:
+        pass
+    elif row.last_activity_date == activity_date - timedelta(days=1):
+        row.current_streak = int(row.current_streak or 0) + 1
+    else:
+        row.current_streak = 1
+
+    row.longest_streak = max(int(row.longest_streak or 0), int(row.current_streak or 0))
+    row.last_activity_date = activity_date
+    row.xp = int(row.xp or 0) + max(0, xp_delta)
+    row.updated_at = current_time
+
+
+def _apply_learning_path_activity(
+    db: Session,
+    *,
+    user_id: str,
+    xp_delta: int,
+    activity_at: datetime | None = None,
+) -> UserLearningPathProgressORM:
+    row = db.scalar(
+        select(UserLearningPathProgressORM)
+        .where(UserLearningPathProgressORM.user_id == user_id)
+        .with_for_update()
+    )
+    if row is None:
+        row = UserLearningPathProgressORM(
+            user_id=user_id,
+            completed_lessons_json="[]",
+            xp=0,
+            current_streak=0,
+            longest_streak=0,
+        )
+        db.add(row)
+
+    _update_learning_path_activity_row(
+        row,
+        xp_delta=xp_delta,
+        activity_at=activity_at,
+    )
+    return row
+
+
+def complete_learning_path_lesson(
+    *,
+    user_id: str,
+    lesson_id: str,
+    xp_reward: int = 25,
+) -> dict[str, Any]:
+    with session_scope() as db:
+        row = db.scalar(
+            select(UserLearningPathProgressORM)
+            .where(UserLearningPathProgressORM.user_id == user_id)
+            .with_for_update()
+        )
+        if row is None:
+            row = UserLearningPathProgressORM(
+                user_id=user_id,
+                completed_lessons_json="[]",
+                xp=0,
+                current_streak=0,
+                longest_streak=0,
+            )
+            db.add(row)
+
+        try:
+            completed_lessons = json.loads(row.completed_lessons_json or "[]")
+        except (TypeError, json.JSONDecodeError):
+            completed_lessons = []
+        if not isinstance(completed_lessons, list):
+            completed_lessons = []
+
+        normalized_lessons = {
+            str(item) for item in completed_lessons if isinstance(item, str) and item
+        }
+        was_already_completed = lesson_id in normalized_lessons
+        if not was_already_completed:
+            normalized_lessons.add(lesson_id)
+            row.completed_lessons_json = json.dumps(sorted(normalized_lessons))
+            _update_learning_path_activity_row(
+                row,
+                xp_delta=xp_reward,
+            )
+
+        db.flush()
+        return {
+            "lesson_id": lesson_id,
+            "was_already_completed": was_already_completed,
+        }
+
+
+def fetch_learning_path_progress(user_id: str) -> dict[str, Any]:
+    db = SessionLocal()
+    try:
+        row = db.get(UserLearningPathProgressORM, user_id)
+        if row is None:
+            return {
+                "completed_lessons": [],
+                "xp": 0,
+                "current_streak": 0,
+                "longest_streak": 0,
+                "last_activity_date": None,
+            }
+        try:
+            completed_lessons = json.loads(row.completed_lessons_json or "[]")
+        except (TypeError, json.JSONDecodeError):
+            completed_lessons = []
+        if not isinstance(completed_lessons, list):
+            completed_lessons = []
+        return {
+            "completed_lessons": [
+                str(item) for item in completed_lessons if isinstance(item, str) and item
+            ],
+            "xp": int(row.xp or 0),
+            "current_streak": int(row.current_streak or 0),
+            "longest_streak": int(row.longest_streak or 0),
+            "last_activity_date": (
+                row.last_activity_date.isoformat() if row.last_activity_date else None
+            ),
+        }
+    finally:
+        db.close()
+
+
+def fetch_user_recent_activity(
+    user_id: str,
+    *,
+    since: datetime,
+) -> dict[str, int]:
+    db = SessionLocal()
+    try:
+        attempts = db.execute(
+            select(ScenarioAttemptORM)
+            .join(
+                TrainingSessionORM,
+                TrainingSessionORM.session_id == ScenarioAttemptORM.session_id,
+            )
+            .where(
+                TrainingSessionORM.owner_user_id == user_id,
+                ScenarioAttemptORM.evaluated_at.is_not(None),
+                ScenarioAttemptORM.evaluated_at >= since,
+            )
+        ).scalars().all()
+        return {
+            "attempts": len(attempts),
+            "correct": sum(1 for attempt in attempts if bool(attempt.is_correct)),
+        }
+    finally:
+        db.close()
+
+
 def fetch_user_learning_profiles(user_id: str) -> list[dict[str, Any]]:
     db = SessionLocal()
     try:
@@ -303,14 +465,12 @@ def fetch_user_learning_profiles(user_id: str) -> list[dict[str, Any]]:
 
 
 def ensure_session_owner(session_id: str, user_id: str) -> bool:
-    with session_scope() as db:
+    db = SessionLocal()
+    try:
         row = db.get(TrainingSessionORM, session_id)
-        if row is None:
-            return False
-        if row.owner_user_id is None:
-            row.owner_user_id = user_id
-            return True
-        return row.owner_user_id == user_id
+        return row is not None and row.owner_user_id == user_id
+    finally:
+        db.close()
 
 
 def fetch_scenario_session_owner(scenario_id: str) -> dict[str, Any] | None:
@@ -336,7 +496,7 @@ def record_generated_scenario(
     scenario_id: str,
     attack_type: str,
     difficulty: str,
-    template_id: str,
+    template_id: str | None,
     channel: str,
     attacker_message: str,
     options: list[dict[str, str]],
@@ -344,6 +504,10 @@ def record_generated_scenario(
     correct_option_id: str,
     correct_explanation: str,
     incorrect_explanation: str,
+    content_source: str = "rule_based",
+    llm_model: str | None = None,
+    generation_ms: int | None = None,
+    fallback_reason: str | None = None,
 ) -> None:
     with session_scope() as db:
         existing = db.scalar(
@@ -358,6 +522,10 @@ def record_generated_scenario(
             attack_type=attack_type,
             difficulty=difficulty,
             template_id=template_id,
+            content_source=content_source,
+            llm_model=llm_model,
+            generation_ms=generation_ms,
+            fallback_reason=fallback_reason,
             channel=channel,
             attacker_message=attacker_message,
             options_json=json.dumps(options),
@@ -398,6 +566,10 @@ def fetch_generated_scenario(scenario_id: str) -> dict[str, Any] | None:
             "session_id": row.session_id,
             "scenario_id": row.scenario_id,
             "template_id": row.template_id,
+            "content_source": row.content_source,
+            "llm_model": row.llm_model,
+            "generation_ms": row.generation_ms,
+            "fallback_reason": row.fallback_reason,
             "attack_type": row.attack_type,
             "difficulty": row.difficulty,
             "channel": row.channel,
@@ -405,6 +577,36 @@ def fetch_generated_scenario(scenario_id: str) -> dict[str, Any] | None:
             "options": options,
             "red_flags": red_flags,
         }
+    finally:
+        db.close()
+
+
+def fetch_recent_generated_scenarios(
+    session_id: str,
+    *,
+    attack_type: str,
+    difficulty: str,
+    limit: int = 6,
+) -> list[dict[str, str | None]]:
+    db = SessionLocal()
+    try:
+        rows = db.scalars(
+            select(ScenarioAttemptORM)
+            .where(
+                ScenarioAttemptORM.session_id == session_id,
+                ScenarioAttemptORM.attack_type == attack_type,
+                ScenarioAttemptORM.difficulty == difficulty,
+            )
+            .order_by(ScenarioAttemptORM.created_at.desc(), ScenarioAttemptORM.id.desc())
+            .limit(max(1, limit))
+        ).all()
+        return [
+            {
+                "template_id": row.template_id,
+                "attacker_message": row.attacker_message,
+            }
+            for row in rows
+        ]
     finally:
         db.close()
 
@@ -576,6 +778,12 @@ def apply_scenario_evaluation_once(
                 is_correct=is_correct,
                 attempted_at=evaluated_at,
             )
+            _apply_learning_path_activity(
+                db,
+                user_id=owner_user_id,
+                xp_delta=20 if is_correct else 10,
+                activity_at=evaluated_at,
+            )
 
         return {
             "status": "applied",
@@ -700,6 +908,117 @@ def fetch_session_snapshot(session_id: str, event_limit: int = 12) -> dict[str, 
             "generated_scenarios": int(generated_count or 0),
             "evaluated_scenarios": int(evaluated_count or 0),
             "last_updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        }
+    finally:
+        db.close()
+
+
+def fetch_user_sessions(
+    user_id: str,
+    limit: int = 20,
+    offset: int = 0,
+) -> dict[str, Any]:
+    generated_count = (
+        select(func.count(ScenarioAttemptORM.id))
+        .where(ScenarioAttemptORM.session_id == TrainingSessionORM.session_id)
+        .correlate(TrainingSessionORM)
+        .scalar_subquery()
+    )
+    evaluated_count = (
+        select(func.count(ScenarioAttemptORM.id))
+        .where(
+            ScenarioAttemptORM.session_id == TrainingSessionORM.session_id,
+            ScenarioAttemptORM.evaluated_at.is_not(None),
+        )
+        .correlate(TrainingSessionORM)
+        .scalar_subquery()
+    )
+    latest_attack_type = (
+        select(ScenarioAttemptORM.attack_type)
+        .where(ScenarioAttemptORM.session_id == TrainingSessionORM.session_id)
+        .order_by(ScenarioAttemptORM.created_at.desc(), ScenarioAttemptORM.id.desc())
+        .limit(1)
+        .correlate(TrainingSessionORM)
+        .scalar_subquery()
+    )
+    latest_difficulty = (
+        select(ScenarioAttemptORM.difficulty)
+        .where(ScenarioAttemptORM.session_id == TrainingSessionORM.session_id)
+        .order_by(ScenarioAttemptORM.created_at.desc(), ScenarioAttemptORM.id.desc())
+        .limit(1)
+        .correlate(TrainingSessionORM)
+        .scalar_subquery()
+    )
+    pending_scenario_id = (
+        select(ScenarioAttemptORM.scenario_id)
+        .where(
+            ScenarioAttemptORM.session_id == TrainingSessionORM.session_id,
+            ScenarioAttemptORM.evaluated_at.is_(None),
+        )
+        .order_by(ScenarioAttemptORM.created_at.desc(), ScenarioAttemptORM.id.desc())
+        .limit(1)
+        .correlate(TrainingSessionORM)
+        .scalar_subquery()
+    )
+
+    db = SessionLocal()
+    try:
+        total = db.scalar(
+            select(func.count())
+            .select_from(TrainingSessionORM)
+            .where(TrainingSessionORM.owner_user_id == user_id)
+        )
+        rows = db.execute(
+            select(
+                TrainingSessionORM,
+                generated_count.label("generated_scenarios"),
+                evaluated_count.label("evaluated_scenarios"),
+                latest_attack_type.label("latest_attack_type"),
+                latest_difficulty.label("latest_difficulty"),
+                pending_scenario_id.label("pending_scenario_id"),
+            )
+            .where(TrainingSessionORM.owner_user_id == user_id)
+            .order_by(TrainingSessionORM.updated_at.desc(), TrainingSessionORM.session_id.desc())
+            .offset(offset)
+            .limit(limit)
+        ).all()
+
+        items: list[dict[str, Any]] = []
+        for (
+            session,
+            generated_scenarios,
+            evaluated_scenarios,
+            current_attack_type,
+            current_difficulty,
+            current_pending_scenario_id,
+        ) in rows:
+            accuracy = (
+                round((session.total_correct / session.total_attempts) * 100, 1)
+                if session.total_attempts
+                else 0.0
+            )
+            items.append(
+                {
+                    "session_id": session.session_id,
+                    "total_score": int(session.total_score or 0),
+                    "total_attempts": int(session.total_attempts or 0),
+                    "total_correct": int(session.total_correct or 0),
+                    "accuracy": accuracy,
+                    "generated_scenarios": int(generated_scenarios or 0),
+                    "evaluated_scenarios": int(evaluated_scenarios or 0),
+                    "latest_attack_type": current_attack_type,
+                    "latest_difficulty": current_difficulty,
+                    "pending_scenario_id": current_pending_scenario_id,
+                    "created_at": session.created_at.isoformat() if session.created_at else None,
+                    "updated_at": session.updated_at.isoformat() if session.updated_at else None,
+                }
+            )
+
+        return {
+            "total": int(total or 0),
+            "limit": limit,
+            "offset": offset,
+            "items": items,
         }
     finally:
         db.close()

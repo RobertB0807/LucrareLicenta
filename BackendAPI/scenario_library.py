@@ -615,6 +615,7 @@ def get_scenario_template_selection(
     attack_type: AttackType,
     difficulty: DifficultyLevel,
     template_id: str | None = None,
+    excluded_template_ids: set[str] | None = None,
 ) -> tuple[str, ScenarioTemplate]:
     templates = SCENARIO_LIBRARY[(attack_type, difficulty)]
 
@@ -627,7 +628,16 @@ def get_scenario_template_selection(
             f"and difficulty '{difficulty}'"
         )
 
-    selected_index = choice(range(len(templates)))
+    excluded = excluded_template_ids or set()
+    candidate_indexes = [
+        index
+        for index in range(len(templates))
+        if build_scenario_template_id(attack_type, difficulty, index) not in excluded
+    ]
+    if not candidate_indexes:
+        candidate_indexes = list(range(len(templates)))
+
+    selected_index = choice(candidate_indexes)
     selected_template = templates[selected_index]
     resolved_template_id = build_scenario_template_id(attack_type, difficulty, selected_index)
     return resolved_template_id, selected_template.model_copy(deep=True)

@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useMemo, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
 import { getSessionEvents, getSessionSnapshot, getSessionTrendAggregates } from '@/features/training/api';
@@ -52,8 +53,15 @@ const ATTACK_TREND_COLORS: Record<AttackType, string> = {
 };
 
 export default function AnalyticsScreen() {
-  const { sessionId, stats, perAttackStats, adaptiveProfile, isLoadingAdaptiveProfile } =
-    useTrainingSession();
+  const {
+    sessionId,
+    stats,
+    perAttackStats,
+    adaptiveProfile,
+    isLoadingAdaptiveProfile,
+    refreshActiveSession,
+    refreshAdaptiveProfile,
+  } = useTrainingSession();
   const { width } = useWindowDimensions();
   const isCompact = width < 360;
   const contentInsets = useMemo(
@@ -81,6 +89,15 @@ export default function AnalyticsScreen() {
   const [dateRangeFilter, setDateRangeFilter] = useState<DateRangeFilter>('30d');
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [focusRevision, setFocusRevision] = useState(0);
+
+  useFocusEffect(
+    useCallback(() => {
+      setFocusRevision((current) => current + 1);
+      void refreshActiveSession();
+      void refreshAdaptiveProfile();
+    }, [refreshActiveSession, refreshAdaptiveProfile])
+  );
 
   useEffect(() => {
     setEventsLimit(12);
@@ -117,6 +134,7 @@ export default function AnalyticsScreen() {
 
       setIsLoading(true);
       setFetchError(null);
+      setServerStats(null);
 
       try {
         const [snapshot, events, trendAggregates, phishingTrend, smishingTrend, impersonationTrend] =
@@ -165,7 +183,15 @@ export default function AnalyticsScreen() {
     return () => {
       cancelled = true;
     };
-  }, [eventsLimit, rangeSince, sessionId, trendAttackFilter]);
+  }, [
+    eventsLimit,
+    focusRevision,
+    rangeSince,
+    sessionId,
+    stats.totalAttempts,
+    stats.totalScore,
+    trendAttackFilter,
+  ]);
 
   const effectiveStats = serverStats ?? {
     total_score: stats.totalScore,
