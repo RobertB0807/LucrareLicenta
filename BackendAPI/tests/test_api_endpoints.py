@@ -89,6 +89,37 @@ class ApiEndpointsTestCase(unittest.TestCase):
         response = main.health()
         self.assertEqual(response, {"status": "ok"})
 
+    def test_readiness_checks_database_connection(self) -> None:
+        response = self.client.get("/health/ready")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "ready"})
+
+    def test_responses_include_security_and_request_id_headers(self) -> None:
+        response = self.client.get(
+            "/health",
+            headers={"X-Request-ID": "test-request-123"},
+        )
+
+        self.assertEqual(response.headers["x-request-id"], "test-request-123")
+        self.assertEqual(response.headers["x-content-type-options"], "nosniff")
+        self.assertEqual(response.headers["x-frame-options"], "DENY")
+        self.assertEqual(response.headers["referrer-policy"], "no-referrer")
+
+    def test_metrics_exposes_prometheus_request_counters(self) -> None:
+        self.client.get("/health")
+        response = self.client.get("/metrics")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(
+            "cyber_training_http_requests_total",
+            response.text,
+        )
+        self.assertIn(
+            "cyber_training_http_request_duration_seconds",
+            response.text,
+        )
+
     def test_generate_evaluate_and_session_endpoints(self) -> None:
         generated = main.generate_scenario(
             main.GenerateScenarioRequest(attack_type="phishing", difficulty="easy")
@@ -812,6 +843,15 @@ class ApiEndpointsTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
         self.assertIn("access-control-allow-origin", response.headers)
         self.assertIn(response.headers["access-control-allow-origin"], {"*", "http://localhost:8081"})
+
+    def test_unapproved_cors_origin_is_not_reflected(self) -> None:
+        response = self.client.get(
+            "/auth/me",
+            headers={"Origin": "https://untrusted.example"},
+        )
+
+        self.assertEqual(response.status_code, 401)
+        self.assertNotIn("access-control-allow-origin", response.headers)
 
     def test_firebase_user_mapping_error_includes_cors_headers(self) -> None:
         class StubFirebaseIdentity:

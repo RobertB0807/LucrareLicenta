@@ -11,7 +11,9 @@ from uuid import uuid4
 import jwt
 from pydantic import BaseModel
 
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "dev-insecure-secret-change-me")
+from app_config import DEFAULT_DEVELOPMENT_JWT_SECRET
+
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", DEFAULT_DEVELOPMENT_JWT_SECRET)
 JWT_ALGORITHM = "HS256"
 JWT_ACCESS_EXPIRATION_MINUTES = int(os.getenv("JWT_ACCESS_EXPIRATION_MINUTES", "60"))
 JWT_REFRESH_EXPIRATION_DAYS = int(os.getenv("JWT_REFRESH_EXPIRATION_DAYS", "7"))

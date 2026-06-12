@@ -1,6 +1,6 @@
-# BackendAPI MVP
+# CyberSecurity Training API
 
-Backend minimal pentru MVP-ul aplicatiei de simulare phishing.
+Backend FastAPI pentru aplicatia de antrenament impotriva atacurilor de inginerie sociala.
 
 ## 1. Instalare dependinte
 
@@ -15,6 +15,54 @@ python3 -m pip install -r requirements.txt
 ```bash
 uvicorn main:app --reload --port 8000
 ```
+
+### Medii si validare de productie
+
+Backend-ul foloseste `APP_ENV=development|test|production`.
+
+In `production`, pornirea este oprita daca:
+
+- `JWT_SECRET_KEY` lipseste, este valoarea implicita sau are mai putin de 32 de caractere
+- `DATABASE_URL` foloseste SQLite in loc de PostgreSQL
+- `APP_CORS_ORIGINS` nu contine cel putin o origine exacta
+- `APP_CORS_ORIGINS` contine wildcard-ul `*`
+- `REDIS_URL` nu este configurat
+- `RATE_LIMIT_FAIL_OPEN` sau `AUTO_MIGRATE` sunt active
+
+Exemplu:
+
+```env
+APP_ENV=production
+DATABASE_URL=postgresql+psycopg://app_user:strong-password@db:5432/cyber_training
+JWT_SECRET_KEY=replace-with-a-unique-random-secret-of-at-least-32-characters
+APP_CORS_ORIGINS=https://app.example.com,https://admin.example.com
+TRUST_PROXY_HEADERS=true
+API_DOCS_ENABLED=false
+AUTO_MIGRATE=false
+REDIS_URL=redis://redis:6379/0
+RATE_LIMIT_FAIL_OPEN=false
+LOG_JSON=true
+METRICS_ENABLED=true
+SENTRY_DSN=
+SENTRY_TRACES_SAMPLE_RATE=0.1
+```
+
+`TRUST_PROXY_HEADERS` trebuie activat doar cand API-ul ruleaza exclusiv in spatele unui
+reverse proxy controlat; stack-ul Docker il lasa dezactivat deoarece expune direct portul
+API. Documentatia OpenAPI este dezactivata implicit in productie.
+Productia ruleaza migrarile printr-un job separat inainte de pornirea API-ului.
+
+### Logging, metrics si error tracking
+
+- fiecare request primeste sau propaga `X-Request-ID`
+- productia emite log-uri JSON cu metoda, ruta normalizata, status, durata, IP si user ID
+- `GET /metrics` expune metrici Prometheus cand `METRICS_ENABLED=true`
+- `SENTRY_DSN` activeaza raportarea exceptiilor si performance tracing
+- `SENTRY_TRACES_SAMPLE_RATE` controleaza rata de sampling intre `0.0` si `1.0`
+
+Rate limiting-ul foloseste Redis cand `REDIS_URL` este setat. In development/test poate
+reveni la memoria procesului daca `RATE_LIMIT_FAIL_OPEN=true`; productia refuza request-uri
+cu `503` daca Redis nu este disponibil.
 
 La pornire, backend-ul initializeaza automat baza de date configurata prin `DATABASE_URL`.
 
@@ -139,9 +187,52 @@ alembic upgrade head
 alembic downgrade -1
 ```
 
-## 3. Endpoint-uri MVP
+## 2.2 Stack de productie cu Docker
+
+Din radacina repository-ului:
+
+```bash
+cp .env.production.example .env.production
+# completeaza parolele, JWT_SECRET_KEY si APP_CORS_ORIGINS
+docker compose --env-file .env.production -f docker-compose.production.yml up -d --build
+```
+
+Serviciile sunt PostgreSQL, Redis, job-ul Alembic `migrate`, API-ul FastAPI si,
+optional, Prometheus prin profilul `monitoring`.
+
+Pastreaza `API_WORKERS=1` pentru metrici Prometheus corecte per container si scaleaza
+orizontal prin mai multe containere API in orchestrator.
+
+```bash
+docker compose --profile monitoring --env-file .env.production \
+  -f docker-compose.production.yml up -d --build
+```
+
+Validarea completa construieste stack-ul si ruleaza un flux real de autentificare si training:
+
+```bash
+./scripts/validate-production-stack.sh
+```
+
+Pentru a lasa containerele pornite: `KEEP_STACK=true ./scripts/validate-production-stack.sh`.
+Pentru o validare complet izolata care sterge volumele de test la final, seteaza
+`REMOVE_VOLUMES=true`.
+
+## 2.3 Backup si restore
+
+```bash
+./scripts/backup-database.sh
+ALLOW_DATABASE_RESTORE=true ./scripts/restore-database.sh backups/cyber_training-YYYYMMDDTHHMMSSZ.dump
+```
+
+Restore-ul este distructiv si opreste temporar API-ul. Ruleaza backup zilnic, pastreaza
+copii criptate in storage extern si testeaza lunar restore-ul intr-un mediu izolat.
+
+## 3. Endpoint-uri
 
 - `GET /health`
+- `GET /health/ready`
+- `GET /metrics`
 - `POST /auth/register`
 - `POST /auth/login`
 - `POST /auth/refresh`
@@ -173,8 +264,8 @@ Traseul de invatare combina lectii si cerinte de scenarii in trei module de difi
 Progresul lectiilor, XP-ul si seriile zilnice sunt persistate per utilizator, iar progresul
 scenariilor este calculat din profilul adaptiv existent.
 
-Toate endpoint-urile in afara de `GET /health`, `POST /auth/register`, `POST /auth/login`
-si `POST /auth/refresh` necesita header:
+Toate endpoint-urile in afara de `GET /health`, `GET /health/ready`, `GET /metrics`,
+`POST /auth/register`, `POST /auth/login` si `POST /auth/refresh` necesita header:
 
 ```http
 Authorization: Bearer <access_token>
@@ -186,7 +277,7 @@ Authorization: Bearer <access_token>
 python3 -m unittest discover -s tests -p "test_*.py" -q
 ```
 
-## 5. Security hardening (MVP)
+## 5. Security si operare
 
 - Rate limiting pentru endpoint-urile sensibile:
   - `POST /scenario/generate`: max. 30 cereri / 60 secunde / client
@@ -194,3 +285,6 @@ python3 -m unittest discover -s tests -p "test_*.py" -q
   - `POST /assistant/ask`: max. 60 cereri / 60 secunde / client
 - Validare stricta pentru identificatori (`session_id`, `scenario_id`, `selected_option_id`) cu pattern controlat.
 - Cand limita este depasita, API-ul raspunde cu `429 Too Many Requests` si header `Retry-After`.
+- Productia foloseste Redis pentru limite comune intre procese si instante.
+- Configuratia de productie invalida opreste pornirea aplicatiei.
+- CI ruleaza teste SQLite, integrare PostgreSQL + Redis, lint, TypeScript si export web.

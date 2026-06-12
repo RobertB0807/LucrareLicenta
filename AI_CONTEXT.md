@@ -17,7 +17,7 @@ The goal is educational: users interact with scenarios, choose a response, recei
 - Auth: Firebase Authentication on the frontend, Firebase token verification on the backend, local user/profile mapping in PostgreSQL or SQLite
 
 ## Current State
-The project is already functional as a vertical MVP slice.
+The project is a functional production-v1 work in progress; MVP scope is no longer the target.
 
 ### Backend status
 Backend lives in `BackendAPI/` and currently includes:
@@ -297,9 +297,12 @@ Current integration level:
   - backend `/auth/me` now surfaces validation conflicts with explicit `409` instead of masking them as generic auth errors
 - Added Firebase / env / run-script support:
   - backend loads `BackendAPI/.env` via `python-dotenv`
-- `run-all.sh` now validates `.env`, `.env.local`, `.venv`, and `node_modules` before startup
-- `run-all.sh` applies `alembic upgrade head` before starting Uvicorn
-  - `run-all.sh` starts backend on `127.0.0.1:8000`, keeps FastAPI lifespan hooks enabled, and waits for `/health`
+- `run-all.sh` is the standard full-app launcher:
+  - generates a private `.env.production` with strong local secrets on first run
+  - starts PostgreSQL, Redis, Alembic migrations, FastAPI, and Prometheus through Docker Compose
+  - forwards Firebase and Ollama settings from `BackendAPI/.env` into the API container
+  - waits for `/health/ready`, optionally runs the production smoke test, and starts Expo
+  - stops containers on `Ctrl+C` while preserving Docker data volumes
   - Expo package versions were aligned to the installed SDK
 - Added Alembic migration `20260513_0003`:
   - creates `users` table
@@ -397,8 +400,102 @@ Current integration level:
 - `CyberSecurityApp/features/training/components/FeedbackPanel.tsx`
 - `CyberSecurityApp/package.json` (AsyncStorage dependency)
 
-## Remaining Tasks / Suggested Roadmap
-Priority order (next steps at top):
+## Production V1 Implementation Order
+The target is now a complete production-ready v1, not an MVP. Implement in this order:
+
+### Phase 1. Production and security foundation
+- introduce explicit `development`, `test`, and `production` runtime environments
+- validate production secrets, database configuration, CORS origins, and proxy trust at startup
+- add liveness/readiness checks, security headers, request correlation, and structured logging
+- move rate limiting and transient shared state to Redis for multi-instance deployments
+- define PostgreSQL deployment, migrations, backups, restore procedures, monitoring, and error tracking
+- add CI checks for backend tests, frontend lint/type-check, migrations, and production builds
+
+### Phase 2. Real AI assistant
+- upgrade `/assistant/ask` to use Ollama with strict Pydantic structured-output validation
+- retain the deterministic coaching fallback for disabled, invalid, unavailable, or timed-out AI responses
+- send bounded conversation, lesson, scenario, and user-weakness context
+- expose content source, model, generation latency, and fallback reason
+- add assistant safety tests, prompt-injection resistance, context limits, and failure observability
+
+### Phase 3. Backend-driven learning and assessment system
+- move lesson content out of frontend screens into persisted backend models and APIs
+- add lesson quizzes, module exams, scoring, attempts, prerequisites, and mastery rules
+- persist lesson/exam history and issue completion summaries or certificates
+- connect recommendations to learning-path gaps and adaptive scenario performance
+
+### Phase 4. Complete training modes and scenario coverage
+- add spear phishing, vishing, QR phishing, business impersonation, and social-media scams
+- add campaign mode, daily challenges, timed exercises, random/adaptive training, retry, review, and bookmarks
+- support richer channel-specific simulations while preserving safe fictitious content
+- expand scenario validation, diversity controls, scoring tests, and recommendation tests
+
+### Phase 5. Global analytics and reporting
+- aggregate progress across all user sessions instead of requiring one active session
+- add per-attack/per-difficulty trends, moving averages, range comparison, consistency, and learning-time metrics
+- generate weakness insights and recommended next actions
+- add CSV/PDF export and shareable progress reports
+
+### Phase 6. Complete account and privacy management
+- add email verification, forgot/reset password, password change, and profile editing
+- add active-device/session management and remote logout
+- add personal-data export, account deletion, retention rules, and consent/privacy screens
+- harden deep links, stale-session cleanup, and Firebase/local-auth parity
+
+### Phase 7. Engagement and notifications
+- add configurable reminders, daily/weekly challenges, streak warnings, and achievement notifications
+- add an in-app notification center and notification preference controls
+- implement push notification registration and backend scheduling
+
+### Phase 8. Administration
+- build a protected web admin interface
+- manage scenarios, lessons, quizzes, badges, challenges, and users
+- expose anonymized product/training analytics
+- expose AI generation health, latency, validation failures, and fallback rates
+
+### Phase 9. Release-quality client experience
+- finish responsive layouts for phones, tablets, and web
+- apply safe-area and keyboard handling to every full-screen flow and composer
+- add accessibility labels, screen-reader behavior, dynamic-text support, and touch-target validation
+- add offline/slow-network states, selective cache controls, animations, final assets, and remove legacy routes
+- configure Android/iOS identifiers, EAS profiles, signed builds, and store metadata
+
+### Phase 10. Full verification and release
+- add frontend unit/component tests and end-to-end user-flow tests
+- run PostgreSQL integration and migration tests
+- test Firebase and local auth, Ollama fallback, restart recovery, expired tokens, and degraded networks
+- validate on physical Android/iOS devices and supported web sizes
+- complete deployment, backup/restore drill, monitoring alerts, security review, and release checklist
+
+### Current Production V1 Progress (2026-06-10)
+Phase 1 is complete. Implemented:
+- centralized backend runtime configuration in `BackendAPI/app_config.py`
+- explicit `APP_ENV` support for development, test, and production
+- fail-fast production validation for JWT secret strength, PostgreSQL, and exact CORS origins
+- wildcard CORS rejection and local-development origin defaults
+- trusted proxy headers are disabled unless `TRUST_PROXY_HEADERS=true`
+- API documentation defaults to disabled in production
+- security headers and request correlation IDs on API responses
+- public database readiness endpoint at `GET /health/ready`
+- sanitized `.env.example` values with no machine-specific Firebase credential path
+- backend configuration/readiness/security regression tests
+- GitHub Actions CI for backend tests, frontend lint/type-check, and production web export
+- structured JSON request/error logging with request IDs, latency, status, client, and user context
+- optional Sentry error/performance tracking through environment configuration
+- Prometheus request/rate-limit metrics at `GET /metrics`
+- Redis-backed distributed rate limiting with fail-closed production behavior
+- Docker production stack for FastAPI, PostgreSQL, Redis, one-shot Alembic migrations, and optional Prometheus
+- PostgreSQL + Redis integration flow in GitHub Actions
+- automated PostgreSQL backup and guarded restore scripts
+- production stack smoke test covering auth, catalog, generation, evaluation, readiness, and metrics
+- Prometheus alert rules for API downtime, elevated 5xx rate, and Redis limiter errors
+- local validation completed successfully against the real Docker stack
+- backup/restore recovery tested successfully, followed by a passing post-restore smoke test
+
+Next implementation phase: Phase 2, the real AI assistant.
+
+## Previous MVP Roadmap
+The items below remain useful implementation detail, but the production phases above define priority.
 
 ### 1. Extend LLM integration to the assistant
 Scenario generation status: implemented with local Ollama (`qwen3:8b`), strict Pydantic
@@ -525,25 +622,28 @@ Implemented:
 - Auth state now prefers Firebase-backed sessions when Firebase is configured; otherwise the backend JWT flow remains available as a fallback path
 
 ## Run Instructions
-### Backend
+### Standard full app
 ```bash
-cd /Users/robertbalasoiu/Robert/Licenta2026/LucrareLicenta/BackendAPI
-source .venv/bin/activate
-alembic upgrade head
-uvicorn main:app --host 127.0.0.1 --port 8000 --lifespan off
+cd /Users/robertbalasoiu/Robert/Licenta2026/LucrareLicenta
+./run-all.sh
 ```
 
-Backend tests:
+The default opens Expo web. Alternative modes:
+
+```bash
+FRONTEND_MODE=start ./run-all.sh
+FRONTEND_MODE=ios ./run-all.sh
+FRONTEND_MODE=android ./run-all.sh
+RUN_SMOKE_TEST=true ./run-all.sh
+```
+
+Stop with `Ctrl+C`; PostgreSQL, Redis, and Prometheus data volumes are preserved.
+
+### Backend tests
 ```bash
 cd /Users/robertbalasoiu/Robert/Licenta2026/LucrareLicenta/BackendAPI
 source .venv/bin/activate
 ./.venv/bin/python -m unittest discover -s tests -p "test_*.py" -q
-```
-
-### Frontend
-```bash
-cd /Users/robertbalasoiu/Robert/Licenta2026/LucrareLicenta/CyberSecurityApp
-npx expo start
 ```
 
 ## Notes for the Next AI Tool

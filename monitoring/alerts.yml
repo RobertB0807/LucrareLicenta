@@ -1,0 +1,30 @@
+groups:
+  - name: cyber-training-api
+    rules:
+      - alert: CyberTrainingApiDown
+        expr: up{job="cyber-training-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Cyber Training API is unavailable
+
+      - alert: CyberTrainingHighServerErrorRate
+        expr: |
+          sum(rate(cyber_training_http_requests_total{status=~"5.."}[5m]))
+          /
+          clamp_min(sum(rate(cyber_training_http_requests_total[5m])), 0.001)
+          > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: API server error rate is above 5%
+
+      - alert: CyberTrainingRateLimitBackendErrors
+        expr: increase(cyber_training_rate_limit_backend_errors_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Redis rate-limit backend is reporting errors
