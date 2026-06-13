@@ -10,9 +10,19 @@ import {
   buildUserStorageKey,
   clearTrainingLocalCache,
 } from '@/features/training/local-cache';
+import type { AssistantAskApiResponse } from '@/features/training/types';
 import { TrainingColors } from '@/features/training/ui-theme';
+import { useTrainingSession } from '@/features/training/useTrainingSession';
 
-type Msg = { id: string; role: 'user' | 'assistant'; text: string };
+type Msg = {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+  source?: AssistantAskApiResponse['content_source'];
+  model?: string | null;
+  generationMs?: number | null;
+  safetyStatus?: AssistantAskApiResponse['safety_status'];
+};
 const ASSISTANT_MESSAGES_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 const ASSISTANT_MESSAGES_MAX_ITEMS = 40;
 
@@ -39,6 +49,7 @@ const suggestions = [
 
 export default function AssistantScreen() {
   const { user } = useAuth();
+  const { sessionId, scenario, attackType, difficulty } = useTrainingSession();
   const [messages, setMessages] = useState<Msg[]>(defaultMessages);
   const [draft, setDraft] = useState('');
   const [thinking, setThinking] = useState(false);
@@ -133,13 +144,35 @@ export default function AssistantScreen() {
     setThinking(true);
 
     try {
-      const data = await askAssistant({ message: value });
+      const history = messages.slice(-8).map((message) => ({
+        role: message.role,
+        content: message.text.slice(0, 600),
+      }));
+      const data = await askAssistant({
+        message: value,
+        history,
+        session_id: sessionId ?? undefined,
+        scenario_id: scenario?.scenario_id,
+        attack_type: scenario?.attack_type ?? attackType,
+        difficulty: scenario?.difficulty ?? difficulty,
+      });
       if (activeUserIdRef.current !== requestUserId) {
         return;
       }
       const tipsText = data.quick_tips.map((tip, index) => `${index + 1}. ${tip}`).join('\n');
       const assistantText = tipsText ? `${data.answer}\n\n${tipsText}` : data.answer;
-      setMessages((m) => [...m, { id: `a-${Date.now()}`, role: 'assistant', text: assistantText }]);
+      setMessages((m) => [
+        ...m,
+        {
+          id: `a-${Date.now()}`,
+          role: 'assistant',
+          text: assistantText,
+          source: data.content_source,
+          model: data.llm_model,
+          generationMs: data.generation_ms,
+          safetyStatus: data.safety_status,
+        },
+      ]);
     } catch {
       if (activeUserIdRef.current === requestUserId) {
         setMessages((m) => [
@@ -185,6 +218,19 @@ export default function AssistantScreen() {
               </View>
               <View style={styles.assistantBubble}>
                 <Text style={styles.assistantText}>{m.text}</Text>
+                {m.source ? (
+                  <Text style={styles.sourceText}>
+                    {m.source === 'ollama'
+                      ? `Răspuns AI${m.model ? ` · ${m.model}` : ''}${
+                          m.generationMs !== null && m.generationMs !== undefined
+                            ? ` · ${m.generationMs} ms`
+                            : ''
+                        }`
+                      : m.safetyStatus === 'refused'
+                        ? 'Protecție de siguranță'
+                        : 'Ghidare offline verificată'}
+                  </Text>
+                ) : null}
               </View>
             </View>
           ) : (
@@ -303,6 +349,13 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   assistantText: { color: TrainingColors.textPrimary, fontSize: 14, lineHeight: 19 },
+  sourceText: {
+    color: TrainingColors.textMuted,
+    fontSize: 10,
+    fontWeight: '700',
+    marginTop: 8,
+    textTransform: 'uppercase',
+  },
   userRow: { alignItems: 'flex-end' },
   userBubble: {
     maxWidth: '84%',

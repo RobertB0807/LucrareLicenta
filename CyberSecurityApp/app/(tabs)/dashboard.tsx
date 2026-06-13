@@ -58,7 +58,7 @@ export default function DashboardScreen() {
     refreshAdaptiveProfile,
     refreshLearningPath,
   } = useTrainingSession();
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const router = useRouter();
   const { width } = useWindowDimensions();
   const isCompact = width < 360;
@@ -199,14 +199,10 @@ export default function DashboardScreen() {
             <Ionicons name="time-outline" size={18} color={TrainingColors.accentTeal} />
           </Pressable>
           <Pressable
-            accessibilityLabel="Deconectare"
+            accessibilityLabel="Profil și setări"
             style={({ pressed }) => [styles.logoutButton, pressed && styles.pressableFeedback]}
-            onPress={() => {
-              void logout().catch(() => undefined).then(() => {
-                router.replace('/login');
-              });
-            }}>
-            <Ionicons name="log-out-outline" size={17} color={TrainingColors.textMuted} />
+            onPress={() => router.push('/profile' as Href)}>
+            <Ionicons name="person-outline" size={18} color={TrainingColors.textMuted} />
           </Pressable>
         </View>
       </View>

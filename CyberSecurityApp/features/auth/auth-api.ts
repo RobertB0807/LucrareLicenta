@@ -323,6 +323,48 @@ async function authGet<TResponse>(path: string, token: string, fallbackError: st
   throw lastError ?? new Error(fallbackError);
 }
 
+async function authWrite<TResponse>(
+  path: string,
+  method: 'PATCH' | 'DELETE',
+  token: string,
+  payload: unknown,
+  fallbackError: string
+): Promise<TResponse> {
+  let lastError: Error | null = null;
+
+  for (const baseUrl of API_BASE_URL_CANDIDATES) {
+    try {
+      const response = await fetch(`${baseUrl}${path}`, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: method === 'DELETE' ? undefined : JSON.stringify(payload),
+      });
+
+      if (response.status === 401) {
+        throw new Error('Sesiune expirată. Te rog autentifică-te din nou.');
+      }
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error((body as { detail?: string }).detail ?? fallbackError);
+      }
+      if (response.status === 204) {
+        return undefined as TResponse;
+      }
+      return (await response.json()) as TResponse;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(fallbackError);
+      if (error instanceof Error && !error.message.includes('fetch')) {
+        throw error;
+      }
+    }
+  }
+
+  throw lastError ?? new Error(fallbackError);
+}
+
 async function authRefreshPost<TResponse>(
   refreshToken: string,
   fallbackError: string
@@ -392,6 +434,29 @@ export async function apiGetMe(token: string): Promise<AuthUserResponse> {
     '/auth/me',
     token,
     'Nu am putut verifica sesiunea curentă.'
+  );
+}
+
+export async function apiUpdateProfile(
+  token: string,
+  displayName: string
+): Promise<AuthUserResponse> {
+  return authWrite<AuthUserResponse>(
+    '/auth/me',
+    'PATCH',
+    token,
+    { display_name: displayName },
+    'Nu am putut actualiza profilul.'
+  );
+}
+
+export async function apiDeleteAccount(token: string): Promise<void> {
+  return authWrite<void>(
+    '/auth/me',
+    'DELETE',
+    token,
+    undefined,
+    'Nu am putut șterge contul.'
   );
 }
 

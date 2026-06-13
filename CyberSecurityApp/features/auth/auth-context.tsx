@@ -10,11 +10,13 @@ import {
 } from 'react';
 
 import {
+  apiDeleteAccount,
   apiGetMe,
   apiLogin,
   apiRefreshToken,
   apiRegister,
   apiSendPasswordReset,
+  apiUpdateProfile,
   type AuthUserResponse,
 } from './auth-api';
 import {
@@ -23,6 +25,7 @@ import {
   setAuthStorageItem,
 } from './secure-auth-storage';
 import { setAuthFailureHandler, setAuthTokenAccessor } from '../training/api';
+import { clearTrainingLocalCache } from '../training/local-cache';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -39,6 +42,8 @@ type AuthContextValue = {
   isLoading: boolean;
   login: (email: string, password: string, rememberMe?: boolean) => Promise<void>;
   register: (email: string, password: string, displayName: string) => Promise<void>;
+  updateProfile: (displayName: string) => Promise<void>;
+  deleteAccount: () => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
   logout: () => Promise<void>;
 };
@@ -329,6 +334,49 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await clearPersistedSession();
   }, [clearPersistedSession, clearRefreshTimeout]);
 
+  const updateProfile = useCallback(
+    async (displayName: string) => {
+      const currentToken = tokenRef.current;
+      if (!currentToken) {
+        throw new Error('Sesiune expirată. Te rog autentifică-te din nou.');
+      }
+
+      const updatedUser = mapUserResponse(await apiUpdateProfile(currentToken, displayName));
+      setUser(updatedUser);
+
+      const currentRefreshToken = refreshTokenRef.current;
+      const rememberedUntil = rememberedUntilRef.current;
+      if (
+        shouldPersistRef.current &&
+        currentRefreshToken &&
+        rememberedUntil &&
+        rememberedUntil > Date.now()
+      ) {
+        await persistSession(
+          currentToken,
+          currentRefreshToken,
+          updatedUser,
+          rememberedUntil
+        );
+      }
+    },
+    [persistSession]
+  );
+
+  const deleteAccount = useCallback(async () => {
+    const currentToken = tokenRef.current;
+    const currentUserId = user?.id;
+    if (!currentToken || !currentUserId) {
+      throw new Error('Sesiune expirată. Te rog autentifică-te din nou.');
+    }
+
+    await apiDeleteAccount(currentToken);
+    await Promise.allSettled([
+      clearTrainingLocalCache(currentUserId),
+      logout(),
+    ]);
+  }, [logout, user?.id]);
+
   const refreshAccessToken = useCallback(async () => {
     const refreshGeneration = authGenerationRef.current;
     const currentToken = tokenRef.current;
@@ -422,10 +470,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isLoading,
       login,
       register,
+      updateProfile,
+      deleteAccount,
       resetPassword,
       logout,
     }),
-    [user, token, isAuthenticated, isLoading, login, register, resetPassword, logout]
+    [
+      user,
+      token,
+      isAuthenticated,
+      isLoading,
+      login,
+      register,
+      updateProfile,
+      deleteAccount,
+      resetPassword,
+      logout,
+    ]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -13,7 +13,7 @@ The goal is educational: users interact with scenarios, choose a response, recei
 ## Current Tech Stack
 - Frontend: React Native + Expo
 - Backend: FastAPI (Python)
-- AI: Ollama-backed scenario generation with strict validation and rule-based fallback; assistant remains rule-based
+- AI: Ollama-backed scenario and assistant generation with strict validation and rule-based fallback
 - Auth: Firebase Authentication on the frontend, Firebase token verification on the backend, local user/profile mapping in PostgreSQL or SQLite
 
 ## Current State
@@ -44,6 +44,10 @@ Backend features currently implemented:
 - `POST /scenario/evaluate`
 - `GET /scenario/{scenario_id}`
 - `POST /assistant/ask`
+- `GET /learning/lessons`
+- `GET /learning/lessons/{lesson_id}`
+- `POST /learning/lessons/{lesson_id}/quiz/submit`
+- `GET /learning/attempts`
 - `GET /learning/path`
 - `POST /learning/path/lessons/{lesson_id}/complete`
 - `GET /sessions`
@@ -66,6 +70,9 @@ Backend features currently implemented:
 - local Ollama scenario generation for adaptive/random flows (`qwen3:8b` by default)
 - strict Pydantic validation for generated content, reserved `.invalid` domains, and fixed option IDs
 - automatic rule-based fallback when Ollama is disabled, unavailable, times out, or returns invalid content
+- contextual Ollama assistant responses with strict Pydantic validation, bounded conversation history, prompt-injection isolation, safety refusal, and deterministic fallback
+- assistant context includes authenticated learning-profile weaknesses/recommendations plus optional owned scenario and lesson context
+- assistant responses expose content source, model, generation duration, safety status, and fallback reason
 - deterministic catalog selections bypass the LLM when `template_id` is provided
 - persisted generation metadata: content source, model, duration, and fallback reason
 - adaptive session scoring
@@ -77,6 +84,8 @@ Backend features currently implemented:
 - scenario evaluation is restart-safe: when in-memory scenario context is missing, backend restores rule context from persisted `scenario_attempts` data
 - authenticated users can list their persisted sessions with pagination, summary metrics, latest scenario metadata, and pending scenario recovery
 - structured learning path with beginner/intermediate/advanced modules, lesson completion, scenario mastery requirements, XP, levels, streaks, goals, and badges
+- persisted lesson catalog, ordered lesson sections, quiz questions/options, per-user attempts, answer history, scores, pass rules, and one-time XP awards
+- learning-path lessons can no longer be completed manually; a passing persisted quiz attempt is required
 - learning-path scenario progress reuses the persisted adaptive profile; lesson/gamification state is stored in `user_learning_path_progress`
 - scenario generation now persists the parent session before FK-dependent attempt/event records, keeping PostgreSQL writes valid
 - Firebase-linked users are stored with `firebase_uid` so a Firebase account maps to one local user record
@@ -116,6 +125,8 @@ Current integration level:
 - chat/feedback flow is now wired to real session continuity (`session_id` carried through routes)
 - analytics now consumes persisted backend session snapshot + recent events when a session is active
 - assistant and learn tabs now use real backend AI responses via `POST /assistant/ask`
+- the Learn tab loads lesson content and quiz state from backend APIs instead of a hardcoded frontend array
+- lesson detail screens render persisted sections, submit scored quizzes, display answer explanations, and refresh XP/path unlocks
 - dashboard and scenarios now consume backend scenario catalog (`GET /scenario/catalog`) through shared `useTrainingSession` state
 - dashboard header shows personalized greeting ("Bună, {displayName}") and logout button
 - local continuity is enabled via AsyncStorage for training session state, assistant/learn conversations, and in-progress chat/feedback continuity
@@ -126,7 +137,29 @@ Current integration level:
 - the dashboard exposes session history; users can activate a previous session, open its analytics, or resume its latest pending scenario
 - the dashboard includes a learning-path card showing current level, XP, overall progress, and next required activity
 
-## Recent Progress (April-May 2026)
+## Recent Progress (April-June 2026)
+- Completed the first backend-driven learning and assessment milestone:
+  - Alembic revision `20260612_0009` adds normalized lesson, section, quiz question/option, attempt, and answer tables
+  - migration seeds seven Romanian lessons, fourteen questions, and their answer options
+  - protected lesson catalog/detail, quiz submission, and paginated attempt-history APIs were added
+  - quiz grading validates complete answer sets and question/option ownership inside one transaction
+  - every attempt is persisted; lesson XP is awarded only on the first passing attempt
+  - learning-path prerequisites control locked lesson access, and passing the quiz completes the corresponding lesson step
+  - the old manual completion endpoint now requires an existing passing quiz
+  - Learn UI now consumes backend lessons, sections, status, attempts, scores, explanations, and quiz results
+  - learning-path lesson actions deep-link directly into the required backend lesson
+  - endpoint and repository tests cover failure, pass, retry, rollback, one-time XP, locks, isolation, and history
+- Completed the production-v1 real AI assistant phase:
+  - `/assistant/ask` now uses Ollama when enabled and validates structured responses with Pydantic
+  - conversation history is limited to 8 messages and 600 characters per message
+  - untrusted conversation/context data is isolated in a JSON block with explicit prompt-injection defenses
+  - authenticated adaptive-profile context is derived server-side; unattempted areas are not presented as weaknesses
+  - optional lesson and owned scenario context can be included
+  - explicit harmful requests are refused before model invocation
+  - disabled, unavailable, timed-out, malformed, or invalid model responses use the deterministic coach
+  - response metadata includes `content_source`, `llm_model`, `generation_ms`, `fallback_reason`, and `safety_status`
+  - assistant and lesson chat UIs send bounded history and display AI/fallback source labels
+  - tests cover valid output, invalid output, outage fallback, bounded context, prompt injection isolation, harmful-request refusal, and harmless security questions
 - Added a structured learning path:
   - three sequential modules: beginner, intermediate, and advanced
   - lesson steps plus attack/difficulty-specific scenario requirements
@@ -411,14 +444,14 @@ The target is now a complete production-ready v1, not an MVP. Implement in this 
 - define PostgreSQL deployment, migrations, backups, restore procedures, monitoring, and error tracking
 - add CI checks for backend tests, frontend lint/type-check, migrations, and production builds
 
-### Phase 2. Real AI assistant
+### Phase 2. Real AI assistant (complete)
 - upgrade `/assistant/ask` to use Ollama with strict Pydantic structured-output validation
 - retain the deterministic coaching fallback for disabled, invalid, unavailable, or timed-out AI responses
 - send bounded conversation, lesson, scenario, and user-weakness context
 - expose content source, model, generation latency, and fallback reason
 - add assistant safety tests, prompt-injection resistance, context limits, and failure observability
 
-### Phase 3. Backend-driven learning and assessment system
+### Phase 3. Backend-driven learning and assessment system (in progress)
 - move lesson content out of frontend screens into persisted backend models and APIs
 - add lesson quizzes, module exams, scoring, attempts, prerequisites, and mastery rules
 - persist lesson/exam history and issue completion summaries or certificates
@@ -467,8 +500,10 @@ The target is now a complete production-ready v1, not an MVP. Implement in this 
 - validate on physical Android/iOS devices and supported web sizes
 - complete deployment, backup/restore drill, monitoring alerts, security review, and release checklist
 
-### Current Production V1 Progress (2026-06-10)
-Phase 1 is complete. Implemented:
+### Current Production V1 Progress (2026-06-12)
+Phases 1 and 2 are complete.
+
+Phase 1 implemented:
 - centralized backend runtime configuration in `BackendAPI/app_config.py`
 - explicit `APP_ENV` support for development, test, and production
 - fail-fast production validation for JWT secret strength, PostgreSQL, and exact CORS origins
@@ -492,7 +527,25 @@ Phase 1 is complete. Implemented:
 - local validation completed successfully against the real Docker stack
 - backup/restore recovery tested successfully, followed by a passing post-restore smoke test
 
-Next implementation phase: Phase 2, the real AI assistant.
+Phase 2 implemented:
+- Ollama-backed `/assistant/ask` with strict structured-output validation
+- bounded conversation history plus lesson, scenario, and authenticated learning-profile context
+- prompt-injection isolation and deterministic harmful-request refusal
+- deterministic fallback for disabled, unavailable, timed-out, or invalid AI responses
+- response source/model/latency/fallback/safety metadata and structured fallback logs
+- frontend AI/fallback labels in assistant and lesson conversations
+- assistant generation, safety, context-limit, and endpoint regression tests
+
+Phase 3 first milestone implemented:
+- persisted backend lesson catalog and ordered content sections
+- normalized quiz questions/options plus per-user attempts and answers
+- scored pass rules, answer explanations, attempt history, and atomic one-time XP
+- prerequisite enforcement shared with the existing learning path
+- backend-driven Learn UI and quiz completion flow
+- Alembic revision `20260612_0009` with seeded curriculum data
+
+Next implementation milestone: Phase 3 module exams, richer mastery rules, completion summaries,
+and downloadable certificates.
 
 ## Previous MVP Roadmap
 The items below remain useful implementation detail, but the production phases above define priority.
@@ -501,10 +554,8 @@ The items below remain useful implementation detail, but the production phases a
 Scenario generation status: implemented with local Ollama (`qwen3:8b`), strict Pydantic
 structured-output validation, deterministic catalog bypass, and rule-based fallback.
 
-Next:
-- upgrade `/assistant/ask` to use the same Ollama provider
-- validate assistant output and retain the existing deterministic coaching fallback
-- add conversation context limits and response latency metadata
+Status: implemented with structured Ollama output, bounded contextual conversation,
+prompt-injection isolation, safety refusal, observability metadata, and deterministic fallback.
 
 ### 2. Full responsive UI pass
 Focus:
@@ -650,8 +701,9 @@ source .venv/bin/activate
 Focus on incremental improvements only.
 
 Good next tasks:
+- continue Phase 3 with module exams and persisted exam attempts
+- add completion summaries, certificate issuance, and lesson/exam mastery recommendations
 - harden auth/session handling further, especially deep links and stale-session cleanup
-- add LLM integration with strict schema validation + fallback once the deterministic scenario flow is stable
 - finish a full responsive UI pass across all screens
 - add compare-mode analytics, export/share, and richer trend visualizations
 - add selective clear controls for cache if the current broad reset becomes too blunt

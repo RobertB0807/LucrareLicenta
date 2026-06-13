@@ -1,8 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { Link, Redirect, router, useLocalSearchParams } from 'expo-router';
-import { useEffect, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { useAuth } from '@/features/auth/auth-context';
 import { buildUserStorageKey, FEEDBACK_CONTEXT_STORAGE_KEY } from '@/features/training/local-cache';
@@ -11,6 +11,16 @@ import { TrainingColors } from '@/features/training/ui-theme';
 import { useTrainingSession } from '@/features/training/useTrainingSession';
 
 const FEEDBACK_CONTEXT_TTL_MS = 1000 * 60 * 60 * 24 * 7;
+const ATTACK_LABELS: Record<AttackType, string> = {
+  phishing: 'Phishing prin email',
+  smishing: 'Smishing prin SMS',
+  impersonation: 'Impersonare',
+};
+const DIFFICULTY_LABELS: Record<DifficultyLevel, string> = {
+  easy: 'Ușor',
+  medium: 'Mediu',
+  hard: 'Greu',
+};
 
 type PersistedFeedbackContext = {
   ownerUserId: string;
@@ -27,14 +37,15 @@ type PersistedFeedbackContext = {
 };
 
 export default function FeedbackScreen() {
-  const { scenarioId: routeScenarioId, sessionId: routeSessionId } = useLocalSearchParams<{
-    scenarioId?: string;
+  const { sessionId: routeSessionId } = useLocalSearchParams<{
     sessionId?: string;
   }>();
   const { user } = useAuth();
   const { evaluation, scenario, stats, sessionId } = useTrainingSession();
   const [persistedContext, setPersistedContext] = useState<PersistedFeedbackContext | null>(null);
   const [isFeedbackHydrated, setIsFeedbackHydrated] = useState(false);
+  const [isStartingNext, setIsStartingNext] = useState(false);
+  const navigationInFlightRef = useRef(false);
   const feedbackStorageKey = useMemo(
     () => buildUserStorageKey(FEEDBACK_CONTEXT_STORAGE_KEY, user?.id),
     [user?.id]
@@ -78,7 +89,6 @@ export default function FeedbackScreen() {
   }, [feedbackStorageKey, user?.id]);
 
   const activeSessionId = sessionId ?? routeSessionId ?? persistedContext?.sessionId ?? null;
-  const activeScenarioId = scenario?.scenario_id ?? routeScenarioId ?? persistedContext?.scenarioId ?? 'live-session';
   const fallbackAttackType = scenario?.attack_type ?? persistedContext?.attackType ?? 'phishing';
   const fallbackDifficulty = scenario?.difficulty ?? persistedContext?.difficulty ?? 'easy';
   const recommendation = evaluation?.recommendation ?? persistedContext?.recommendation;
@@ -117,6 +127,29 @@ export default function FeedbackScreen() {
 
   // Format score display
   const scoreDisplay = scoreDelta >= 0 ? `+${scoreDelta} puncte` : `${scoreDelta} puncte`;
+  const openFreshScenario = (
+    nextAttackType: AttackType,
+    nextDifficulty: DifficultyLevel,
+    prefix: string
+  ) => {
+    if (navigationInFlightRef.current) {
+      return;
+    }
+    navigationInFlightRef.current = true;
+    setIsStartingNext(true);
+    const runId = String(Date.now());
+    router.push({
+      pathname: '/chat/[scenarioId]',
+      params: {
+        scenarioId: `${prefix}-${runId}`,
+        generateNew: 'true',
+        attackType: nextAttackType,
+        difficulty: nextDifficulty,
+        runId,
+        sessionId: activeSessionId ?? undefined,
+      },
+    });
+  };
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
@@ -202,7 +235,7 @@ export default function FeedbackScreen() {
             <Text style={styles.recommendEyebrow}>Recomandare</Text>
             <Text style={styles.recommendText}>{recommendation.reason}</Text>
             <Text style={styles.recommendMeta}>
-              {recommendation.attack_type} · {recommendation.difficulty}
+              {ATTACK_LABELS[recommendation.attack_type]} · {DIFFICULTY_LABELS[recommendation.difficulty]}
             </Text>
           </View>
         </View>
@@ -212,37 +245,35 @@ export default function FeedbackScreen() {
       <View style={styles.actions}>
         {recommendation ? (
           <Pressable
-            style={({ pressed }) => [styles.primaryAction, pressed && styles.actionPressed]}
-            onPress={() => {
-              router.push({
-                pathname: '/chat/[scenarioId]',
-                params: {
-                  scenarioId: activeScenarioId,
-                  generateNew: 'true',
-                  attackType: recommendation.attack_type,
-                  difficulty: recommendation.difficulty,
-                  sessionId: activeSessionId ?? undefined,
-                },
-              });
-            }}>
-            <Text style={styles.primaryActionText}>Scenariu recomandat</Text>
+            disabled={isStartingNext}
+            style={({ pressed }) => [
+              styles.primaryAction,
+              pressed && styles.actionPressed,
+              isStartingNext && styles.actionDisabled,
+            ]}
+            onPress={() =>
+              openFreshScenario(
+                recommendation.attack_type,
+                recommendation.difficulty,
+                'recommended'
+              )
+            }>
+            {isStartingNext ? (
+              <ActivityIndicator size="small" color="#EFF6FF" />
+            ) : (
+              <Text style={styles.primaryActionText}>Continuă cu scenariul recomandat</Text>
+            )}
           </Pressable>
         ) : null}
 
         <Pressable
-          style={({ pressed }) => [styles.secondaryAction, pressed && styles.actionPressed]}
-          onPress={() => {
-            router.push({
-              pathname: '/chat/[scenarioId]',
-              params: {
-                scenarioId: activeScenarioId,
-                generateNew: 'true',
-                attackType: fallbackAttackType,
-                difficulty: fallbackDifficulty,
-                sessionId: activeSessionId ?? undefined,
-              },
-            });
-          }}>
+          disabled={isStartingNext}
+          style={({ pressed }) => [
+            styles.secondaryAction,
+            pressed && styles.actionPressed,
+            isStartingNext && styles.actionDisabled,
+          ]}
+          onPress={() => openFreshScenario(fallbackAttackType, fallbackDifficulty, 'retry')}>
           <Text style={styles.secondaryActionText}>Reîncearcă simularea</Text>
         </Pressable>
 
@@ -387,4 +418,5 @@ const styles = StyleSheet.create({
   },
   tertiaryActionText: { color: TrainingColors.textMuted, textAlign: 'center', fontSize: 13 },
   actionPressed: { opacity: 0.92 },
+  actionDisabled: { opacity: 0.55 },
 });

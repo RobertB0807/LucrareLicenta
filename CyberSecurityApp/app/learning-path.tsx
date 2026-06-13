@@ -4,7 +4,6 @@ import { router } from 'expo-router';
 import { useCallback } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -37,7 +36,6 @@ export default function LearningPathScreen() {
     isLoadingLearningPath,
     learningPathError,
     refreshLearningPath,
-    completePathLesson,
     sessionId,
   } = useTrainingSession();
 
@@ -52,18 +50,10 @@ export default function LearningPathScreen() {
       return;
     }
     if (step.step_type === 'lesson' && step.lesson_id) {
-      Alert.alert(
-        'Finalizează lecția',
-        'Confirmă după ce ai parcurs conținutul lecției din biblioteca de învățare.',
-        [
-          { text: 'Deschide biblioteca', onPress: () => router.push('/(tabs)/learn') },
-          { text: 'Anulează', style: 'cancel' },
-          {
-            text: 'Marchează finalizată',
-            onPress: () => void completePathLesson(step.lesson_id!),
-          },
-        ]
-      );
+      router.push({
+        pathname: '/(tabs)/learn',
+        params: { lessonId: step.lesson_id },
+      });
       return;
     }
     if (step.attack_type && step.difficulty) {

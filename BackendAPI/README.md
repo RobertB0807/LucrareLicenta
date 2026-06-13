@@ -118,6 +118,19 @@ raman deterministe si nu apeleaza modelul.
 Raspunsul de generare si persistenta includ `content_source`, `llm_model`,
 `generation_ms` si `fallback_reason` pentru observabilitate si evaluarea lucrarii.
 
+Același provider este folosit de `POST /assistant/ask`. Asistentul:
+
+- validează răspunsul structurat (`answer`, `quick_tips`, `safety_status`) cu Pydantic
+- acceptă maximum 8 mesaje de istoric, limitate la 600 de caractere fiecare
+- primește context server-side din profilul adaptiv al utilizatorului
+- poate folosi context de lecție și contextul unui scenariu deținut de utilizator
+- izolează conversația și contextul ca date neîncrezătoare pentru rezistență la prompt injection
+- refuză cererile explicit abuzive înainte de apelarea modelului
+- revine la răspunsul determinist dacă modelul este dezactivat, indisponibil sau invalid
+
+Răspunsul asistentului include `content_source`, `llm_model`, `generation_ms`,
+`fallback_reason` și `safety_status`.
+
 ### Firebase Auth optional
 
 Backend-ul accepta in continuare JWT-urile locale existente, dar poate valida si Firebase ID tokens.
@@ -243,6 +256,10 @@ copii criptate in storage extern si testeaza lunar restore-ul intr-un mediu izol
 - `GET /scenario/{scenario_id}`
 - `POST /assistant/ask`
 - `GET /learning/profile`
+- `GET /learning/lessons`
+- `GET /learning/lessons/{lesson_id}`
+- `POST /learning/lessons/{lesson_id}/quiz/submit`
+- `GET /learning/attempts?lesson_id=<optional>&limit=20&offset=0`
 - `GET /learning/path`
 - `POST /learning/path/lessons/{lesson_id}/complete`
 - `GET /sessions?limit=20&offset=0`
@@ -263,6 +280,21 @@ ultimul tip de atac si optional ultimul scenariu neevaluat care poate fi reluat.
 Traseul de invatare combina lectii si cerinte de scenarii in trei module de dificultate.
 Progresul lectiilor, XP-ul si seriile zilnice sunt persistate per utilizator, iar progresul
 scenariilor este calculat din profilul adaptiv existent.
+
+Conținutul lecțiilor și testele sunt stocate în tabele normalizate create de migrarea
+`20260612_0009`. Catalogul include șapte lecții inițiale, fiecare cu secțiuni și două
+întrebări. Clientul nu primește răspunsurile corecte înainte de submit.
+
+`POST /learning/lessons/{lesson_id}/quiz/submit`:
+
+- cere răspuns pentru fiecare întrebare și verifică apartenența opțiunii la întrebare
+- salvează fiecare încercare și fiecare răspuns într-o singură tranzacție
+- returnează scorul, explicațiile și răspunsurile corecte după evaluare
+- acordă XP o singură dată, la prima promovare
+- marchează lecția finalizată și actualizează traseul de învățare
+
+Endpoint-ul de compatibilitate `POST /learning/path/lessons/{lesson_id}/complete` nu mai
+permite finalizarea manuală; necesită o încercare de quiz promovată.
 
 Toate endpoint-urile in afara de `GET /health`, `GET /health/ready`, `GET /metrics`,
 `POST /auth/register`, `POST /auth/login` si `POST /auth/refresh` necesita header:

@@ -172,6 +172,10 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
   const adaptiveProfileRequestRef = useRef(0);
   const learningPathRequestRef = useRef(0);
   const activeSessionRequestRef = useRef(0);
+  const scenarioOperationInFlightRef = useRef(false);
+  const evaluationInFlightRef = useRef(false);
+  const scenarioOperationRequestRef = useRef(0);
+  const evaluationRequestRef = useRef(0);
   activeUserIdRef.current = currentUserId;
 
   // Per-user storage key so each account gets its own training state.
@@ -520,6 +524,11 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
     adaptiveProfileRequestRef.current += 1;
     learningPathRequestRef.current += 1;
     activeSessionRequestRef.current += 1;
+    scenarioOperationRequestRef.current += 1;
+    evaluationRequestRef.current += 1;
+    scenarioOperationInFlightRef.current = false;
+    evaluationInFlightRef.current = false;
+    setIsLoading(false);
     setAdaptiveProfile(null);
     setAdaptiveProfileError(null);
     setIsLoadingAdaptiveProfile(false);
@@ -559,9 +568,16 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
         setError(AUTH_REQUIRED_ERROR);
         return;
       }
+      if (scenarioOperationInFlightRef.current) {
+        return;
+      }
 
+      scenarioOperationInFlightRef.current = true;
+      const requestId = scenarioOperationRequestRef.current + 1;
+      scenarioOperationRequestRef.current = requestId;
       setIsLoading(true);
       setError(null);
+      setScenario(null);
       setEvaluation(null);
       setSelectedOptionId(null);
 
@@ -575,7 +591,10 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
           template_id: templateId,
         });
 
-        if (activeUserIdRef.current !== requestUserId) {
+        if (
+          scenarioOperationRequestRef.current !== requestId ||
+          activeUserIdRef.current !== requestUserId
+        ) {
           return;
         }
         setScenario(data);
@@ -588,13 +607,20 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
           tone: 'neutral',
         });
       } catch {
-        if (activeUserIdRef.current === requestUserId) {
-          setError(
-            'Conexiune esuata cu backend-ul. Verifica daca FastAPI ruleaza pe portul 8000 si endpoint-ul este accesibil.'
-          );
+        if (
+          scenarioOperationRequestRef.current === requestId &&
+          activeUserIdRef.current === requestUserId
+        ) {
+          setError('Nu am putut genera scenariul. Verifică conexiunea și încearcă din nou.');
         }
       } finally {
-        if (activeUserIdRef.current === requestUserId) {
+        if (scenarioOperationRequestRef.current === requestId) {
+          scenarioOperationInFlightRef.current = false;
+        }
+        if (
+          scenarioOperationRequestRef.current === requestId &&
+          activeUserIdRef.current === requestUserId
+        ) {
           setIsLoading(false);
         }
       }
@@ -613,13 +639,22 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
         setError(AUTH_REQUIRED_ERROR);
         return false;
       }
+      if (scenarioOperationInFlightRef.current) {
+        return false;
+      }
 
+      scenarioOperationInFlightRef.current = true;
+      const requestId = scenarioOperationRequestRef.current + 1;
+      scenarioOperationRequestRef.current = requestId;
       setIsLoading(true);
       setError(null);
 
       try {
         const snapshot = await getSessionSnapshot(nextSessionId);
-        if (activeUserIdRef.current !== requestUserId) {
+        if (
+          scenarioOperationRequestRef.current !== requestId ||
+          activeUserIdRef.current !== requestUserId
+        ) {
           return false;
         }
         setSessionId(snapshot.session_id);
@@ -636,12 +671,21 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
         applyServerEvents(snapshot.session_stats.recent_events);
         return true;
       } catch {
-        if (activeUserIdRef.current === requestUserId) {
+        if (
+          scenarioOperationRequestRef.current === requestId &&
+          activeUserIdRef.current === requestUserId
+        ) {
           setError('Nu am putut activa sesiunea selectată.');
         }
         return false;
       } finally {
-        if (activeUserIdRef.current === requestUserId) {
+        if (scenarioOperationRequestRef.current === requestId) {
+          scenarioOperationInFlightRef.current = false;
+        }
+        if (
+          scenarioOperationRequestRef.current === requestId &&
+          activeUserIdRef.current === requestUserId
+        ) {
           setIsLoading(false);
         }
       }
@@ -656,13 +700,22 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
         setError(AUTH_REQUIRED_ERROR);
         return false;
       }
+      if (scenarioOperationInFlightRef.current) {
+        return false;
+      }
 
+      scenarioOperationInFlightRef.current = true;
+      const requestId = scenarioOperationRequestRef.current + 1;
+      scenarioOperationRequestRef.current = requestId;
       setIsLoading(true);
       setError(null);
 
       try {
         const data = await getScenario(scenarioId);
-        if (activeUserIdRef.current !== requestUserId) {
+        if (
+          scenarioOperationRequestRef.current !== requestId ||
+          activeUserIdRef.current !== requestUserId
+        ) {
           return false;
         }
         setScenario(data);
@@ -675,7 +728,13 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
       } catch {
         return false;
       } finally {
-        if (activeUserIdRef.current === requestUserId) {
+        if (scenarioOperationRequestRef.current === requestId) {
+          scenarioOperationInFlightRef.current = false;
+        }
+        if (
+          scenarioOperationRequestRef.current === requestId &&
+          activeUserIdRef.current === requestUserId
+        ) {
           setIsLoading(false);
         }
       }
@@ -684,7 +743,7 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
   );
 
   const evaluateAnswer = async () => {
-    if (!scenario || !selectedOptionId || evaluation) {
+    if (!scenario || !selectedOptionId || evaluation || evaluationInFlightRef.current) {
       return;
     }
     const requestUserId = user?.id ?? null;
@@ -693,6 +752,9 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
       return;
     }
 
+    evaluationInFlightRef.current = true;
+    const requestId = evaluationRequestRef.current + 1;
+    evaluationRequestRef.current = requestId;
     setIsLoading(true);
     setError(null);
 
@@ -702,7 +764,10 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
         selected_option_id: selectedOptionId,
       });
 
-      if (activeUserIdRef.current !== requestUserId) {
+      if (
+        evaluationRequestRef.current !== requestId ||
+        activeUserIdRef.current !== requestUserId
+      ) {
         return;
       }
       setEvaluation(data);
@@ -719,7 +784,10 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
         });
       }
     } catch (error) {
-      if (activeUserIdRef.current === requestUserId) {
+      if (
+        evaluationRequestRef.current === requestId &&
+        activeUserIdRef.current === requestUserId
+      ) {
         setError(
           error instanceof ApiRequestError && error.status === 409
             ? 'Acest scenariu a fost deja evaluat cu un alt răspuns.'
@@ -727,14 +795,20 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
         );
       }
     } finally {
-      if (activeUserIdRef.current === requestUserId) {
+      if (evaluationRequestRef.current === requestId) {
+        evaluationInFlightRef.current = false;
+      }
+      if (
+        evaluationRequestRef.current === requestId &&
+        activeUserIdRef.current === requestUserId
+      ) {
         setIsLoading(false);
       }
     }
   };
 
   const evaluateWithOptionId = async (optionId: string): Promise<boolean> => {
-    if (!scenario || evaluation) {
+    if (!scenario || evaluation || evaluationInFlightRef.current) {
       return false;
     }
     const requestUserId = user?.id ?? null;
@@ -743,6 +817,9 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
       return false;
     }
 
+    evaluationInFlightRef.current = true;
+    const requestId = evaluationRequestRef.current + 1;
+    evaluationRequestRef.current = requestId;
     setSelectedOptionId(optionId);
     setIsLoading(true);
     setError(null);
@@ -753,7 +830,10 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
         selected_option_id: optionId,
       });
 
-      if (activeUserIdRef.current !== requestUserId) {
+      if (
+        evaluationRequestRef.current !== requestId ||
+        activeUserIdRef.current !== requestUserId
+      ) {
         return false;
       }
       setEvaluation(data);
@@ -771,7 +851,10 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
       }
       return true;
     } catch (error) {
-      if (activeUserIdRef.current === requestUserId) {
+      if (
+        evaluationRequestRef.current === requestId &&
+        activeUserIdRef.current === requestUserId
+      ) {
         setError(
           error instanceof ApiRequestError && error.status === 409
             ? 'Acest scenariu a fost deja evaluat cu un alt răspuns.'
@@ -780,7 +863,13 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
       }
       return false;
     } finally {
-      if (activeUserIdRef.current === requestUserId) {
+      if (evaluationRequestRef.current === requestId) {
+        evaluationInFlightRef.current = false;
+      }
+      if (
+        evaluationRequestRef.current === requestId &&
+        activeUserIdRef.current === requestUserId
+      ) {
         setIsLoading(false);
       }
     }
@@ -801,6 +890,10 @@ export function TrainingSessionProvider({ children }: { children: ReactNode }) {
   };
 
   const resetSession = () => {
+    scenarioOperationRequestRef.current += 1;
+    evaluationRequestRef.current += 1;
+    scenarioOperationInFlightRef.current = false;
+    evaluationInFlightRef.current = false;
     setScenario(null);
     setEvaluation(null);
     setSessionId(null);

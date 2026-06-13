@@ -7,10 +7,15 @@ from typing import Any, Iterator
 from uuid import uuid4
 
 from sqlalchemy import func, select, update
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from db import SessionLocal
 from persistence_models import (
+    LearningLessonORM,
+    LearningQuizAnswerORM,
+    LearningQuizAttemptORM,
+    LearningQuizOptionORM,
+    LearningQuizQuestionORM,
     ScenarioAttemptORM,
     SessionEventORM,
     TrainingSessionORM,
@@ -130,6 +135,7 @@ def create_or_update_firebase_user(
     firebase_uid: str,
     email: str,
     display_name: str | None = None,
+    update_existing_display_name: bool = True,
 ) -> dict[str, Any]:
     normalized_uid = firebase_uid.strip()
     normalized_email = email.strip().lower()
@@ -164,7 +170,8 @@ def create_or_update_firebase_user(
         else:
             user.firebase_uid = normalized_uid
             user.email = normalized_email
-            user.display_name = resolved_display_name
+            if update_existing_display_name:
+                user.display_name = resolved_display_name
             user.updated_at = utc_now()
 
         db.flush()
@@ -211,6 +218,45 @@ def fetch_user_by_id(user_id: str) -> dict[str, Any] | None:
         }
     finally:
         db.close()
+
+
+def update_user_display_name(user_id: str, display_name: str) -> dict[str, Any] | None:
+    normalized_display_name = display_name.strip()
+    with session_scope() as db:
+        user = db.get(UserORM, user_id)
+        if user is None:
+            return None
+
+        user.display_name = normalized_display_name
+        user.updated_at = utc_now()
+        db.flush()
+        return {
+            "id": user.id,
+            "firebase_uid": user.firebase_uid,
+            "email": user.email,
+            "display_name": user.display_name,
+            "is_active": user.is_active,
+        }
+
+
+def delete_user_account(user_id: str) -> bool:
+    with session_scope() as db:
+        user = db.scalar(
+            select(UserORM)
+            .where(UserORM.id == user_id)
+            .options(
+                selectinload(UserORM.sessions),
+                selectinload(UserORM.mastery_profiles),
+                selectinload(UserORM.learning_path_progress),
+                selectinload(UserORM.lesson_quiz_attempts),
+            )
+        )
+        if user is None:
+            return False
+
+        db.delete(user)
+        db.flush()
+        return True
 
 
 def record_user_learning_attempt(
@@ -330,6 +376,55 @@ def _apply_learning_path_activity(
     return row
 
 
+def _complete_learning_path_lesson_in_session(
+    db: Session,
+    *,
+    user_id: str,
+    lesson_id: str,
+    xp_reward: int,
+    row: UserLearningPathProgressORM | None = None,
+) -> dict[str, Any]:
+    if row is None:
+        row = db.scalar(
+            select(UserLearningPathProgressORM)
+            .where(UserLearningPathProgressORM.user_id == user_id)
+            .with_for_update()
+        )
+    if row is None:
+        row = UserLearningPathProgressORM(
+            user_id=user_id,
+            completed_lessons_json="[]",
+            xp=0,
+            current_streak=0,
+            longest_streak=0,
+        )
+        db.add(row)
+
+    try:
+        completed_lessons = json.loads(row.completed_lessons_json or "[]")
+    except (TypeError, json.JSONDecodeError):
+        completed_lessons = []
+    if not isinstance(completed_lessons, list):
+        completed_lessons = []
+
+    normalized_lessons = {
+        str(item) for item in completed_lessons if isinstance(item, str) and item
+    }
+    was_already_completed = lesson_id in normalized_lessons
+    if not was_already_completed:
+        normalized_lessons.add(lesson_id)
+        row.completed_lessons_json = json.dumps(sorted(normalized_lessons))
+        _update_learning_path_activity_row(
+            row,
+            xp_delta=xp_reward,
+        )
+
+    return {
+        "lesson_id": lesson_id,
+        "was_already_completed": was_already_completed,
+    }
+
+
 def complete_learning_path_lesson(
     *,
     user_id: str,
@@ -337,45 +432,341 @@ def complete_learning_path_lesson(
     xp_reward: int = 25,
 ) -> dict[str, Any]:
     with session_scope() as db:
-        row = db.scalar(
+        result = _complete_learning_path_lesson_in_session(
+            db,
+            user_id=user_id,
+            lesson_id=lesson_id,
+            xp_reward=xp_reward,
+        )
+        db.flush()
+        return result
+
+
+def fetch_learning_lessons(user_id: str) -> list[dict[str, Any]]:
+    db = SessionLocal()
+    try:
+        lessons = db.scalars(
+            select(LearningLessonORM)
+            .where(LearningLessonORM.is_active.is_(True))
+            .order_by(LearningLessonORM.order_index.asc(), LearningLessonORM.id.asc())
+        ).all()
+        attempts = db.scalars(
+            select(LearningQuizAttemptORM)
+            .where(LearningQuizAttemptORM.user_id == user_id)
+            .order_by(LearningQuizAttemptORM.created_at.desc())
+        ).all()
+        by_lesson: dict[str, list[LearningQuizAttemptORM]] = {}
+        for attempt in attempts:
+            by_lesson.setdefault(attempt.lesson_id, []).append(attempt)
+
+        return [
+            {
+                "id": lesson.id,
+                "category": lesson.category,
+                "title": lesson.title,
+                "summary": lesson.summary,
+                "duration_minutes": lesson.duration_minutes,
+                "level": lesson.level,
+                "attack_type": lesson.attack_type,
+                "difficulty": lesson.difficulty,
+                "pass_score": lesson.pass_score,
+                "xp_reward": lesson.xp_reward,
+                "attempts": len(by_lesson.get(lesson.id, [])),
+                "best_score": max(
+                    (attempt.score for attempt in by_lesson.get(lesson.id, [])),
+                    default=None,
+                ),
+                "passed": any(
+                    attempt.passed for attempt in by_lesson.get(lesson.id, [])
+                ),
+            }
+            for lesson in lessons
+        ]
+    finally:
+        db.close()
+
+
+def fetch_learning_lesson(lesson_id: str, user_id: str) -> dict[str, Any] | None:
+    db = SessionLocal()
+    try:
+        lesson = db.scalar(
+            select(LearningLessonORM)
+            .options(
+                selectinload(LearningLessonORM.sections),
+                selectinload(LearningLessonORM.questions).selectinload(
+                    LearningQuizQuestionORM.options
+                ),
+            )
+            .where(
+                LearningLessonORM.id == lesson_id,
+                LearningLessonORM.is_active.is_(True),
+            )
+        )
+        if lesson is None:
+            return None
+
+        attempts = db.scalars(
+            select(LearningQuizAttemptORM)
+            .where(
+                LearningQuizAttemptORM.user_id == user_id,
+                LearningQuizAttemptORM.lesson_id == lesson_id,
+            )
+            .order_by(LearningQuizAttemptORM.created_at.desc())
+        ).all()
+        return {
+            "id": lesson.id,
+            "category": lesson.category,
+            "title": lesson.title,
+            "summary": lesson.summary,
+            "duration_minutes": lesson.duration_minutes,
+            "level": lesson.level,
+            "attack_type": lesson.attack_type,
+            "difficulty": lesson.difficulty,
+            "pass_score": lesson.pass_score,
+            "xp_reward": lesson.xp_reward,
+            "attempts": len(attempts),
+            "best_score": max((attempt.score for attempt in attempts), default=None),
+            "passed": any(attempt.passed for attempt in attempts),
+            "sections": [
+                {
+                    "id": section.id,
+                    "title": section.title,
+                    "body": section.body,
+                    "order_index": section.order_index,
+                }
+                for section in lesson.sections
+            ],
+            "questions": [
+                {
+                    "id": question.id,
+                    "prompt": question.prompt,
+                    "order_index": question.order_index,
+                    "options": [
+                        {
+                            "id": option.id,
+                            "text": option.text,
+                            "order_index": option.order_index,
+                        }
+                        for option in question.options
+                    ],
+                }
+                for question in lesson.questions
+            ],
+        }
+    finally:
+        db.close()
+
+
+def has_passed_learning_lesson_quiz(user_id: str, lesson_id: str) -> bool:
+    db = SessionLocal()
+    try:
+        return bool(
+            db.scalar(
+                select(func.count())
+                .select_from(LearningQuizAttemptORM)
+                .where(
+                    LearningQuizAttemptORM.user_id == user_id,
+                    LearningQuizAttemptORM.lesson_id == lesson_id,
+                    LearningQuizAttemptORM.passed.is_(True),
+                )
+            )
+        )
+    finally:
+        db.close()
+
+
+def record_learning_quiz_attempt(
+    *,
+    user_id: str,
+    lesson_id: str,
+    answers: list[dict[str, str]],
+) -> dict[str, Any]:
+    with session_scope() as db:
+        lesson = db.scalar(
+            select(LearningLessonORM)
+            .options(
+                selectinload(LearningLessonORM.questions).selectinload(
+                    LearningQuizQuestionORM.options
+                )
+            )
+            .where(
+                LearningLessonORM.id == lesson_id,
+                LearningLessonORM.is_active.is_(True),
+            )
+        )
+        if lesson is None:
+            raise ValueError("Unknown lesson")
+        if not lesson.questions:
+            raise ValueError("Lesson has no quiz")
+
+        progress_row = db.scalar(
             select(UserLearningPathProgressORM)
             .where(UserLearningPathProgressORM.user_id == user_id)
             .with_for_update()
         )
-        if row is None:
-            row = UserLearningPathProgressORM(
-                user_id=user_id,
-                completed_lessons_json="[]",
-                xp=0,
-                current_streak=0,
-                longest_streak=0,
-            )
-            db.add(row)
-
-        try:
-            completed_lessons = json.loads(row.completed_lessons_json or "[]")
-        except (TypeError, json.JSONDecodeError):
-            completed_lessons = []
-        if not isinstance(completed_lessons, list):
-            completed_lessons = []
-
-        normalized_lessons = {
-            str(item) for item in completed_lessons if isinstance(item, str) and item
+        completed_lessons: list[Any] = []
+        if progress_row is not None:
+            try:
+                parsed_lessons = json.loads(progress_row.completed_lessons_json or "[]")
+                if isinstance(parsed_lessons, list):
+                    completed_lessons = parsed_lessons
+            except (TypeError, json.JSONDecodeError):
+                pass
+        was_already_completed = lesson_id in {
+            str(item)
+            for item in completed_lessons
+            if isinstance(item, str) and item
         }
-        was_already_completed = lesson_id in normalized_lessons
-        if not was_already_completed:
-            normalized_lessons.add(lesson_id)
-            row.completed_lessons_json = json.dumps(sorted(normalized_lessons))
-            _update_learning_path_activity_row(
-                row,
-                xp_delta=xp_reward,
+
+        answers_by_question = {
+            answer["question_id"]: answer["selected_option_id"] for answer in answers
+        }
+        if len(answers_by_question) != len(answers):
+            raise ValueError("Each quiz question may be answered only once")
+
+        expected_question_ids = {question.id for question in lesson.questions}
+        if set(answers_by_question) != expected_question_ids:
+            raise ValueError("All quiz questions must be answered")
+
+        result_rows: list[dict[str, Any]] = []
+        correct_answers = 0
+        for question in lesson.questions:
+            selected_option_id = answers_by_question[question.id]
+            selected_option = next(
+                (
+                    option
+                    for option in question.options
+                    if option.id == selected_option_id
+                ),
+                None,
+            )
+            if selected_option is None:
+                raise ValueError("Selected option does not belong to the quiz question")
+            correct_option = next(
+                (option for option in question.options if option.is_correct),
+                None,
+            )
+            if correct_option is None:
+                raise ValueError("Quiz question has no correct option")
+
+            is_correct = bool(selected_option.is_correct)
+            if is_correct:
+                correct_answers += 1
+            result_rows.append(
+                {
+                    "question_id": question.id,
+                    "selected_option_id": selected_option.id,
+                    "correct_option_id": correct_option.id,
+                    "is_correct": is_correct,
+                    "explanation": question.explanation,
+                }
             )
 
-        db.flush()
-        return {
+        total_questions = len(lesson.questions)
+        score = round((correct_answers / total_questions) * 100)
+        passed = score >= lesson.pass_score
+        completion = {
             "lesson_id": lesson_id,
             "was_already_completed": was_already_completed,
         }
+        xp_awarded = 0
+        if passed:
+            completion = _complete_learning_path_lesson_in_session(
+                db,
+                user_id=user_id,
+                lesson_id=lesson_id,
+                xp_reward=lesson.xp_reward,
+                row=progress_row,
+            )
+            if not completion["was_already_completed"]:
+                xp_awarded = lesson.xp_reward
+
+        attempt = LearningQuizAttemptORM(
+            id=str(uuid4()),
+            user_id=user_id,
+            lesson_id=lesson_id,
+            score=score,
+            correct_answers=correct_answers,
+            total_questions=total_questions,
+            passed=passed,
+            xp_awarded=xp_awarded,
+        )
+        db.add(attempt)
+        db.flush()
+        for result in result_rows:
+            db.add(
+                LearningQuizAnswerORM(
+                    attempt_id=attempt.id,
+                    question_id=result["question_id"],
+                    selected_option_id=result["selected_option_id"],
+                    is_correct=result["is_correct"],
+                )
+            )
+
+        return {
+            "attempt_id": attempt.id,
+            "lesson_id": lesson_id,
+            "score": score,
+            "correct_answers": correct_answers,
+            "total_questions": total_questions,
+            "passed": passed,
+            "pass_score": lesson.pass_score,
+            "xp_awarded": xp_awarded,
+            "lesson_completed": passed or was_already_completed,
+            "was_already_completed": bool(completion["was_already_completed"]),
+            "answers": result_rows,
+            "created_at": attempt.created_at.isoformat() if attempt.created_at else utc_now().isoformat(),
+        }
+
+
+def fetch_learning_quiz_attempts(
+    user_id: str,
+    *,
+    lesson_id: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> dict[str, Any]:
+    db = SessionLocal()
+    try:
+        filters = [LearningQuizAttemptORM.user_id == user_id]
+        if lesson_id:
+            filters.append(LearningQuizAttemptORM.lesson_id == lesson_id)
+
+        total = db.scalar(
+            select(func.count())
+            .select_from(LearningQuizAttemptORM)
+            .where(*filters)
+        )
+        attempts = db.scalars(
+            select(LearningQuizAttemptORM)
+            .where(*filters)
+            .order_by(
+                LearningQuizAttemptORM.created_at.desc(),
+                LearningQuizAttemptORM.id.desc(),
+            )
+            .offset(offset)
+            .limit(limit)
+        ).all()
+        return {
+            "total": int(total or 0),
+            "limit": limit,
+            "offset": offset,
+            "items": [
+                {
+                    "attempt_id": attempt.id,
+                    "lesson_id": attempt.lesson_id,
+                    "score": attempt.score,
+                    "correct_answers": attempt.correct_answers,
+                    "total_questions": attempt.total_questions,
+                    "passed": attempt.passed,
+                    "xp_awarded": attempt.xp_awarded,
+                    "created_at": attempt.created_at.isoformat(),
+                }
+                for attempt in attempts
+            ],
+        }
+    finally:
+        db.close()
 
 
 def fetch_learning_path_progress(user_id: str) -> dict[str, Any]:

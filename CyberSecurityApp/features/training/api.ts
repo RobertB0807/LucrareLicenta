@@ -6,6 +6,10 @@ import type {
   AttackType,
   DifficultyLevel,
   LearningProfileApiResponse,
+  LearningLessonCatalogApiResponse,
+  LearningLessonDetailApiResponse,
+  LearningQuizAttemptsApiResponse,
+  LearningQuizSubmitApiResponse,
   LearningPathApiResponse,
   LearningPathLessonCompletionApiResponse,
   Evaluation,
@@ -76,9 +80,16 @@ type EvaluateScenarioPayload = {
 
 type AssistantAskPayload = {
   message: string;
+  history?: {
+    role: 'user' | 'assistant';
+    content: string;
+  }[];
   session_id?: string;
+  scenario_id?: string;
   attack_type?: AttackType;
   difficulty?: DifficultyLevel;
+  context_title?: string;
+  context_summary?: string;
 };
 
 const DEFAULT_API_BASE_URL =
@@ -135,17 +146,51 @@ const API_BASE_URL_CANDIDATES = Array.from(
   )
 );
 
-async function postJson<TResponse>(path: string, payload: unknown, fallbackError: string): Promise<TResponse> {
+const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
+const AI_REQUEST_TIMEOUT_MS = 75_000;
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new ApiRequestError(
+        'Cererea a durat prea mult. Verifică conexiunea și încearcă din nou.',
+        408
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function postJson<TResponse>(
+  path: string,
+  payload: unknown,
+  fallbackError: string,
+  timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS
+): Promise<TResponse> {
   let lastError: Error | null = null;
   const authToken = _tokenAccessor?.() ?? null;
 
   for (const baseUrl of API_BASE_URL_CANDIDATES) {
     try {
-      const response = await fetch(`${baseUrl}${path}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...getAuthHeaders(authToken) },
-        body: JSON.stringify(payload),
-      });
+      const response = await fetchWithTimeout(
+        `${baseUrl}${path}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders(authToken) },
+          body: JSON.stringify(payload),
+        },
+        timeoutMs
+      );
 
       if (response.status === 401) {
         handleAuthFailure(authToken);
@@ -167,16 +212,24 @@ async function postJson<TResponse>(path: string, payload: unknown, fallbackError
   throw lastError ?? new Error(fallbackError);
 }
 
-async function getJson<TResponse>(path: string, fallbackError: string): Promise<TResponse> {
+async function getJson<TResponse>(
+  path: string,
+  fallbackError: string,
+  timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS
+): Promise<TResponse> {
   let lastError: Error | null = null;
   const authToken = _tokenAccessor?.() ?? null;
 
   for (const baseUrl of API_BASE_URL_CANDIDATES) {
     try {
-      const response = await fetch(`${baseUrl}${path}`, {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json', ...getAuthHeaders(authToken) },
-      });
+      const response = await fetchWithTimeout(
+        `${baseUrl}${path}`,
+        {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders(authToken) },
+        },
+        timeoutMs
+      );
 
       if (response.status === 401) {
         handleAuthFailure(authToken);
@@ -204,7 +257,8 @@ export async function generateScenario(
   return postJson<GenerateScenarioApiResponse>(
     '/scenario/generate',
     payload,
-    'Nu am putut genera scenariul.'
+    'Nu am putut genera scenariul.',
+    AI_REQUEST_TIMEOUT_MS
   );
 }
 
@@ -320,7 +374,8 @@ export async function askAssistant(payload: AssistantAskPayload): Promise<Assist
   return postJson<AssistantAskApiResponse>(
     '/assistant/ask',
     payload,
-    'Nu am putut obtine raspunsul asistentului.'
+    'Nu am putut obtine raspunsul asistentului.',
+    AI_REQUEST_TIMEOUT_MS
   );
 }
 
@@ -335,6 +390,49 @@ export async function getLearningPath(): Promise<LearningPathApiResponse> {
   return getJson<LearningPathApiResponse>(
     '/learning/path',
     'Nu am putut încărca traseul de învățare.'
+  );
+}
+
+export async function getLearningLessons(): Promise<LearningLessonCatalogApiResponse> {
+  return getJson<LearningLessonCatalogApiResponse>(
+    '/learning/lessons',
+    'Nu am putut încărca biblioteca de lecții.'
+  );
+}
+
+export async function getLearningLesson(
+  lessonId: string
+): Promise<LearningLessonDetailApiResponse> {
+  return getJson<LearningLessonDetailApiResponse>(
+    `/learning/lessons/${encodeURIComponent(lessonId)}`,
+    'Nu am putut încărca lecția.'
+  );
+}
+
+export async function submitLearningLessonQuiz(
+  lessonId: string,
+  answers: { question_id: string; selected_option_id: string }[]
+): Promise<LearningQuizSubmitApiResponse> {
+  return postJson<LearningQuizSubmitApiResponse>(
+    `/learning/lessons/${encodeURIComponent(lessonId)}/quiz/submit`,
+    { answers },
+    'Nu am putut evalua testul lecției.'
+  );
+}
+
+export async function getLearningQuizAttempts(
+  options: { lessonId?: string; limit?: number; offset?: number } = {}
+): Promise<LearningQuizAttemptsApiResponse> {
+  const params = new URLSearchParams({
+    limit: String(options.limit ?? 20),
+    offset: String(options.offset ?? 0),
+  });
+  if (options.lessonId) {
+    params.set('lesson_id', options.lessonId);
+  }
+  return getJson<LearningQuizAttemptsApiResponse>(
+    `/learning/attempts?${params.toString()}`,
+    'Nu am putut încărca istoricul testelor.'
   );
 }
 

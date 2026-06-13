@@ -14,36 +14,50 @@ type Scenario = {
   title: string;
   description: string;
   difficulty: 'Ușor' | 'Mediu' | 'Greu';
-  risk: 'Mediu' | 'Ridicat' | 'Critic';
   time: string;
   attackType: AttackType;
   backendDifficulty: DifficultyLevel;
   channel: 'Email' | 'SMS' | 'Vocal' | 'Web';
 };
 
-type RiskLevel = Scenario['risk'];
 type DifficultyFilter = DifficultyLevel | 'all';
 
 const filters = ['Toate', 'Email', 'SMS', 'Vocal'] as const;
 const difficultyOrder: DifficultyLevel[] = ['easy', 'medium', 'hard'];
 const DIFFICULTY_PRESENTATION: Record<
   DifficultyLevel,
-  { label: string; subtitle: string; icon: keyof typeof Ionicons.glyphMap }
+  {
+    label: string;
+    subtitle: string;
+    icon: keyof typeof Ionicons.glyphMap;
+    color: string;
+    backgroundColor: string;
+    borderColor: string;
+  }
 > = {
   easy: {
     label: 'Ușor',
     subtitle: 'Indicii evidente și decizii ghidate',
     icon: 'leaf-outline',
+    color: '#45E0B1',
+    backgroundColor: 'rgba(69, 224, 177, 0.12)',
+    borderColor: 'rgba(69, 224, 177, 0.42)',
   },
   medium: {
     label: 'Mediu',
     subtitle: 'Context credibil și semnale discrete',
     icon: 'analytics-outline',
+    color: '#F5A94A',
+    backgroundColor: 'rgba(245, 169, 74, 0.12)',
+    borderColor: 'rgba(245, 169, 74, 0.44)',
   },
   hard: {
     label: 'Greu',
     subtitle: 'Atacuri sofisticate și detalii subtile',
     icon: 'flame-outline',
+    color: '#FF7D7D',
+    backgroundColor: 'rgba(255, 125, 125, 0.12)',
+    borderColor: 'rgba(255, 125, 125, 0.44)',
   },
 };
 const ATTACK_LABELS: Record<AttackType, string> = {
@@ -59,12 +73,6 @@ function channelLabel(channel: string): Scenario['channel'] {
   return 'Web';
 }
 
-function fallbackRiskByDifficulty(difficulty: DifficultyLevel): RiskLevel {
-  if (difficulty === 'hard') return 'Critic';
-  if (difficulty === 'medium') return 'Ridicat';
-  return 'Mediu';
-}
-
 function estimateTimeByDifficulty(difficulty: DifficultyLevel): string {
   if (difficulty === 'hard') return '6 min';
   if (difficulty === 'medium') return '4 min';
@@ -77,18 +85,6 @@ function buildScenarioTitle(description: string, attackType: AttackType, difficu
     return firstSentence.length > 58 ? `${firstSentence.slice(0, 55)}...` : firstSentence;
   }
   return `${ATTACK_LABELS[attackType]} · ${getDifficultyLabel(difficulty)}`;
-}
-
-function riskFromStats(
-  fallbackRisk: RiskLevel,
-  value?: { attempts: number; accuracy: number }
-): RiskLevel {
-  if (!value || value.attempts < 2) {
-    return fallbackRisk;
-  }
-  if (value.accuracy <= 40) return 'Critic';
-  if (value.accuracy <= 65) return 'Ridicat';
-  return 'Mediu';
 }
 
 export default function ScenariosScreen() {
@@ -106,7 +102,7 @@ export default function ScenariosScreen() {
   const [query, setQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState<(typeof filters)[number]>('Toate');
   const [difficultyFilter, setDifficultyFilter] = useState<DifficultyFilter>('all');
-  const { sessionId, perAttackStats, evaluation, scenarioCatalog, isLoadingCatalog, catalogError } =
+  const { sessionId, evaluation, scenarioCatalog, isLoadingCatalog, catalogError } =
     useTrainingSession();
 
   const scenarios = useMemo<Scenario[]>(
@@ -119,7 +115,6 @@ export default function ScenariosScreen() {
           title: buildScenarioTitle(description, item.attack_type, item.difficulty),
           description,
           difficulty: getDifficultyLabel(item.difficulty) as Scenario['difficulty'],
-          risk: fallbackRiskByDifficulty(item.difficulty),
           time: estimateTimeByDifficulty(item.difficulty),
           attackType: item.attack_type,
           backendDifficulty: item.difficulty,
@@ -129,21 +124,9 @@ export default function ScenariosScreen() {
     [scenarioCatalog]
   );
 
-  const perAttackMap = useMemo(
-    () =>
-      Object.fromEntries(
-        perAttackStats.map((entry) => [entry.id, entry.value] as const)
-      ) as Partial<Record<AttackType, (typeof perAttackStats)[number]['value']>>,
-    [perAttackStats]
-  );
-
   const filtered = useMemo(() => {
     const q = query.toLowerCase().trim();
     const enriched = scenarios
-      .map((scenario) => ({
-        ...scenario,
-        risk: riskFromStats(scenario.risk, perAttackMap[scenario.attackType]),
-      }))
       .filter((scenario) => {
         const matchesFilter = activeFilter === 'Toate' || scenario.channel === activeFilter;
         const matchesDifficulty =
@@ -162,7 +145,7 @@ export default function ScenariosScreen() {
       const bRecommended = b.attackType === rec.attack_type && b.backendDifficulty === rec.difficulty;
       return Number(bRecommended) - Number(aRecommended);
     });
-  }, [activeFilter, difficultyFilter, evaluation?.recommendation, perAttackMap, query, scenarios]);
+  }, [activeFilter, difficultyFilter, evaluation?.recommendation, query, scenarios]);
 
   const groupedScenarios = useMemo(
     () =>
@@ -214,6 +197,13 @@ export default function ScenariosScreen() {
         })}
       </ScrollView>
 
+      <View style={styles.selectorHeader}>
+        <Text style={styles.selectorLabel}>Dificultate</Text>
+        <Text style={styles.resultCount}>
+          {filtered.length} {filtered.length === 1 ? 'scenariu' : 'scenarii'}
+        </Text>
+      </View>
+
       <View style={styles.levelSelector}>
         <Pressable
           onPress={() => setDifficultyFilter('all')}
@@ -228,13 +218,25 @@ export default function ScenariosScreen() {
         </Pressable>
         {difficultyOrder.map((level) => {
           const active = difficultyFilter === level;
+          const presentation = DIFFICULTY_PRESENTATION[level];
           return (
             <Pressable
               key={level}
               onPress={() => setDifficultyFilter(level)}
-              style={[styles.levelButton, active && styles.levelButtonActive]}>
-              <Text style={[styles.levelButtonText, active && styles.levelButtonTextActive]}>
-                {DIFFICULTY_PRESENTATION[level].label}
+              style={[
+                styles.levelButton,
+                active && {
+                  backgroundColor: presentation.backgroundColor,
+                  borderColor: presentation.borderColor,
+                },
+              ]}>
+              <View style={[styles.levelDot, { backgroundColor: presentation.color }]} />
+              <Text
+                style={[
+                  styles.levelButtonText,
+                  active && { color: presentation.color },
+                ]}>
+                {presentation.label}
               </Text>
             </Pressable>
           );
@@ -274,11 +276,20 @@ export default function ScenariosScreen() {
           return (
             <View key={group.level} style={styles.levelSection}>
               <View style={styles.levelHeader}>
-                <View style={styles.levelHeaderIcon}>
-                  <Ionicons name={presentation.icon} size={16} color={TrainingColors.accentAmber} />
+                <View
+                  style={[
+                    styles.levelHeaderIcon,
+                    {
+                      backgroundColor: presentation.backgroundColor,
+                      borderColor: presentation.borderColor,
+                    },
+                  ]}>
+                  <Ionicons name={presentation.icon} size={16} color={presentation.color} />
                 </View>
                 <View style={styles.levelHeaderText}>
-                  <Text style={styles.levelTitle}>{presentation.label}</Text>
+                  <Text style={[styles.levelTitle, { color: presentation.color }]}>
+                    {presentation.label}
+                  </Text>
                   <Text style={styles.levelSubtitle}>{presentation.subtitle}</Text>
                 </View>
                 <Text style={styles.levelCount}>{group.items.length}</Text>
@@ -317,7 +328,7 @@ export default function ScenariosScreen() {
                               <Text style={styles.recommendedText}>Recomandat</Text>
                             </View>
                           ) : null}
-                          <RiskTag level={scenario.risk} />
+                          <DifficultyTag level={scenario.backendDifficulty} />
                         </View>
                       </View>
                       <Text style={[styles.cardTitle, isCompact && styles.cardTitleCompact]}>
@@ -352,12 +363,21 @@ export default function ScenariosScreen() {
   );
 }
 
-function RiskTag({ level }: { level: Scenario['risk'] }) {
-  const tone = level === 'Critic' ? styles.riskCritical : level === 'Ridicat' ? styles.riskHigh : styles.riskMedium;
-  const textTone = level === 'Critic' ? styles.riskTextCritical : level === 'Ridicat' ? styles.riskTextHigh : styles.riskTextMedium;
+function DifficultyTag({ level }: { level: DifficultyLevel }) {
+  const presentation = DIFFICULTY_PRESENTATION[level];
   return (
-    <View style={[styles.riskPill, tone]}>
-      <Text style={[styles.riskText, textTone]}>{level}</Text>
+    <View
+      style={[
+        styles.difficultyPill,
+        {
+          borderColor: presentation.borderColor,
+          backgroundColor: presentation.backgroundColor,
+        },
+      ]}>
+      <View style={[styles.difficultyDot, { backgroundColor: presentation.color }]} />
+      <Text style={[styles.difficultyTagText, { color: presentation.color }]}>
+        {presentation.label}
+      </Text>
     </View>
   );
 }
@@ -394,6 +414,23 @@ const styles = StyleSheet.create({
   searchBoxCompact: { paddingVertical: 8 },
   searchInput: { flex: 1, color: TrainingColors.textPrimary, fontSize: 14 },
   filters: { gap: 8, paddingTop: 4, paddingBottom: 2 },
+  selectorHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 2,
+    marginTop: 2,
+  },
+  selectorLabel: {
+    color: TrainingColors.textPrimary,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  resultCount: {
+    color: TrainingColors.textMuted,
+    fontSize: 10,
+    fontWeight: '600',
+  },
   filter: {
     borderRadius: 999,
     borderWidth: 1,
@@ -416,8 +453,13 @@ const styles = StyleSheet.create({
   },
   levelButton: {
     flex: 1,
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
     borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'transparent',
     paddingVertical: 8,
     paddingHorizontal: 4,
   },
@@ -432,6 +474,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   levelButtonTextActive: { color: '#FFE7BA' },
+  levelDot: { width: 6, height: 6, borderRadius: 3 },
   list: { gap: 10, marginTop: 2 },
   levelSection: { gap: 9, marginTop: 4 },
   levelHeader: {
@@ -447,7 +490,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(245, 197, 107, 0.1)',
+    borderWidth: 1,
   },
   levelHeaderText: { flex: 1 },
   levelTitle: { color: TrainingColors.textPrimary, fontSize: 15, fontWeight: '800' },
@@ -515,14 +558,22 @@ const styles = StyleSheet.create({
   metaItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   metaText: { color: TrainingColors.textMuted, fontSize: 11 },
   metaDivider: { color: TrainingColors.textMuted, fontSize: 11 },
-  riskPill: { borderRadius: 999, paddingHorizontal: 9, paddingVertical: 4, borderWidth: 1 },
-  riskText: { fontSize: 9, textTransform: 'uppercase', letterSpacing: 0.8, fontWeight: '800' },
-  riskTextMedium: { color: TrainingColors.accentAmber },
-  riskTextHigh: { color: TrainingColors.accentDanger },
-  riskTextCritical: { color: TrainingColors.accentDanger },
-  riskMedium: { borderColor: 'rgba(245,197,107,0.4)', backgroundColor: 'rgba(245,197,107,0.12)' },
-  riskHigh: { borderColor: 'rgba(255,125,125,0.38)', backgroundColor: 'rgba(255,125,125,0.1)' },
-  riskCritical: { borderColor: 'rgba(255,125,125,0.6)', backgroundColor: 'rgba(255,125,125,0.16)' },
+  difficultyPill: {
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  difficultyDot: { width: 5, height: 5, borderRadius: 3 },
+  difficultyTagText: {
+    fontSize: 9,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+    fontWeight: '800',
+  },
   recommendedPill: {
     borderRadius: 999,
     paddingHorizontal: 8,

@@ -213,6 +213,11 @@ export type SessionTrendAggregatesApiResponse = {
 export type AssistantAskApiResponse = {
   answer: string;
   quick_tips: string[];
+  safety_status: 'answered' | 'refused';
+  content_source: 'ollama' | 'rule_based';
+  llm_model: string | null;
+  generation_ms: number | null;
+  fallback_reason: string | null;
 };
 
 export type ScenarioCatalogItemApiResponse = {
@@ -229,6 +234,97 @@ export type ScenarioCatalogApiResponse = {
 };
 
 export type LearningProfileApiResponse = LearningProfile;
+
+export type LearningLessonLevel = 'beginner' | 'intermediate' | 'advanced';
+export type LearningLessonStatus = 'locked' | 'available' | 'in_progress' | 'completed';
+
+export type LearningLessonSummaryApiResponse = {
+  id: string;
+  category: string;
+  title: string;
+  summary: string;
+  duration_minutes: number;
+  level: LearningLessonLevel;
+  attack_type: AttackType | null;
+  difficulty: DifficultyLevel;
+  pass_score: number;
+  xp_reward: number;
+  attempts: number;
+  best_score: number | null;
+  passed: boolean;
+  status: LearningLessonStatus;
+};
+
+export type LearningLessonCatalogApiResponse = {
+  items: LearningLessonSummaryApiResponse[];
+};
+
+export type LearningLessonSectionApiResponse = {
+  id: string;
+  title: string;
+  body: string;
+  order_index: number;
+};
+
+export type LearningQuizOptionApiResponse = {
+  id: string;
+  text: string;
+  order_index: number;
+};
+
+export type LearningQuizQuestionApiResponse = {
+  id: string;
+  prompt: string;
+  order_index: number;
+  options: LearningQuizOptionApiResponse[];
+};
+
+export type LearningLessonDetailApiResponse = LearningLessonSummaryApiResponse & {
+  sections: LearningLessonSectionApiResponse[];
+  questions: LearningQuizQuestionApiResponse[];
+};
+
+export type LearningQuizAnswerResultApiResponse = {
+  question_id: string;
+  selected_option_id: string;
+  correct_option_id: string;
+  is_correct: boolean;
+  explanation: string;
+};
+
+export type LearningQuizSubmitApiResponse = {
+  attempt_id: string;
+  lesson_id: string;
+  score: number;
+  correct_answers: number;
+  total_questions: number;
+  passed: boolean;
+  pass_score: number;
+  xp_awarded: number;
+  lesson_completed: boolean;
+  was_already_completed: boolean;
+  answers: LearningQuizAnswerResultApiResponse[];
+  created_at: string;
+  path: LearningPathApiResponse;
+};
+
+export type LearningQuizAttemptSummaryApiResponse = {
+  attempt_id: string;
+  lesson_id: string;
+  score: number;
+  correct_answers: number;
+  total_questions: number;
+  passed: boolean;
+  xp_awarded: number;
+  created_at: string;
+};
+
+export type LearningQuizAttemptsApiResponse = {
+  total: number;
+  limit: number;
+  offset: number;
+  items: LearningQuizAttemptSummaryApiResponse[];
+};
 
 export type LearningPathStepType = 'lesson' | 'scenario';
 export type LearningPathStepStatus = 'locked' | 'available' | 'in_progress' | 'completed';

@@ -44,6 +44,7 @@ function RootNavigator() {
         <Stack.Protected guard={isAuthenticated}>
           <Stack.Screen name="(tabs)" />
           <Stack.Screen name="sessions" />
+          <Stack.Screen name="profile" />
           <Stack.Screen name="learning-path" />
           <Stack.Screen name="chat/[scenarioId]" />
           <Stack.Screen name="feedback/[scenarioId]" />

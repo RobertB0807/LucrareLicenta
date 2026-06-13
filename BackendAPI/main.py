@@ -4,7 +4,7 @@ from datetime import datetime
 import logging
 import secrets
 from time import monotonic
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import FastAPI, HTTPException, Path, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,7 +15,7 @@ from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
 
 from app_config import load_runtime_settings, validate_runtime_config
-from assistant_service import build_assistant_answer
+from assistant_service import answer_assistant
 from auth_service import (
     AuthenticatedUser,
     JWT_ACCESS_EXPIRATION_MINUTES,
@@ -28,21 +28,39 @@ from auth_service import (
     verify_password,
 )
 import db
-from firebase_auth_service import verify_firebase_id_token
+from firebase_auth_service import (
+    delete_firebase_user,
+    update_firebase_user_display_name,
+    verify_firebase_id_token,
+)
 from learning_path_service import (
+    LearningAssessmentRequiredError,
     LearningPathLessonCompletionResponse,
     LearningPathLockedError,
     LearningPathResponse,
     build_learning_path,
     complete_lesson,
 )
+from learning_content_service import (
+    LearningLessonCatalogResponse,
+    LearningLessonDetailResponse,
+    LearningQuizAttemptsResponse,
+    LearningQuizSubmitRequest,
+    LearningQuizSubmitResponse,
+    get_learning_lesson as get_learning_lesson_content,
+    get_learning_lessons as get_learning_lessons_content,
+    get_learning_quiz_attempts as get_learning_attempt_history,
+    submit_learning_quiz,
+)
 from persistence_repository import (
     create_or_update_firebase_user,
     create_user,
+    delete_user_account,
     ensure_session_owner,
     fetch_scenario_session_owner,
     fetch_user_by_email,
     fetch_user_by_id,
+    update_user_display_name,
 )
 from observability import (
     configure_logging,
@@ -157,16 +175,42 @@ AssistantMessage = Annotated[
 ]
 
 
+class AssistantConversationMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=600),
+    ]
+
+
 class AssistantAskRequest(BaseModel):
     message: AssistantMessage
+    history: list[AssistantConversationMessage] = Field(
+        default_factory=list,
+        max_length=8,
+    )
     session_id: SessionId | None = None
+    scenario_id: ScenarioId | None = None
     attack_type: AttackType | None = None
     difficulty: DifficultyLevel | None = None
+    context_title: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=160),
+    ] | None = None
+    context_summary: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=700),
+    ] | None = None
 
 
 class AssistantAskResponse(BaseModel):
     answer: str
     quick_tips: list[str]
+    safety_status: Literal["answered", "refused"]
+    content_source: Literal["ollama", "rule_based"]
+    llm_model: str | None = None
+    generation_ms: int | None = None
+    fallback_reason: str | None = None
 
 
 class AuthRegisterRequest(BaseModel):
@@ -182,6 +226,10 @@ class AuthLoginRequest(BaseModel):
 
 class AuthRefreshRequest(BaseModel):
     refresh_token: str = Field(min_length=1, max_length=4096)
+
+
+class AuthProfileUpdateRequest(BaseModel):
+    display_name: DisplayName
 
 
 class UserResponse(BaseModel):
@@ -330,6 +378,7 @@ async def enforce_authentication(request: Request, call_next):
                 firebase_uid=firebase_identity.uid,
                 email=firebase_identity.email,
                 display_name=firebase_identity.display_name,
+                update_existing_display_name=False,
             )
         else:
             payload = decode_access_token(token)
@@ -568,6 +617,64 @@ def get_me(request: Request) -> UserResponse:
     return UserResponse.model_validate(current_user.model_dump())
 
 
+@app.patch("/auth/me", response_model=UserResponse)
+def update_me(payload: AuthProfileUpdateRequest, request: Request) -> UserResponse:
+    current_user = require_authenticated_user(request)
+    user = fetch_user_by_id(current_user.id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    firebase_uid = user.get("firebase_uid")
+    if isinstance(firebase_uid, str) and firebase_uid:
+        try:
+            update_firebase_user_display_name(firebase_uid, payload.display_name)
+        except Exception as exc:
+            logger.exception(
+                "firebase_profile_update_failed",
+                extra={"user_id": current_user.id},
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Profilul nu a putut fi actualizat momentan",
+            ) from exc
+
+    updated = update_user_display_name(current_user.id, payload.display_name)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return UserResponse(
+        id=updated["id"],
+        email=updated["email"],
+        display_name=updated["display_name"],
+        is_active=bool(updated["is_active"]),
+    )
+
+
+@app.delete("/auth/me", status_code=204)
+def delete_me(request: Request) -> Response:
+    current_user = require_authenticated_user(request)
+    user = fetch_user_by_id(current_user.id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    firebase_uid = user.get("firebase_uid")
+    if isinstance(firebase_uid, str) and firebase_uid:
+        try:
+            delete_firebase_user(firebase_uid)
+        except Exception as exc:
+            logger.exception(
+                "firebase_account_delete_failed",
+                extra={"user_id": current_user.id},
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Contul nu a putut fi șters momentan",
+            ) from exc
+
+    if not delete_user_account(current_user.id):
+        raise HTTPException(status_code=404, detail="User not found")
+    return Response(status_code=204)
+
+
 @app.get("/learning/profile", response_model=LearningProfileResponse)
 def get_learning_profile(request: Request = None) -> LearningProfileResponse:
     current_user = require_authenticated_user(request)
@@ -578,6 +685,68 @@ def get_learning_profile(request: Request = None) -> LearningProfileResponse:
 def get_learning_path(request: Request = None) -> LearningPathResponse:
     current_user = require_authenticated_user(request)
     return build_learning_path(current_user.id)
+
+
+@app.get("/learning/lessons", response_model=LearningLessonCatalogResponse)
+def get_learning_lessons(request: Request = None) -> LearningLessonCatalogResponse:
+    current_user = require_authenticated_user(request)
+    return get_learning_lessons_content(current_user.id)
+
+
+@app.get(
+    "/learning/lessons/{lesson_id}",
+    response_model=LearningLessonDetailResponse,
+)
+def get_learning_lesson(
+    lesson_id: LessonId,
+    request: Request = None,
+) -> LearningLessonDetailResponse:
+    current_user = require_authenticated_user(request)
+    try:
+        return get_learning_lesson_content(current_user.id, lesson_id)
+    except LearningPathLockedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post(
+    "/learning/lessons/{lesson_id}/quiz/submit",
+    response_model=LearningQuizSubmitResponse,
+)
+def submit_lesson_quiz(
+    lesson_id: LessonId,
+    payload: LearningQuizSubmitRequest,
+    request: Request = None,
+) -> LearningQuizSubmitResponse:
+    current_user = require_authenticated_user(request)
+    try:
+        return submit_learning_quiz(current_user.id, lesson_id, payload)
+    except LearningPathLockedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if detail == "Unknown lesson" else 422
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@app.get("/learning/attempts", response_model=LearningQuizAttemptsResponse)
+def get_lesson_quiz_attempts(
+    lesson_id: LessonId | None = None,
+    limit: int = Query(default=20, gt=0, le=100),
+    offset: NonNegativeInt = 0,
+    request: Request = None,
+) -> LearningQuizAttemptsResponse:
+    current_user = require_authenticated_user(request)
+    try:
+        return get_learning_attempt_history(
+            current_user.id,
+            lesson_id=lesson_id,
+            limit=limit,
+            offset=offset,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.post(
@@ -591,6 +760,8 @@ def complete_learning_path_lesson(
     current_user = require_authenticated_user(request)
     try:
         return complete_lesson(current_user.id, lesson_id)
+    except LearningAssessmentRequiredError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except LearningPathLockedError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
@@ -674,17 +845,68 @@ def assistant_ask(
     payload: AssistantAskRequest,
     request: Request = None,
 ) -> AssistantAskResponse:
+    current_user: AuthenticatedUser | None = None
     if request is not None:
         current_user = require_authenticated_user(request)
         if payload.session_id and not ensure_session_owner(payload.session_id, current_user.id):
             raise HTTPException(status_code=404, detail="Session not found")
+        if payload.scenario_id:
+            owner = fetch_scenario_session_owner(payload.scenario_id)
+            if owner is None or not ensure_session_owner(owner["session_id"], current_user.id):
+                raise HTTPException(status_code=404, detail="Scenario not found")
 
-    answer, quick_tips = build_assistant_answer(
+    learning_context: dict[str, object] | None = None
+    if current_user is not None:
+        profile = get_training_learning_profile(current_user.id)
+        learning_context = {
+            "overall_mastery": profile.overall_mastery,
+            "coverage": profile.coverage,
+            "weak_areas": [
+                {
+                    "attack_type": area.attack_type,
+                    "difficulty": area.difficulty,
+                    "attempts": area.attempts,
+                    "accuracy": area.accuracy,
+                    "mastery_score": area.mastery_score,
+                }
+                for area in profile.weak_areas
+                if area.attempts > 0
+            ],
+            "recommended_next": profile.recommended_next.model_dump(),
+        }
+
+    scenario_context: dict[str, object] | None = None
+    if payload.scenario_id:
+        scenario = get_training_generated_scenario(payload.scenario_id)
+        if scenario is None:
+            raise HTTPException(status_code=404, detail="Scenario not found")
+        scenario_context = {
+            "attack_type": scenario.attack_type,
+            "difficulty": scenario.difficulty,
+            "channel": scenario.channel,
+            "attacker_message": scenario.attacker_message,
+            "red_flags": scenario.red_flags,
+        }
+
+    result = answer_assistant(
         message=payload.message,
+        history=[item.model_dump() for item in payload.history],
         attack_type=payload.attack_type,
         difficulty=payload.difficulty,
+        context_title=payload.context_title,
+        context_summary=payload.context_summary,
+        learning_context=learning_context,
+        scenario_context=scenario_context,
     )
-    return AssistantAskResponse(answer=answer, quick_tips=quick_tips)
+    return AssistantAskResponse(
+        answer=result.answer,
+        quick_tips=result.quick_tips,
+        safety_status=result.safety_status,
+        content_source=result.content_source,
+        llm_model=result.llm_model,
+        generation_ms=result.generation_ms,
+        fallback_reason=result.fallback_reason,
+    )
 
 
 @app.get("/sessions", response_model=UserSessionsResponse)

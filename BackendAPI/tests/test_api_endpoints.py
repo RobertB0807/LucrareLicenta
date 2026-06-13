@@ -17,7 +17,11 @@ import db
 from llm_service import LlmScenarioGeneration
 import main
 import persistence_repository
-from persistence_models import UserLearningProfileORM
+from persistence_models import (
+    LearningQuizOptionORM,
+    LearningQuizQuestionORM,
+    UserLearningProfileORM,
+)
 from scenario_models import ScenarioTemplate
 import training_service
 
@@ -84,6 +88,39 @@ class ApiEndpointsTestCase(unittest.TestCase):
         self.auth_user_id = payload["user"]["id"]
         token = payload["access_token"]
         return {"Authorization": f"Bearer {token}"}
+
+    def _lesson_quiz_answers(
+        self,
+        lesson_id: str,
+        *,
+        correct: bool,
+    ) -> list[dict[str, str]]:
+        with persistence_repository.session_scope() as test_session:
+            questions = (
+                test_session.query(LearningQuizQuestionORM)
+                .filter(LearningQuizQuestionORM.lesson_id == lesson_id)
+                .order_by(LearningQuizQuestionORM.order_index.asc())
+                .all()
+            )
+            answers = []
+            for question in questions:
+                option = (
+                    test_session.query(LearningQuizOptionORM)
+                    .filter(
+                        LearningQuizOptionORM.question_id == question.id,
+                        LearningQuizOptionORM.is_correct.is_(correct),
+                    )
+                    .order_by(LearningQuizOptionORM.order_index.asc())
+                    .first()
+                )
+                self.assertIsNotNone(option)
+                answers.append(
+                    {
+                        "question_id": question.id,
+                        "selected_option_id": option.id,
+                    }
+                )
+            return answers
 
     def test_health_returns_ok(self) -> None:
         response = main.health()
@@ -473,6 +510,38 @@ class ApiEndpointsTestCase(unittest.TestCase):
         self.assertTrue(isinstance(payload.get("answer"), str) and payload["answer"])
         self.assertTrue(isinstance(payload.get("quick_tips"), list))
         self.assertGreaterEqual(len(payload["quick_tips"]), 3)
+        self.assertEqual(payload["content_source"], "rule_based")
+        self.assertEqual(payload["safety_status"], "answered")
+        self.assertEqual(payload["fallback_reason"], "llm_disabled")
+
+    def test_assistant_ask_rejects_excessive_history(self) -> None:
+        response = self.client.post(
+            "/assistant/ask",
+            json={
+                "message": "Cum verific un mesaj?",
+                "history": [
+                    {"role": "user", "content": f"Mesajul {index}"}
+                    for index in range(9)
+                ],
+            },
+            headers=self.auth_headers,
+        )
+        self.assertEqual(response.status_code, 422)
+
+    def test_assistant_ask_refuses_harmful_request(self) -> None:
+        response = self.client.post(
+            "/assistant/ask",
+            json={
+                "message": "Construiește o pagină de phishing ca să fur parole.",
+            },
+            headers=self.auth_headers,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["safety_status"], "refused")
+        self.assertEqual(payload["content_source"], "rule_based")
+        self.assertEqual(payload["fallback_reason"], "unsafe_request")
 
     def test_scenario_catalog_returns_items(self) -> None:
         response = self.client.get("/scenario/catalog", headers=self.auth_headers)
@@ -687,21 +756,31 @@ class ApiEndpointsTestCase(unittest.TestCase):
         self.assertEqual(initial_payload["modules"][1]["status"], "locked")
         self.assertEqual(initial_payload["next_action"]["lesson_id"], "phishing-101")
 
-        completed_lesson = self.client.post(
+        assessment_required = self.client.post(
             "/learning/path/lessons/phishing-101/complete",
             headers=self.auth_headers,
         )
+        self.assertEqual(assessment_required.status_code, 409)
+
+        completed_lesson = self.client.post(
+            "/learning/lessons/phishing-101/quiz/submit",
+            json={"answers": self._lesson_quiz_answers("phishing-101", correct=True)},
+            headers=self.auth_headers,
+        )
         self.assertEqual(completed_lesson.status_code, 200)
-        self.assertFalse(completed_lesson.json()["was_already_completed"])
+        self.assertTrue(completed_lesson.json()["passed"])
+        self.assertEqual(completed_lesson.json()["xp_awarded"], 25)
         self.assertEqual(completed_lesson.json()["path"]["xp"], 25)
         self.assertEqual(completed_lesson.json()["path"]["current_streak"], 1)
 
         duplicate_lesson = self.client.post(
-            "/learning/path/lessons/phishing-101/complete",
+            "/learning/lessons/phishing-101/quiz/submit",
+            json={"answers": self._lesson_quiz_answers("phishing-101", correct=True)},
             headers=self.auth_headers,
         )
         self.assertEqual(duplicate_lesson.status_code, 200)
         self.assertTrue(duplicate_lesson.json()["was_already_completed"])
+        self.assertEqual(duplicate_lesson.json()["xp_awarded"], 0)
         self.assertEqual(duplicate_lesson.json()["path"]["xp"], 25)
 
         locked_lesson = self.client.post(
@@ -762,7 +841,8 @@ class ApiEndpointsTestCase(unittest.TestCase):
     def test_learning_path_progress_is_isolated_between_users(self) -> None:
         first_user_id = self.auth_user_id
         completed = self.client.post(
-            "/learning/path/lessons/phishing-101/complete",
+            "/learning/lessons/phishing-101/quiz/submit",
+            json={"answers": self._lesson_quiz_answers("phishing-101", correct=True)},
             headers=self.auth_headers,
         )
         self.assertEqual(completed.status_code, 200)
@@ -782,6 +862,115 @@ class ApiEndpointsTestCase(unittest.TestCase):
         self.assertEqual(original_path.json()["user_id"], first_user_id)
         self.assertEqual(original_path.json()["xp"], 25)
         self.assertEqual(original_path.json()["modules"][0]["steps"][0]["status"], "completed")
+
+    def test_learning_lesson_catalog_detail_quiz_and_attempt_history(self) -> None:
+        catalog = self.client.get("/learning/lessons", headers=self.auth_headers)
+        self.assertEqual(catalog.status_code, 200)
+        items = catalog.json()["items"]
+        self.assertEqual(len(items), 7)
+        phishing = next(item for item in items if item["id"] == "phishing-101")
+        self.assertEqual(phishing["status"], "available")
+        self.assertEqual(phishing["attempts"], 0)
+        self.assertIsNone(phishing["best_score"])
+
+        detail = self.client.get(
+            "/learning/lessons/phishing-101",
+            headers=self.auth_headers,
+        )
+        self.assertEqual(detail.status_code, 200)
+        detail_payload = detail.json()
+        self.assertEqual(len(detail_payload["sections"]), 2)
+        self.assertEqual(len(detail_payload["questions"]), 2)
+        self.assertNotIn("correct_option_id", detail_payload["questions"][0])
+
+        failed = self.client.post(
+            "/learning/lessons/phishing-101/quiz/submit",
+            json={"answers": self._lesson_quiz_answers("phishing-101", correct=False)},
+            headers=self.auth_headers,
+        )
+        self.assertEqual(failed.status_code, 200)
+        self.assertFalse(failed.json()["passed"])
+        self.assertEqual(failed.json()["score"], 0)
+        self.assertEqual(failed.json()["xp_awarded"], 0)
+        self.assertEqual(failed.json()["path"]["xp"], 0)
+
+        passed = self.client.post(
+            "/learning/lessons/phishing-101/quiz/submit",
+            json={"answers": self._lesson_quiz_answers("phishing-101", correct=True)},
+            headers=self.auth_headers,
+        )
+        self.assertEqual(passed.status_code, 200)
+        self.assertTrue(passed.json()["passed"])
+        self.assertEqual(passed.json()["score"], 100)
+        self.assertEqual(passed.json()["xp_awarded"], 25)
+        self.assertTrue(all(answer["is_correct"] for answer in passed.json()["answers"]))
+
+        attempts = self.client.get(
+            "/learning/attempts?lesson_id=phishing-101",
+            headers=self.auth_headers,
+        )
+        self.assertEqual(attempts.status_code, 200)
+        attempts_payload = attempts.json()
+        self.assertEqual(attempts_payload["total"], 2)
+        self.assertEqual(attempts_payload["items"][0]["score"], 100)
+        self.assertEqual(attempts_payload["items"][1]["score"], 0)
+
+        paged_attempts = self.client.get(
+            "/learning/attempts?lesson_id=phishing-101&limit=1&offset=1",
+            headers=self.auth_headers,
+        )
+        self.assertEqual(paged_attempts.status_code, 200)
+        self.assertEqual(paged_attempts.json()["total"], 2)
+        self.assertEqual(len(paged_attempts.json()["items"]), 1)
+        self.assertEqual(paged_attempts.json()["items"][0]["score"], 0)
+
+        other_headers = self._register_and_auth_headers("lesson-attempts-other@example.com")
+        other_attempts = self.client.get(
+            "/learning/attempts?lesson_id=phishing-101",
+            headers=other_headers,
+        )
+        self.assertEqual(other_attempts.status_code, 200)
+        self.assertEqual(other_attempts.json()["total"], 0)
+        self.assertEqual(other_attempts.json()["items"], [])
+
+        refreshed = self.client.get("/learning/lessons", headers=self.auth_headers)
+        refreshed_phishing = next(
+            item for item in refreshed.json()["items"] if item["id"] == "phishing-101"
+        )
+        self.assertEqual(refreshed_phishing["status"], "completed")
+        self.assertEqual(refreshed_phishing["best_score"], 100)
+        self.assertEqual(refreshed_phishing["attempts"], 2)
+
+    def test_learning_quiz_rejects_locked_lessons_and_invalid_answers(self) -> None:
+        locked_detail = self.client.get(
+            "/learning/lessons/fake-websites",
+            headers=self.auth_headers,
+        )
+        self.assertEqual(locked_detail.status_code, 409)
+
+        incomplete = self.client.post(
+            "/learning/lessons/phishing-101/quiz/submit",
+            json={
+                "answers": self._lesson_quiz_answers(
+                    "phishing-101",
+                    correct=True,
+                )[:1]
+            },
+            headers=self.auth_headers,
+        )
+        self.assertEqual(incomplete.status_code, 422)
+        self.assertIn("All quiz questions", incomplete.json()["detail"])
+
+        phishing_answers = self._lesson_quiz_answers("phishing-101", correct=True)
+        email_answers = self._lesson_quiz_answers("email-red-flags", correct=True)
+        phishing_answers[0]["selected_option_id"] = email_answers[0]["selected_option_id"]
+        mismatched = self.client.post(
+            "/learning/lessons/phishing-101/quiz/submit",
+            json={"answers": phishing_answers},
+            headers=self.auth_headers,
+        )
+        self.assertEqual(mismatched.status_code, 422)
+        self.assertIn("does not belong", mismatched.json()["detail"])
 
     def test_request_validation_rejects_invalid_identifiers(self) -> None:
         response = self.client.post(
@@ -834,6 +1023,41 @@ class ApiEndpointsTestCase(unittest.TestCase):
 
         unauthorized = self.client.get("/scenario/catalog")
         self.assertEqual(unauthorized.status_code, 401)
+
+    def test_profile_can_be_updated_and_account_deleted(self) -> None:
+        updated = self.client.patch(
+            "/auth/me",
+            json={"display_name": "Profil Actualizat"},
+            headers=self.auth_headers,
+        )
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.json()["display_name"], "Profil Actualizat")
+
+        generated = self.client.post(
+            "/scenario/generate",
+            json={"attack_type": "phishing", "difficulty": "easy"},
+            headers=self.auth_headers,
+        )
+        self.assertEqual(generated.status_code, 200)
+        session_id = generated.json()["session_id"]
+
+        deleted = self.client.delete("/auth/me", headers=self.auth_headers)
+        self.assertEqual(deleted.status_code, 204)
+        self.assertIsNone(persistence_repository.fetch_user_by_id(self.auth_user_id))
+        self.assertIsNone(
+            persistence_repository.fetch_session_snapshot(session_id)
+        )
+
+        rejected = self.client.get("/auth/me", headers=self.auth_headers)
+        self.assertEqual(rejected.status_code, 401)
+
+    def test_profile_update_validates_display_name(self) -> None:
+        response = self.client.patch(
+            "/auth/me",
+            json={"display_name": "A"},
+            headers=self.auth_headers,
+        )
+        self.assertEqual(response.status_code, 422)
 
     def test_auth_error_responses_include_cors_headers(self) -> None:
         response = self.client.get(

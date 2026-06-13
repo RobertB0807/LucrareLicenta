@@ -10,6 +10,7 @@ from persistence_repository import (
     fetch_learning_path_progress,
     fetch_user_learning_profiles,
     fetch_user_recent_activity,
+    has_passed_learning_lesson_quiz,
 )
 from scenario_models import AttackType, DifficultyLevel
 
@@ -96,6 +97,10 @@ class LearningPathLessonCompletionResponse(BaseModel):
 
 
 class LearningPathLockedError(ValueError):
+    pass
+
+
+class LearningAssessmentRequiredError(ValueError):
     pass
 
 
@@ -433,6 +438,10 @@ def complete_lesson(user_id: str, lesson_id: str) -> LearningPathLessonCompletio
         raise ValueError("Unknown learning path lesson")
     if matching_step.status == "locked":
         raise LearningPathLockedError("Lesson is locked")
+    if not has_passed_learning_lesson_quiz(user_id, lesson_id):
+        raise LearningAssessmentRequiredError(
+            "Pass the lesson quiz before completing the lesson"
+        )
 
     result = complete_learning_path_lesson(user_id=user_id, lesson_id=lesson_id)
     return LearningPathLessonCompletionResponse(

@@ -1,6 +1,24 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+import logging
+from typing import Any, Literal
+
+from llm_service import generate_llm_assistant
 from scenario_models import AttackType, DifficultyLevel
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class AssistantAnswer:
+    answer: str
+    quick_tips: list[str]
+    safety_status: Literal["answered", "refused"]
+    content_source: Literal["ollama", "rule_based"]
+    llm_model: str | None
+    generation_ms: int | None
+    fallback_reason: str | None
 
 
 def _difficulty_label(difficulty: DifficultyLevel | None) -> str | None:
@@ -16,6 +34,35 @@ def _difficulty_label(difficulty: DifficultyLevel | None) -> str | None:
 
 def _contains_any(text: str, words: tuple[str, ...]) -> bool:
     return any(word in text for word in words)
+
+
+def _is_unsafe_request(message: str) -> bool:
+    normalized = message.casefold()
+    unsafe_phrases = (
+        "fur parola",
+        "fur parole",
+        "steal password",
+        "build a phishing page",
+        "create a phishing page",
+        "construiesc o pagină de phishing",
+        "construiesc o pagina de phishing",
+        "creează malware",
+        "creeaza malware",
+        "create malware",
+        "build malware",
+        "scrie un keylogger",
+        "write a keylogger",
+        "build a keylogger",
+        "bypass mfa",
+        "ocolesc mfa",
+        "evit detectarea",
+        "evade detection",
+        "fără să fiu detectat",
+        "fara sa fiu detectat",
+        "mă dau drept",
+        "ma dau drept",
+    )
+    return _contains_any(normalized, unsafe_phrases)
 
 
 def build_assistant_answer(
@@ -71,3 +118,78 @@ def build_assistant_answer(
         answer = f"{answer} Recomandare pentru nivel {difficulty_context}: exersează scenarii similare până menții decizii corecte consecutive."
 
     return answer, quick_tips
+
+
+def answer_assistant(
+    *,
+    message: str,
+    history: list[dict[str, str]] | None = None,
+    attack_type: AttackType | None = None,
+    difficulty: DifficultyLevel | None = None,
+    context_title: str | None = None,
+    context_summary: str | None = None,
+    learning_context: dict[str, Any] | None = None,
+    scenario_context: dict[str, Any] | None = None,
+) -> AssistantAnswer:
+    if _is_unsafe_request(message):
+        return AssistantAnswer(
+            answer=(
+                "Nu pot ajuta la construirea sau ascunderea unui atac. Pot însă explica "
+                "modul în care o astfel de tentativă este detectată, raportată și prevenită."
+            ),
+            quick_tips=[
+                "Folosește doar medii de laborator și date fictive pentru exerciții.",
+                "Concentrează testarea pe detectare, raportare și reducerea impactului.",
+                "Nu colecta parole, coduri MFA sau alte date reale ale utilizatorilor.",
+            ],
+            safety_status="refused",
+            content_source="rule_based",
+            llm_model=None,
+            generation_ms=None,
+            fallback_reason="unsafe_request",
+        )
+
+    generated = generate_llm_assistant(
+        message=message,
+        history=history,
+        attack_type=attack_type,
+        difficulty=difficulty,
+        context_title=context_title,
+        context_summary=context_summary,
+        learning_context=learning_context,
+        scenario_context=scenario_context,
+    )
+    if generated.output is not None:
+        return AssistantAnswer(
+            answer=generated.output.answer,
+            quick_tips=generated.output.quick_tips,
+            safety_status=generated.output.safety_status,
+            content_source="ollama",
+            llm_model=generated.model,
+            generation_ms=generated.generation_ms,
+            fallback_reason=None,
+        )
+
+    answer, quick_tips = build_assistant_answer(
+        message=message,
+        attack_type=attack_type,
+        difficulty=difficulty,
+    )
+    logger.warning(
+        "Assistant used deterministic fallback",
+        extra={
+            "event": "assistant_fallback",
+            "fallback_reason": generated.fallback_reason,
+            "llm_model": generated.model,
+            "generation_ms": generated.generation_ms,
+        },
+    )
+    return AssistantAnswer(
+        answer=answer,
+        quick_tips=quick_tips,
+        safety_status="answered",
+        content_source="rule_based",
+        llm_model=generated.model,
+        generation_ms=generated.generation_ms,
+        fallback_reason=generated.fallback_reason,
+    )

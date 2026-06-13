@@ -28,6 +28,12 @@ class PostgresIntegrationTestCase(unittest.TestCase):
                 "session_events",
                 "user_learning_profiles",
                 "user_learning_path_progress",
+                "learning_lessons",
+                "learning_lesson_sections",
+                "learning_quiz_questions",
+                "learning_quiz_options",
+                "learning_quiz_attempts",
+                "learning_quiz_answers",
             }.issubset(table_names)
         )
 
@@ -46,6 +52,10 @@ class PostgresIntegrationTestCase(unittest.TestCase):
             self.assertEqual(registration.status_code, 200)
             token = registration.json()["access_token"]
             headers = {"Authorization": f"Bearer {token}"}
+
+            lessons = client.get("/learning/lessons", headers=headers)
+            self.assertEqual(lessons.status_code, 200)
+            self.assertEqual(len(lessons.json()["items"]), 7)
 
             generated = client.post(
                 "/scenario/generate",

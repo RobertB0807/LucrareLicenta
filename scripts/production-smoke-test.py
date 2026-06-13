@@ -81,6 +81,28 @@ def main() -> int:
     if not isinstance(catalog, dict) or not catalog.get("items"):
         raise RuntimeError("Scenario catalog is empty")
 
+    lessons = require_status(
+        call("GET", "/learning/lessons", token=token),
+        200,
+        "learning lesson catalog",
+    )
+    if not isinstance(lessons, dict) or not lessons.get("items"):
+        raise RuntimeError("Learning lesson catalog is empty")
+    first_lesson = lessons["items"][0]
+    if not isinstance(first_lesson, dict) or not isinstance(first_lesson.get("id"), str):
+        raise RuntimeError("Learning lesson catalog contains an invalid item")
+    lesson_detail = require_status(
+        call("GET", f"/learning/lessons/{first_lesson['id']}", token=token),
+        200,
+        "learning lesson detail",
+    )
+    if (
+        not isinstance(lesson_detail, dict)
+        or not lesson_detail.get("sections")
+        or not lesson_detail.get("questions")
+    ):
+        raise RuntimeError("Learning lesson detail is incomplete")
+
     generated = require_status(
         call(
             "POST",

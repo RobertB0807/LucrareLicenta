@@ -76,3 +76,17 @@ def verify_firebase_id_token(token: str) -> FirebaseIdentity | None:
         display_name = None
 
     return FirebaseIdentity(uid=uid, email=email, display_name=display_name)
+
+
+def update_firebase_user_display_name(firebase_uid: str, display_name: str) -> None:
+    auth_client = _firebase_auth_client()
+    if auth_client is None:
+        raise RuntimeError("Firebase Admin is not configured")
+    auth_client.update_user(firebase_uid, display_name=display_name)
+
+
+def delete_firebase_user(firebase_uid: str) -> None:
+    auth_client = _firebase_auth_client()
+    if auth_client is None:
+        raise RuntimeError("Firebase Admin is not configured")
+    auth_client.delete_user(firebase_uid)
