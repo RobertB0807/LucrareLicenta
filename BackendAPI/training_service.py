@@ -7,7 +7,11 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from llm_service import generate_llm_scenario
 from persistence_repository import (
+    apply_scenario_evaluation_once,
+    fetch_generated_scenario,
+    fetch_recent_generated_scenarios,
     fetch_user_learning_profiles,
     fetch_scenario_context,
     fetch_scenario_session_owner,
@@ -15,13 +19,19 @@ from persistence_repository import (
     fetch_session_snapshot,
     fetch_session_trend_aggregates,
     fetch_session_trends,
-    record_user_learning_attempt,
+    fetch_user_sessions,
     record_generated_scenario,
-    record_scenario_evaluation,
     record_session_event,
+    update_scenario_recommendation,
     upsert_session_progress,
 )
-from scenario_library import ALL_ATTACK_TYPES, ALL_DIFFICULTIES, SCENARIO_LIBRARY, get_scenario_template
+from scenario_library import (
+    ALL_ATTACK_TYPES,
+    ALL_DIFFICULTIES,
+    SCENARIO_LIBRARY,
+    build_scenario_template_id,
+    get_scenario_template_selection,
+)
 from scenario_models import AttackType, DifficultyLevel, ScenarioOption, ScenarioRule
 
 DIFFICULTY_ORDER: tuple[DifficultyLevel, ...] = ("easy", "medium", "hard")
@@ -148,6 +158,11 @@ class LearningReviewSummaryResponse(BaseModel):
 class GenerateScenarioResponse(BaseModel):
     session_id: str
     scenario_id: str
+    template_id: str | None = None
+    content_source: Literal["ollama", "rule_based"] = "rule_based"
+    llm_model: str | None = None
+    generation_ms: int | None = None
+    fallback_reason: str | None = None
     attack_type: str
     difficulty: str
     channel: str
@@ -162,6 +177,11 @@ class EvaluateScenarioResponse(BaseModel):
     explanation: str
     session_stats: SessionStatsResponse
     recommendation: NextScenarioRecommendation
+    was_already_evaluated: bool = False
+
+
+class ScenarioEvaluationConflictError(ValueError):
+    pass
 
 
 class SessionSnapshotResponse(BaseModel):
@@ -170,6 +190,28 @@ class SessionSnapshotResponse(BaseModel):
     generated_scenarios: int
     evaluated_scenarios: int
     last_updated_at: str | None
+
+
+class UserSessionSummaryResponse(BaseModel):
+    session_id: str
+    total_score: int
+    total_attempts: int
+    total_correct: int
+    accuracy: float
+    generated_scenarios: int
+    evaluated_scenarios: int
+    latest_attack_type: AttackType | None
+    latest_difficulty: DifficultyLevel | None
+    pending_scenario_id: str | None
+    created_at: str | None
+    updated_at: str | None
+
+
+class UserSessionsResponse(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    items: list[UserSessionSummaryResponse]
 
 
 class SessionEventsResponse(BaseModel):
@@ -706,6 +748,15 @@ def persist_generated_attempt(
     scenario_id: str,
     attack_type: AttackType,
     difficulty: DifficultyLevel,
+    template_id: str | None,
+    content_source: Literal["ollama", "rule_based"],
+    llm_model: str | None,
+    generation_ms: int | None,
+    fallback_reason: str | None,
+    channel: str,
+    attacker_message: str,
+    options: list[ScenarioOption],
+    red_flags: list[str],
     rule: ScenarioRule,
 ) -> None:
     try:
@@ -714,6 +765,15 @@ def persist_generated_attempt(
             scenario_id=scenario_id,
             attack_type=attack_type,
             difficulty=difficulty,
+            template_id=template_id,
+            content_source=content_source,
+            llm_model=llm_model,
+            generation_ms=generation_ms,
+            fallback_reason=fallback_reason,
+            channel=channel,
+            attacker_message=attacker_message,
+            options=[option.model_dump() for option in options],
+            red_flags=red_flags,
             correct_option_id=rule.correct_option_id,
             correct_explanation=rule.correct_explanation,
             incorrect_explanation=rule.incorrect_explanation,
@@ -855,12 +915,59 @@ def generate_scenario(
     difficulty: DifficultyLevel,
     session_id: str | None = None,
     owner_user_id: str | None = None,
+    template_id: str | None = None,
 ) -> GenerateScenarioResponse:
     current_session_id = session_id or str(uuid4())
     progress = get_or_create_session(current_session_id)
 
     scenario_id = str(uuid4())
-    template = get_scenario_template(attack_type, difficulty)
+    content_source: Literal["ollama", "rule_based"] = "rule_based"
+    llm_model: str | None = None
+    generation_ms: int | None = None
+    fallback_reason: str | None = None
+
+    if template_id is not None:
+        resolved_template_id, template = get_scenario_template_selection(
+            attack_type,
+            difficulty,
+            template_id,
+        )
+    else:
+        recent_scenarios = fetch_recent_generated_scenarios(
+            current_session_id,
+            attack_type=attack_type,
+            difficulty=difficulty,
+            limit=6,
+        )
+        recent_messages = [
+            str(item["attacker_message"])
+            for item in recent_scenarios
+            if item.get("attacker_message")
+        ]
+        llm_generation = generate_llm_scenario(
+            attack_type,
+            difficulty,
+            recent_messages=recent_messages,
+        )
+        llm_model = llm_generation.model
+        generation_ms = llm_generation.generation_ms
+        fallback_reason = llm_generation.fallback_reason
+        if llm_generation.template is not None:
+            resolved_template_id = None
+            template = llm_generation.template
+            content_source = "ollama"
+        else:
+            template_count = len(SCENARIO_LIBRARY[(attack_type, difficulty)])
+            recently_used_template_ids = {
+                str(item["template_id"])
+                for item in recent_scenarios[: max(1, template_count - 1)]
+                if item.get("template_id")
+            }
+            resolved_template_id, template = get_scenario_template_selection(
+                attack_type,
+                difficulty,
+                excluded_template_ids=recently_used_template_ids,
+            )
 
     scenario_contexts[scenario_id] = ScenarioContext(
         session_id=current_session_id,
@@ -873,23 +980,41 @@ def generate_scenario(
         progress=progress,
         event_type="scenario_generated",
         title="Scenario generated",
-        detail=f"{attack_type} on {difficulty} difficulty is now active.",
+        detail=(
+            f"{attack_type} on {difficulty} difficulty is now active "
+            f"from {content_source} content."
+        ),
         tone="neutral",
     )
 
+    # Create the parent session before FK-dependent attempts and events.
+    persist_session_state(current_session_id, progress, owner_user_id=owner_user_id)
     persist_generated_attempt(
         session_id=current_session_id,
         scenario_id=scenario_id,
         attack_type=attack_type,
         difficulty=difficulty,
+        template_id=resolved_template_id,
+        content_source=content_source,
+        llm_model=llm_model,
+        generation_ms=generation_ms,
+        fallback_reason=fallback_reason,
+        channel=template.channel,
+        attacker_message=template.attacker_message,
+        options=template.options,
+        red_flags=template.red_flags,
         rule=template.rule,
     )
     persist_event(current_session_id, event)
-    persist_session_state(current_session_id, progress, owner_user_id=owner_user_id)
 
     return GenerateScenarioResponse(
         session_id=current_session_id,
         scenario_id=scenario_id,
+        template_id=resolved_template_id,
+        content_source=content_source,
+        llm_model=llm_model,
+        generation_ms=generation_ms,
+        fallback_reason=fallback_reason,
         attack_type=attack_type,
         difficulty=difficulty,
         channel=template.channel,
@@ -929,58 +1054,59 @@ def evaluate_scenario(
         if ownership is not None:
             resolved_owner_user_id = ownership["owner_user_id"]
 
-    progress = get_or_create_session(scenario_context.session_id)
-
     is_correct = selected_option_id == scenario_context.rule.correct_option_id
     score_delta = calculate_score_delta(is_correct, selected_option_id)
 
-    progress.total_attempts += 1
-    progress.total_score += score_delta
-
-    current_attack_progress = progress.by_attack[scenario_context.attack_type]
-    current_attack_progress.attempts += 1
-    event: SessionEvent
-
     if is_correct:
-        progress.total_correct += 1
-        progress.correct_streak += 1
-        progress.incorrect_streak = 0
-        current_attack_progress.correct += 1
         explanation = scenario_context.rule.correct_explanation
-        event = add_session_event(
-            progress=progress,
+        event = SessionEvent(
+            id=str(uuid4()),
+            timestamp=datetime.now(timezone.utc).isoformat(),
             event_type="answer_evaluated",
             title="Answer marked correct",
             detail=f"+{score_delta} points applied to the live score.",
             tone="good",
         )
     else:
-        progress.incorrect_streak += 1
-        progress.correct_streak = 0
         explanation = scenario_context.rule.incorrect_explanation
         detail_prefix = f"{score_delta}" if score_delta < 0 else f"+{score_delta}"
-        event = add_session_event(
-            progress=progress,
+        event = SessionEvent(
+            id=str(uuid4()),
+            timestamp=datetime.now(timezone.utc).isoformat(),
             event_type="answer_evaluated",
             title="Answer marked incorrect",
             detail=f"{detail_prefix} points applied to the live score.",
             tone="warning",
         )
 
-    if resolved_owner_user_id is not None:
-        try:
-            record_user_learning_attempt(
-                user_id=resolved_owner_user_id,
-                attack_type=scenario_context.attack_type,
-                difficulty=scenario_context.difficulty,
-                is_correct=is_correct,
-            )
-        except Exception:
-            logger.exception(
-                "Failed to persist adaptive learning profile",
-                extra={"session_id": scenario_context.session_id, "scenario_id": scenario_id},
-            )
+    persisted_result = apply_scenario_evaluation_once(
+        scenario_id=scenario_id,
+        session_id=scenario_context.session_id,
+        attack_type=scenario_context.attack_type,
+        difficulty=scenario_context.difficulty,
+        selected_option_id=selected_option_id,
+        is_correct=is_correct,
+        score_delta=score_delta,
+        explanation=explanation,
+        event_id=event.id,
+        event_timestamp_iso=event.timestamp,
+        event_type=event.event_type,
+        event_title=event.title,
+        event_detail=event.detail,
+        event_tone=event.tone,
+        owner_user_id=resolved_owner_user_id,
+    )
+    if persisted_result["status"] == "missing":
+        raise KeyError("Scenario not found")
+    if (
+        persisted_result["status"] == "duplicate"
+        and persisted_result["selected_option_id"] != selected_option_id
+    ):
+        raise ScenarioEvaluationConflictError(
+            "Scenario was already evaluated with a different option"
+        )
 
+    progress = get_or_create_session(scenario_context.session_id)
     session_stats = build_session_stats(progress)
     recommendation = build_recommendation(
         progress,
@@ -990,15 +1116,8 @@ def evaluate_scenario(
     )
 
     try:
-        record_scenario_evaluation(
+        update_scenario_recommendation(
             scenario_id=scenario_id,
-            session_id=scenario_context.session_id,
-            attack_type=scenario_context.attack_type,
-            difficulty=scenario_context.difficulty,
-            selected_option_id=selected_option_id,
-            is_correct=is_correct,
-            score_delta=score_delta,
-            explanation=explanation,
             recommendation_attack_type=recommendation.attack_type,
             recommendation_difficulty=recommendation.difficulty,
         )
@@ -1008,15 +1127,13 @@ def evaluate_scenario(
             extra={"session_id": scenario_context.session_id, "scenario_id": scenario_id},
         )
 
-    persist_event(scenario_context.session_id, event)
-    persist_session_state(scenario_context.session_id, progress)
-
     return EvaluateScenarioResponse(
-        is_correct=is_correct,
-        score_delta=score_delta,
-        explanation=explanation,
+        is_correct=bool(persisted_result["is_correct"]),
+        score_delta=int(persisted_result["score_delta"]),
+        explanation=str(persisted_result["explanation"]),
         session_stats=session_stats,
         recommendation=recommendation,
+        was_already_evaluated=persisted_result["status"] == "duplicate",
     )
 
 
@@ -1024,11 +1141,28 @@ def get_learning_profile(user_id: str) -> LearningProfileResponse:
     return build_learning_profile(user_id)
 
 
+def get_generated_scenario(scenario_id: str) -> GenerateScenarioResponse | None:
+    scenario = fetch_generated_scenario(scenario_id)
+    if scenario is None:
+        return None
+    return GenerateScenarioResponse.model_validate(scenario)
+
+
 def get_session_snapshot(session_id: str) -> SessionSnapshotResponse | None:
     snapshot = fetch_session_snapshot(session_id)
     if snapshot is None:
         return None
     return SessionSnapshotResponse.model_validate(snapshot)
+
+
+def get_user_sessions(
+    user_id: str,
+    limit: int = 20,
+    offset: int = 0,
+) -> UserSessionsResponse:
+    return UserSessionsResponse.model_validate(
+        fetch_user_sessions(user_id, limit=limit, offset=offset)
+    )
 
 
 def get_session_events(
@@ -1091,14 +1225,14 @@ def get_scenario_catalog() -> ScenarioCatalogResponse:
     for attack_type in ALL_ATTACK_TYPES:
         for difficulty in ALL_DIFFICULTIES:
             templates = SCENARIO_LIBRARY[(attack_type, difficulty)]
-            for index, template in enumerate(templates, start=1):
+            for index, template in enumerate(templates):
                 preview = template.attacker_message.strip()
                 if len(preview) > 160:
                     preview = f"{preview[:157]}..."
 
                 items.append(
                     ScenarioCatalogItemResponse(
-                        id=f"{attack_type}-{difficulty}-{index}",
+                        id=build_scenario_template_id(attack_type, difficulty, index),
                         attack_type=attack_type,
                         difficulty=difficulty,
                         channel=template.channel,

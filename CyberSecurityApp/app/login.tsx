@@ -14,8 +14,9 @@ import {
   View,
 } from 'react-native';
 
+import { AppBackdrop } from '@/components/app-backdrop';
 import { useAuth } from '@/features/auth/auth-context';
-import { TrainingColors } from '@/features/training/ui-theme';
+import { TrainingColors, TrainingShadows } from '@/features/training/ui-theme';
 
 export default function LoginScreen() {
   const router = useRouter();
@@ -25,6 +26,7 @@ export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -39,8 +41,14 @@ export default function LoginScreen() {
     setIsSubmitting(true);
 
     try {
-      await login(email.trim().toLowerCase(), password);
-      router.replace('/(tabs)/dashboard' as const);
+      const onboardingCompleted = await login(
+        email.trim().toLowerCase(),
+        password,
+        rememberMe
+      );
+      router.replace(
+        (onboardingCompleted ? '/(tabs)/dashboard' : '/onboarding') as never
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Eroare la autentificare.');
     } finally {
@@ -69,6 +77,7 @@ export default function LoginScreen() {
 
   return (
     <View style={styles.container}>
+      <AppBackdrop grid />
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardView}
@@ -77,18 +86,26 @@ export default function LoginScreen() {
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
         >
+          <View style={styles.authShell}>
           {/* Header */}
           <View style={styles.header}>
             <View style={styles.iconContainer}>
-              <Ionicons name="shield-checkmark" size={48} color={TrainingColors.accentTeal} />
+              <View style={styles.iconInner}>
+                <Ionicons name="shield-checkmark" size={42} color={TrainingColors.accentTeal} />
+              </View>
             </View>
-            <Text style={styles.title}>CyberGuard</Text>
-            <Text style={styles.subtitle}>Antrenament în securitate cibernetică</Text>
+            <Text style={styles.brandEyebrow}>SECURITY AWARENESS PLATFORM</Text>
+            <Text style={styles.title}>CyberCoach</Text>
+            <Text style={styles.subtitle}>
+              Învață să recunoști atacurile înainte să devină incidente.
+            </Text>
           </View>
 
           {/* Form */}
           <View style={styles.card}>
+            <Text style={styles.cardEyebrow}>BINE AI REVENIT</Text>
             <Text style={styles.cardTitle}>Autentificare</Text>
+            <Text style={styles.cardSubtitle}>Continuă de unde ai rămas cu progresul tău.</Text>
 
             {error && (
               <View style={styles.errorBanner}>
@@ -154,6 +171,26 @@ export default function LoginScreen() {
             </View>
 
             <Pressable
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: rememberMe }}
+              disabled={isSubmitting}
+              onPress={() => setRememberMe((value) => !value)}
+              style={styles.rememberRow}
+            >
+              <Ionicons
+                name={rememberMe ? 'checkbox' : 'square-outline'}
+                size={22}
+                color={rememberMe ? TrainingColors.accentTeal : TrainingColors.textMuted}
+              />
+              <View style={styles.rememberTextContainer}>
+                <Text style={styles.rememberLabel}>Ține-mă minte</Text>
+                <Text style={styles.rememberHint}>
+                  Păstrează sesiunea securizat timp de maximum 7 zile.
+                </Text>
+              </View>
+            </Pressable>
+
+            <Pressable
               style={[styles.submitButton, !canSubmit && styles.submitButtonDisabled]}
               onPress={handleLogin}
               disabled={!canSubmit}
@@ -161,7 +198,10 @@ export default function LoginScreen() {
               {isSubmitting ? (
                 <ActivityIndicator color="#fff" size="small" />
               ) : (
-                <Text style={styles.submitButtonText}>Autentificare</Text>
+                <>
+                  <Text style={styles.submitButtonText}>Autentificare</Text>
+                  <Ionicons name="arrow-forward" size={18} color="#FFFFFF" />
+                </>
               )}
             </Pressable>
           </View>
@@ -172,6 +212,11 @@ export default function LoginScreen() {
             <Pressable onPress={() => router.push('/register' as never)}>
               <Text style={styles.footerLink}> Creează unul</Text>
             </Pressable>
+          </View>
+          <View style={styles.trustRow}>
+            <Ionicons name="lock-closed" size={12} color={TrainingColors.textMuted} />
+            <Text style={styles.trustText}>Date protejate și progres salvat în siguranță</Text>
+          </View>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -190,51 +235,96 @@ const styles = StyleSheet.create({
   scrollContent: {
     flexGrow: 1,
     justifyContent: 'center',
-    paddingHorizontal: 24,
-    paddingVertical: 48,
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 44,
+  },
+  authShell: {
+    width: '100%',
+    maxWidth: 460,
   },
 
   // Header
   header: {
     alignItems: 'center',
-    marginBottom: 36,
+    marginBottom: 28,
   },
   iconContainer: {
-    width: 88,
-    height: 88,
-    borderRadius: 24,
-    backgroundColor: 'rgba(69, 224, 177, 0.1)',
+    width: 84,
+    height: 84,
+    borderRadius: 27,
+    backgroundColor: 'rgba(77, 228, 178, 0.08)',
     borderWidth: 1,
-    borderColor: 'rgba(69, 224, 177, 0.25)',
+    borderColor: 'rgba(77, 228, 178, 0.32)',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 16,
+    transform: [{ rotate: '4deg' }],
+    shadowColor: TrainingColors.accentTeal,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.2,
+    shadowRadius: 20,
+    elevation: 8,
+  },
+  iconInner: {
+    width: 64,
+    height: 64,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(77, 228, 178, 0.08)',
+    transform: [{ rotate: '-4deg' }],
+  },
+  brandEyebrow: {
+    color: TrainingColors.accentTeal,
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 1.8,
+    marginBottom: 5,
   },
   title: {
-    fontSize: 28,
-    fontWeight: '800',
+    fontSize: 32,
+    fontWeight: '900',
     color: TrainingColors.textPrimary,
-    letterSpacing: 1,
+    letterSpacing: -0.8,
   },
   subtitle: {
     fontSize: 14,
-    color: TrainingColors.textMuted,
-    marginTop: 6,
+    lineHeight: 20,
+    textAlign: 'center',
+    color: TrainingColors.textSecondary,
+    marginTop: 7,
+    maxWidth: 350,
   },
 
   // Card
   card: {
-    backgroundColor: TrainingColors.panel,
-    borderRadius: 16,
+    backgroundColor: 'rgba(13, 24, 40, 0.96)',
+    borderRadius: 24,
     borderWidth: 1,
-    borderColor: TrainingColors.border,
-    padding: 24,
+    borderColor: TrainingColors.borderStrong,
+    padding: 26,
+    ...TrainingShadows.floating,
+  },
+  cardEyebrow: {
+    color: TrainingColors.accentTeal,
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 1.5,
+    marginBottom: 5,
   },
   cardTitle: {
-    fontSize: 20,
-    fontWeight: '700',
+    fontSize: 24,
+    fontWeight: '800',
     color: TrainingColors.textPrimary,
-    marginBottom: 20,
+    letterSpacing: -0.4,
+  },
+  cardSubtitle: {
+    color: TrainingColors.textMuted,
+    fontSize: 13,
+    lineHeight: 18,
+    marginTop: 4,
+    marginBottom: 22,
   },
 
   // Error
@@ -297,11 +387,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: TrainingColors.panelAlt,
-    borderRadius: 12,
+    borderRadius: 14,
     borderWidth: 1,
     borderColor: TrainingColors.border,
     paddingHorizontal: 14,
-    height: 50,
+    height: 54,
   },
   inputIcon: {
     marginRight: 10,
@@ -316,17 +406,44 @@ const styles = StyleSheet.create({
     paddingLeft: 8,
     paddingVertical: 4,
   },
+  rememberRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    marginBottom: 18,
+  },
+  rememberTextContainer: {
+    flex: 1,
+  },
+  rememberLabel: {
+    color: TrainingColors.textSecondary,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  rememberHint: {
+    color: TrainingColors.textMuted,
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 2,
+  },
 
   // Submit
   submitButton: {
     backgroundColor: TrainingColors.buttonPrimary,
-    borderRadius: 12,
-    height: 50,
+    borderRadius: 14,
+    height: 54,
+    flexDirection: 'row',
+    gap: 9,
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 8,
     borderWidth: 1,
     borderColor: TrainingColors.buttonPrimaryBorder,
+    shadowColor: TrainingColors.accentBlue,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.24,
+    shadowRadius: 14,
+    elevation: 6,
   },
   submitButtonDisabled: {
     opacity: 0.5,
@@ -348,8 +465,19 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   footerLink: {
-    color: TrainingColors.accentBlue,
+    color: TrainingColors.accentTeal,
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: '700',
+  },
+  trustRow: {
+    marginTop: 18,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 6,
+  },
+  trustText: {
+    color: TrainingColors.textMuted,
+    fontSize: 11,
   },
 });

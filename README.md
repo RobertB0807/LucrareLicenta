@@ -2,12 +2,37 @@
 
 ## Run the full app
 
-From repo root, start backend + mobile app together:
+Install and start Docker Desktop, then run this command from the repository root:
 
 ```bash
 chmod +x run-all.sh
 ./run-all.sh
 ```
+
+This is the standard local launcher. It:
+
+- creates `.env.production` with private local secrets on the first run
+- starts PostgreSQL, Redis, database migrations, FastAPI, and Prometheus in Docker
+- forwards the Firebase and Ollama settings from `BackendAPI/.env`
+- opens the Expo web app
+- stops the containers on `Ctrl+C` while preserving application data
+
+Useful launch modes:
+
+```bash
+FRONTEND_MODE=start ./run-all.sh     # Expo interactive/QR mode
+FRONTEND_MODE=phone ./run-all.sh     # Physical phone on the same Wi-Fi
+FRONTEND_MODE=ios ./run-all.sh       # iOS simulator
+FRONTEND_MODE=android ./run-all.sh   # Android emulator
+RUN_SMOKE_TEST=true ./run-all.sh     # verify the main API flow before Expo starts
+```
+
+Runtime status:
+
+- app: `http://localhost:8081`
+- API readiness: `http://localhost:8000/health/ready`
+- API metrics: `http://localhost:8000/metrics`
+- Prometheus: `http://localhost:9090`
 
 ## Firebase Auth mode
 
@@ -27,3 +52,23 @@ python3 -m pip install -r requirements.txt
 ```
 
 When `EXPO_PUBLIC_FIREBASE_API_KEY` is present, the mobile app uses Firebase Auth and sends Firebase ID tokens to FastAPI.
+
+## Production backend stack
+
+The production stack includes FastAPI, PostgreSQL, Redis, a one-shot Alembic migration
+job, optional Prometheus monitoring, structured JSON logs, and optional Sentry reporting.
+
+```bash
+cp .env.production.example .env.production
+# configure secrets and allowed origins
+./scripts/validate-production-stack.sh
+```
+
+Operational commands:
+
+```bash
+./scripts/backup-database.sh
+ALLOW_DATABASE_RESTORE=true ./scripts/restore-database.sh /path/to/backup.dump
+```
+
+See `BackendAPI/README.md` for configuration, monitoring, and recovery details.

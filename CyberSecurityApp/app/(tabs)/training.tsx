@@ -55,6 +55,7 @@ export default function HomeScreen() {
         <ScenarioSetupCard
           attackType={attackType}
           difficulty={difficulty}
+          isLoading={isLoading}
           onSelectAttackType={setAttackType}
           onSelectDifficulty={setDifficulty}
           onGenerateScenario={() => startSimulation()}

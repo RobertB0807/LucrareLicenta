@@ -8,13 +8,16 @@ Aplicatia este un proiect de licenta: o aplicatie mobila pentru antrenarea utili
 - Backend: FastAPI (BackendAPI/)
 - Persistenta: SQLite implicit, PostgreSQL optional prin DATABASE_URL
 - Cache local: AsyncStorage in aplicatie
-- AI: raspunsuri rule-based (assistant_service.py), integrarea LLM este planificata
+- AI: scenarii generate local cu Ollama si fallback rule-based; asistentul ramane momentan rule-based
 
 ## 3. Fluxuri principale
 1) Autentificare
 - UI login/register -> /auth/login si /auth/register
-- Token JWT salvat in AsyncStorage (auth-session-v1)
-- /auth/me folosit la rehidratare
+- access token de 60 minute + refresh token de 7 zile pentru autentificarea locala
+- optiunea "Tine-ma minte" este activa implicit si persista sesiunea maximum 7 zile
+- pe native, sesiunea retinuta este salvata in Expo SecureStore; pe web exista fallback AsyncStorage
+- fara "Tine-ma minte", token-urile raman doar in memorie si se pierd la inchiderea aplicatiei
+- /auth/me si /auth/refresh sunt folosite la rehidratare
 
 2) Simulare scenariu
 - UI alege attack_type + difficulty
@@ -113,7 +116,7 @@ Tabele principale:
 - app/login.tsx + app/register.tsx
 
 ### 6.2 State management
-- features/auth/auth-context.tsx: login/register/logout + persistence
+- features/auth/auth-context.tsx: login/register/logout, rehidratare optionala si refresh automat
 - features/training/useTrainingSession.tsx: scenariu curent, stats, catalog, learning profile
 - API client in features/training/api.ts si features/auth/auth-api.ts
 
@@ -126,7 +129,7 @@ Tabele principale:
 - Training (legacy): simulare clasica cu carduri
 
 ### 6.4 Cache local (AsyncStorage)
-- auth-session-v1
+- auth-session-v2 (SecureStore pe native, fallback AsyncStorage pe web)
 - training-session-state-v1 (+ per user)
 - assistant-messages-v1
 - learn-screen-state-v1
@@ -263,12 +266,12 @@ Frontend (package.json): expo, expo-router, react-native, AsyncStorage, react-na
 - Teste backend: python -m unittest discover -s tests -p "test_*.py" -q
 
 ## 10. Ce urmeaza implementat (roadmap)
-1) Integrare LLM (generator scenarii + assistant) cu validare stricta a outputului si fallback rule-based.
+1) Extindere Ollama la assistant, cu validare stricta a outputului si fallback rule-based.
 2) Reducerea dependentei de cache in-memory (scenario_contexts) prin persistenta completa.
 3) Extindere analytics: moving averages, comparatii intre perioade, grafice multi-attack.
 4) Cache local per-user pentru assistant/learn/chat/feedback (acum doar training state e per-user).
 5) UX polish: animatii, iconografie, layout pentru ecrane mici.
 6) Teste suplimentare: frontend, flows end-to-end, negative cases.
-7) Hardening productie: SecureStore pentru token, CORS strict, management secrets, rate limits configurabile.
+7) Hardening productie: CORS strict, management secrets si rate limits configurabile.
 
 Nota: Nu exista TODO/FIXME explicite in codul proiectului; roadmap-ul de mai sus reflecta intentiile documentate in AI_CONTEXT.md si oportunitatile evidente din arhitectura curenta.

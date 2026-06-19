@@ -1,7 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useMemo, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
+import { AppBackdrop } from '@/components/app-backdrop';
 import { getSessionEvents, getSessionSnapshot, getSessionTrendAggregates } from '@/features/training/api';
 import type {
   AttackType,
@@ -52,8 +54,15 @@ const ATTACK_TREND_COLORS: Record<AttackType, string> = {
 };
 
 export default function AnalyticsScreen() {
-  const { sessionId, stats, perAttackStats, adaptiveProfile, isLoadingAdaptiveProfile } =
-    useTrainingSession();
+  const {
+    sessionId,
+    stats,
+    perAttackStats,
+    adaptiveProfile,
+    isLoadingAdaptiveProfile,
+    refreshActiveSession,
+    refreshAdaptiveProfile,
+  } = useTrainingSession();
   const { width } = useWindowDimensions();
   const isCompact = width < 360;
   const contentInsets = useMemo(
@@ -81,6 +90,15 @@ export default function AnalyticsScreen() {
   const [dateRangeFilter, setDateRangeFilter] = useState<DateRangeFilter>('30d');
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [focusRevision, setFocusRevision] = useState(0);
+
+  useFocusEffect(
+    useCallback(() => {
+      setFocusRevision((current) => current + 1);
+      void refreshActiveSession();
+      void refreshAdaptiveProfile();
+    }, [refreshActiveSession, refreshAdaptiveProfile])
+  );
 
   useEffect(() => {
     setEventsLimit(12);
@@ -117,6 +135,7 @@ export default function AnalyticsScreen() {
 
       setIsLoading(true);
       setFetchError(null);
+      setServerStats(null);
 
       try {
         const [snapshot, events, trendAggregates, phishingTrend, smishingTrend, impersonationTrend] =
@@ -165,7 +184,15 @@ export default function AnalyticsScreen() {
     return () => {
       cancelled = true;
     };
-  }, [eventsLimit, rangeSince, sessionId, trendAttackFilter]);
+  }, [
+    eventsLimit,
+    focusRevision,
+    rangeSince,
+    sessionId,
+    stats.totalAttempts,
+    stats.totalScore,
+    trendAttackFilter,
+  ]);
 
   const effectiveStats = serverStats ?? {
     total_score: stats.totalScore,
@@ -335,7 +362,12 @@ export default function AnalyticsScreen() {
   ];
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={[styles.content, contentInsets]}>
+    <View style={styles.screen}>
+      <AppBackdrop grid />
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={[styles.content, contentInsets]}
+        showsVerticalScrollIndicator={false}>
       <View style={styles.header}>
         <View style={styles.headerIcon}>
           <Ionicons name="stats-chart" size={18} color="#EFF6FF" />
@@ -664,12 +696,14 @@ export default function AnalyticsScreen() {
           </View>
         ))}
       </View>
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: TrainingColors.pageBase },
+  scroll: { flex: 1, backgroundColor: 'transparent' },
   content: { paddingHorizontal: 20, paddingTop: 50, paddingBottom: 130, gap: 12 },
   header: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 4 },
   headerIcon: {

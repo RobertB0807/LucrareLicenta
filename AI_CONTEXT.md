@@ -13,11 +13,11 @@ The goal is educational: users interact with scenarios, choose a response, recei
 ## Current Tech Stack
 - Frontend: React Native + Expo
 - Backend: FastAPI (Python)
-- AI: rule-based assistant endpoint implemented, LLM integration planned later
+- AI: Ollama-backed scenario and assistant generation with strict validation and rule-based fallback
 - Auth: Firebase Authentication on the frontend, Firebase token verification on the backend, local user/profile mapping in PostgreSQL or SQLite
 
 ## Current State
-The project is already functional as a vertical MVP slice.
+The project is a functional production-v1 work in progress; MVP scope is no longer the target.
 
 ### Backend status
 Backend lives in `BackendAPI/` and currently includes:
@@ -42,7 +42,15 @@ Backend features currently implemented:
 - `GET /scenario/catalog`
 - `POST /scenario/generate`
 - `POST /scenario/evaluate`
+- `GET /scenario/{scenario_id}`
 - `POST /assistant/ask`
+- `GET /learning/lessons`
+- `GET /learning/lessons/{lesson_id}`
+- `POST /learning/lessons/{lesson_id}/quiz/submit`
+- `GET /learning/attempts`
+- `GET /learning/path`
+- `POST /learning/path/lessons/{lesson_id}/complete`
+- `GET /sessions`
 - `GET /session/{session_id}`
 - `GET /session/{session_id}/events`
 - `GET /session/{session_id}/trends`
@@ -59,6 +67,14 @@ Backend features currently implemented:
   - attack type: phishing, smishing, impersonation
   - difficulty: easy, medium, hard
 - multiple templates per combination
+- local Ollama scenario generation for adaptive/random flows (`qwen3:8b` by default)
+- strict Pydantic validation for generated content, reserved `.invalid` domains, and fixed option IDs
+- automatic rule-based fallback when Ollama is disabled, unavailable, times out, or returns invalid content
+- contextual Ollama assistant responses with strict Pydantic validation, bounded conversation history, prompt-injection isolation, safety refusal, and deterministic fallback
+- assistant context includes authenticated learning-profile weaknesses/recommendations plus optional owned scenario and lesson context
+- assistant responses expose content source, model, generation duration, safety status, and fallback reason
+- deterministic catalog selections bypass the LLM when `template_id` is provided
+- persisted generation metadata: content source, model, duration, and fallback reason
 - adaptive session scoring
 - per-attack statistics
 - recommendation logic for the next scenario
@@ -66,6 +82,12 @@ Backend features currently implemented:
 - persistence for users, sessions, attempts and events via SQLAlchemy (PostgreSQL default via `DATABASE_URL` or `POSTGRES_*`; SQLite opt-in)
 - startup DB bootstrap now applies Alembic migrations (`upgrade head`) when available, with a safe ORM `create_all` fallback if Alembic is missing
 - scenario evaluation is restart-safe: when in-memory scenario context is missing, backend restores rule context from persisted `scenario_attempts` data
+- authenticated users can list their persisted sessions with pagination, summary metrics, latest scenario metadata, and pending scenario recovery
+- structured learning path with beginner/intermediate/advanced modules, lesson completion, scenario mastery requirements, XP, levels, streaks, goals, and badges
+- persisted lesson catalog, ordered lesson sections, quiz questions/options, per-user attempts, answer history, scores, pass rules, and one-time XP awards
+- learning-path lessons can no longer be completed manually; a passing persisted quiz attempt is required
+- learning-path scenario progress reuses the persisted adaptive profile; lesson/gamification state is stored in `user_learning_path_progress`
+- scenario generation now persists the parent session before FK-dependent attempt/event records, keeping PostgreSQL writes valid
 - Firebase-linked users are stored with `firebase_uid` so a Firebase account maps to one local user record
 - `/auth/me` now returns explicit CORS-safe errors for missing/invalid tokens and backend mapping conflicts
 - `BackendAPI/.env` is loaded automatically through `python-dotenv`
@@ -81,35 +103,97 @@ The app now has a broader product-style tab shell and route flow:
 - `app/(tabs)/analytics.tsx` for progress/stats UI
 - `app/chat/[scenarioId].tsx` for chat-style scenario simulation
 - `app/feedback/[scenarioId].tsx` for post-scenario debrief
+- `app/sessions.tsx` for backend-backed session history and recovery
+- `app/learning-path.tsx` for structured modules, objectives, XP, streaks, and badges
 - `app/login.tsx` for user authentication
 - `app/register.tsx` for new account creation
 
 Navigation updates:
 - `app/(tabs)/_layout.tsx` now defines the new visible tabs and hides legacy routes (`index`, `training`, `explore`)
-- `app/_layout.tsx` wraps everything with `AuthProvider` (outermost) → `TrainingSessionProvider`, and includes stack routes for `login`, `register`, `chat/[scenarioId]`, and `feedback/[scenarioId]`
-- `app/(tabs)/index.tsx` now acts as an auth gate: redirects to `/login` when unauthenticated, shows a loading spinner during auth hydration, then redirects to `/(tabs)/dashboard`
+- `app/_layout.tsx` wraps everything with `AuthProvider` (outermost) → `TrainingSessionProvider`, and includes stack routes for `login`, `register`, `sessions`, `learning-path`, `chat/[scenarioId]`, and `feedback/[scenarioId]`
+- `app/(tabs)/index.tsx` acts as an auth gate and redirects unauthenticated users to `/login`
 
 The existing `features/training/*` architecture is still present and reusable.
 
 Auth feature module (`features/auth/`):
 - `auth-api.ts` — API client for auth endpoints and Firebase Auth REST flows; falls back to backend auth when Firebase is not configured
-- `auth-context.tsx` — React context provider managing login/register/logout, secure session persistence, token validation on hydration via `GET /auth/me`, silent refresh scheduling, and automatic token accessor wiring for the training API client
-- `secure-auth-storage.ts` — SecureStore-backed auth persistence with AsyncStorage fallback when SecureStore is unavailable
+- `auth-context.tsx` — React context provider managing login/register/logout, optional remembered sessions, silent refresh, and automatic token accessor wiring
+- `secure-auth-storage.ts` — Expo SecureStore persistence on native with AsyncStorage fallback on web and legacy migration support
 
 Current integration level:
-- frontend auth is fully wired: login/register screens, Firebase Auth when configured, JWT token persistence, automatic token injection on all protected API calls
+- frontend auth is fully wired: login/register screens, Firebase Auth when configured, and automatic token injection on all protected API calls
 - chat/feedback flow is now wired to real session continuity (`session_id` carried through routes)
 - analytics now consumes persisted backend session snapshot + recent events when a session is active
 - assistant and learn tabs now use real backend AI responses via `POST /assistant/ask`
+- the Learn tab loads lesson content and quiz state from backend APIs instead of a hardcoded frontend array
+- lesson detail screens render persisted sections, submit scored quizzes, display answer explanations, and refresh XP/path unlocks
 - dashboard and scenarios now consume backend scenario catalog (`GET /scenario/catalog`) through shared `useTrainingSession` state
 - dashboard header shows personalized greeting ("Bună, {displayName}") and logout button
 - local continuity is enabled via AsyncStorage for training session state, assistant/learn conversations, and in-progress chat/feedback continuity
-- auth session persistence now prefers `expo-secure-store` on supported platforms, with AsyncStorage fallback
+- login includes an enabled-by-default "Ține-mă minte" option; remembered sessions persist for a fixed maximum of 7 days, while unchecked sessions remain memory-only
 - local continuity keys for training, assistant, learn, chat, and feedback are scoped per-user (storage key includes user ID) so each account has isolated training data
 - silent auth refresh is scheduled before JWT expiry to reduce session drops
 - protected API calls in `useTrainingSession` are gated on `isAuthenticated` — no backend calls are made before login
+- the dashboard exposes session history; users can activate a previous session, open its analytics, or resume its latest pending scenario
+- the dashboard includes a learning-path card showing current level, XP, overall progress, and next required activity
 
-## Recent Progress (April-May 2026)
+## Recent Progress (April-June 2026)
+- Completed the first backend-driven learning and assessment milestone:
+  - Alembic revision `20260612_0009` adds normalized lesson, section, quiz question/option, attempt, and answer tables
+  - migration seeds seven Romanian lessons, fourteen questions, and their answer options
+  - protected lesson catalog/detail, quiz submission, and paginated attempt-history APIs were added
+  - quiz grading validates complete answer sets and question/option ownership inside one transaction
+  - every attempt is persisted; lesson XP is awarded only on the first passing attempt
+  - learning-path prerequisites control locked lesson access, and passing the quiz completes the corresponding lesson step
+  - the old manual completion endpoint now requires an existing passing quiz
+  - Learn UI now consumes backend lessons, sections, status, attempts, scores, explanations, and quiz results
+  - learning-path lesson actions deep-link directly into the required backend lesson
+  - endpoint and repository tests cover failure, pass, retry, rollback, one-time XP, locks, isolation, and history
+- Completed the production-v1 real AI assistant phase:
+  - `/assistant/ask` now uses Ollama when enabled and validates structured responses with Pydantic
+  - conversation history is limited to 8 messages and 600 characters per message
+  - untrusted conversation/context data is isolated in a JSON block with explicit prompt-injection defenses
+  - authenticated adaptive-profile context is derived server-side; unattempted areas are not presented as weaknesses
+  - optional lesson and owned scenario context can be included
+  - explicit harmful requests are refused before model invocation
+  - disabled, unavailable, timed-out, malformed, or invalid model responses use the deterministic coach
+  - response metadata includes `content_source`, `llm_model`, `generation_ms`, `fallback_reason`, and `safety_status`
+  - assistant and lesson chat UIs send bounded history and display AI/fallback source labels
+  - tests cover valid output, invalid output, outage fallback, bounded context, prompt injection isolation, harmful-request refusal, and harmless security questions
+- Added a structured learning path:
+  - three sequential modules: beginner, intermediate, and advanced
+  - lesson steps plus attack/difficulty-specific scenario requirements
+  - module unlocking based on completed requirements and persisted adaptive mastery scores
+  - persistent XP, levels, current/longest streak, and completed lessons
+  - daily activity and weekly scenario objectives
+  - unlockable badges based on activity, accuracy, streaks, and module completion
+  - dedicated `/learning-path` screen with direct lesson/scenario actions
+  - migration `20260608_0007` adds `user_learning_path_progress`
+  - scenario evaluation awards XP atomically with score/mastery updates
+  - endpoint tests cover initial state, idempotent lesson completion, locked content, XP, and module unlocking
+- Added backend-backed session history and recovery:
+  - `GET /sessions` returns an ownership-scoped, paginated list ordered by latest update
+  - summaries include score, accuracy, generated/evaluated counts, latest attack/difficulty, and pending scenario ID
+  - `app/sessions.tsx` supports continuing a session, viewing its analytics, and resuming an unevaluated scenario
+  - `useTrainingSession.activateSession(...)` restores server stats/events and makes a historical session active
+  - backend tests cover pagination, ordering, ownership isolation, authentication, pending scenarios, and empty history
+  - scenario persistence order was corrected so PostgreSQL parent rows exist before attempt/event FK writes
+- Fixed stale feedback navigation across logout/account changes:
+  - root stack now protects tabs, chat, feedback, and modal routes with `Stack.Protected`
+  - logout explicitly replaces the active route with `/login`
+  - delayed chat-to-feedback navigation is cancelled when auth/user/component state changes
+  - feedback redirects to Home when neither current evaluation nor user-scoped persisted context exists
+- Added deterministic scenario generation from catalog selections:
+  - `POST /scenario/generate` accepts optional `template_id`
+  - catalog template IDs resolve through the same shared helper used to build catalog responses
+  - mismatched template/attack/difficulty requests return `422`
+  - the frontend catalog passes the selected template ID through the chat route and training provider
+  - dashboard and adaptive flows keep random template selection when no `template_id` is supplied
+- Added full generated-scenario persistence and restoration:
+  - Alembic revision `20260607_0006` stores `template_id`, channel, attacker message, options, and red flags
+  - `GET /scenario/{scenario_id}` restores the exact generated payload with per-user ownership enforcement
+  - chat recovery loads persisted generated scenarios before falling back to fresh generation
+  - backend tests cover payload serialization, restart restoration, unknown scenarios, and cross-user access
 - Backend refactor completed: service layer extracted from `main.py` into `training_service.py`.
 - Added session timeline events in backend for `scenario_generated` and `answer_evaluated`.
 - Extended API contract with `session_stats.recent_events`.
@@ -246,8 +330,12 @@ Current integration level:
   - backend `/auth/me` now surfaces validation conflicts with explicit `409` instead of masking them as generic auth errors
 - Added Firebase / env / run-script support:
   - backend loads `BackendAPI/.env` via `python-dotenv`
-  - `run-all.sh` now validates `.env`, `.env.local`, `.venv`, and `node_modules` before startup
-  - `run-all.sh` starts backend on `127.0.0.1:8000` with `--lifespan off` and waits for `/health`
+- `run-all.sh` is the standard full-app launcher:
+  - generates a private `.env.production` with strong local secrets on first run
+  - starts PostgreSQL, Redis, Alembic migrations, FastAPI, and Prometheus through Docker Compose
+  - forwards Firebase and Ollama settings from `BackendAPI/.env` into the API container
+  - waits for `/health/ready`, optionally runs the production smoke test, and starts Expo
+  - stops containers on `Ctrl+C` while preserving Docker data volumes
   - Expo package versions were aligned to the installed SDK
 - Added Alembic migration `20260513_0003`:
   - creates `users` table
@@ -268,7 +356,8 @@ Current integration level:
   - modified `app/(tabs)/dashboard.tsx` — personalized greeting ("Bună, {displayName}"), logout button replaces notification bell
   - modified `features/training/useTrainingSession.tsx` — all protected API calls gated on `isAuthenticated`, per-user storage key (includes user ID), state reset on user identity change
 - Added auth refresh support:
-  - backend `POST /auth/refresh` issues a new access token for authenticated users
+  - local backend auth uses separate typed JWTs: 60-minute access tokens and 7-day refresh tokens
+  - backend `POST /auth/refresh` validates a refresh token supplied in the request body and rotates both tokens
   - frontend schedules silent refresh before JWT expiry and retries gracefully on transient failures
 - Scoped assistant/learn/chat/feedback continuity keys per-user:
   - assistant, learn, chat progress, and feedback context storage keys now include user ID
@@ -291,11 +380,11 @@ Current integration level:
 8. User can log out (clears auth state, redirects to login).
 
 ## Important Design Decisions
-- The scenario content is still rule-based for now, not LLM-generated.
+- Adaptive/random scenario content uses local Ollama when enabled, with validated rule-based fallback.
 - The app keeps a stable API contract so the frontend will not break when LLM generation is added later.
 - The frontend is now organized feature-first for readability and future scalability.
 - The UI theme is intentionally cyber-themed with dark console-like styling.
-- Auth token is stored in AsyncStorage (acceptable for MVP; `expo-secure-store` recommended for production).
+- Remembered auth sessions are stored in Expo SecureStore on native; web uses the AsyncStorage fallback and should move to secure HTTP-only cookies for a production web deployment.
 - Training session state is scoped per-user in AsyncStorage to prevent cross-account data leakage.
 
 ## Main Files to Know
@@ -313,6 +402,7 @@ Current integration level:
 - `BackendAPI/migrations/versions/20260507_0001_initial_schema.py`
 - `BackendAPI/migrations/versions/20260511_0002_persist_scenario_rule.py`
 - `BackendAPI/migrations/versions/20260513_0003_add_users_and_session_ownership.py`
+- `BackendAPI/migrations/versions/20260607_0006_persist_generated_scenario_payload.py`
 - `BackendAPI/auth_service.py`
 - `BackendAPI/tests/test_api_endpoints.py`
 - `BackendAPI/tests/test_persistence_repository.py`
@@ -343,15 +433,129 @@ Current integration level:
 - `CyberSecurityApp/features/training/components/FeedbackPanel.tsx`
 - `CyberSecurityApp/package.json` (AsyncStorage dependency)
 
-## Remaining Tasks / Suggested Roadmap
-Priority order (next steps at top):
+## Production V1 Implementation Order
+The target is now a complete production-ready v1, not an MVP. Implement in this order:
 
-### 1. Add LLM integration
-When ready:
-- use an LLM for generating scenario text
-- validate the output shape strictly (match `ScenarioTemplate` / `ScenarioRule`)
-- keep a rule-based fallback if AI output fails
-- expose provider/model via env (e.g., `LLM_API_KEY`, `LLM_MODEL`, `LLM_BASE_URL`)
+### Phase 1. Production and security foundation
+- introduce explicit `development`, `test`, and `production` runtime environments
+- validate production secrets, database configuration, CORS origins, and proxy trust at startup
+- add liveness/readiness checks, security headers, request correlation, and structured logging
+- move rate limiting and transient shared state to Redis for multi-instance deployments
+- define PostgreSQL deployment, migrations, backups, restore procedures, monitoring, and error tracking
+- add CI checks for backend tests, frontend lint/type-check, migrations, and production builds
+
+### Phase 2. Real AI assistant (complete)
+- upgrade `/assistant/ask` to use Ollama with strict Pydantic structured-output validation
+- retain the deterministic coaching fallback for disabled, invalid, unavailable, or timed-out AI responses
+- send bounded conversation, lesson, scenario, and user-weakness context
+- expose content source, model, generation latency, and fallback reason
+- add assistant safety tests, prompt-injection resistance, context limits, and failure observability
+
+### Phase 3. Backend-driven learning and assessment system (in progress)
+- move lesson content out of frontend screens into persisted backend models and APIs
+- add lesson quizzes, module exams, scoring, attempts, prerequisites, and mastery rules
+- persist lesson/exam history and issue completion summaries or certificates
+- connect recommendations to learning-path gaps and adaptive scenario performance
+
+### Phase 4. Complete training modes and scenario coverage
+- add spear phishing, vishing, QR phishing, business impersonation, and social-media scams
+- add campaign mode, daily challenges, timed exercises, random/adaptive training, retry, review, and bookmarks
+- support richer channel-specific simulations while preserving safe fictitious content
+- expand scenario validation, diversity controls, scoring tests, and recommendation tests
+
+### Phase 5. Global analytics and reporting
+- aggregate progress across all user sessions instead of requiring one active session
+- add per-attack/per-difficulty trends, moving averages, range comparison, consistency, and learning-time metrics
+- generate weakness insights and recommended next actions
+- add CSV/PDF export and shareable progress reports
+
+### Phase 6. Complete account and privacy management
+- add email verification, forgot/reset password, password change, and profile editing
+- add active-device/session management and remote logout
+- add personal-data export, account deletion, retention rules, and consent/privacy screens
+- harden deep links, stale-session cleanup, and Firebase/local-auth parity
+
+### Phase 7. Engagement and notifications
+- add configurable reminders, daily/weekly challenges, streak warnings, and achievement notifications
+- add an in-app notification center and notification preference controls
+- implement push notification registration and backend scheduling
+
+### Phase 8. Administration
+- build a protected web admin interface
+- manage scenarios, lessons, quizzes, badges, challenges, and users
+- expose anonymized product/training analytics
+- expose AI generation health, latency, validation failures, and fallback rates
+
+### Phase 9. Release-quality client experience
+- finish responsive layouts for phones, tablets, and web
+- apply safe-area and keyboard handling to every full-screen flow and composer
+- add accessibility labels, screen-reader behavior, dynamic-text support, and touch-target validation
+- add offline/slow-network states, selective cache controls, animations, final assets, and remove legacy routes
+- configure Android/iOS identifiers, EAS profiles, signed builds, and store metadata
+
+### Phase 10. Full verification and release
+- add frontend unit/component tests and end-to-end user-flow tests
+- run PostgreSQL integration and migration tests
+- test Firebase and local auth, Ollama fallback, restart recovery, expired tokens, and degraded networks
+- validate on physical Android/iOS devices and supported web sizes
+- complete deployment, backup/restore drill, monitoring alerts, security review, and release checklist
+
+### Current Production V1 Progress (2026-06-12)
+Phases 1 and 2 are complete.
+
+Phase 1 implemented:
+- centralized backend runtime configuration in `BackendAPI/app_config.py`
+- explicit `APP_ENV` support for development, test, and production
+- fail-fast production validation for JWT secret strength, PostgreSQL, and exact CORS origins
+- wildcard CORS rejection and local-development origin defaults
+- trusted proxy headers are disabled unless `TRUST_PROXY_HEADERS=true`
+- API documentation defaults to disabled in production
+- security headers and request correlation IDs on API responses
+- public database readiness endpoint at `GET /health/ready`
+- sanitized `.env.example` values with no machine-specific Firebase credential path
+- backend configuration/readiness/security regression tests
+- GitHub Actions CI for backend tests, frontend lint/type-check, and production web export
+- structured JSON request/error logging with request IDs, latency, status, client, and user context
+- optional Sentry error/performance tracking through environment configuration
+- Prometheus request/rate-limit metrics at `GET /metrics`
+- Redis-backed distributed rate limiting with fail-closed production behavior
+- Docker production stack for FastAPI, PostgreSQL, Redis, one-shot Alembic migrations, and optional Prometheus
+- PostgreSQL + Redis integration flow in GitHub Actions
+- automated PostgreSQL backup and guarded restore scripts
+- production stack smoke test covering auth, catalog, generation, evaluation, readiness, and metrics
+- Prometheus alert rules for API downtime, elevated 5xx rate, and Redis limiter errors
+- local validation completed successfully against the real Docker stack
+- backup/restore recovery tested successfully, followed by a passing post-restore smoke test
+
+Phase 2 implemented:
+- Ollama-backed `/assistant/ask` with strict structured-output validation
+- bounded conversation history plus lesson, scenario, and authenticated learning-profile context
+- prompt-injection isolation and deterministic harmful-request refusal
+- deterministic fallback for disabled, unavailable, timed-out, or invalid AI responses
+- response source/model/latency/fallback/safety metadata and structured fallback logs
+- frontend AI/fallback labels in assistant and lesson conversations
+- assistant generation, safety, context-limit, and endpoint regression tests
+
+Phase 3 first milestone implemented:
+- persisted backend lesson catalog and ordered content sections
+- normalized quiz questions/options plus per-user attempts and answers
+- scored pass rules, answer explanations, attempt history, and atomic one-time XP
+- prerequisite enforcement shared with the existing learning path
+- backend-driven Learn UI and quiz completion flow
+- Alembic revision `20260612_0009` with seeded curriculum data
+
+Next implementation milestone: Phase 3 module exams, richer mastery rules, completion summaries,
+and downloadable certificates.
+
+## Previous MVP Roadmap
+The items below remain useful implementation detail, but the production phases above define priority.
+
+### 1. Extend LLM integration to the assistant
+Scenario generation status: implemented with local Ollama (`qwen3:8b`), strict Pydantic
+structured-output validation, deterministic catalog bypass, and rule-based fallback.
+
+Status: implemented with structured Ollama output, bounded contextual conversation,
+prompt-injection isolation, safety refusal, observability metadata, and deterministic fallback.
 
 ### 2. Full responsive UI pass
 Focus:
@@ -398,13 +602,15 @@ Current approach:
 - dual-write mode (existing in-memory flow + DB writes)
 - existing `/scenario/generate` and `/scenario/evaluate` contracts preserved
 - persisted reads available via `/session/{session_id}`, `/session/{session_id}/events`, and `/session/{session_id}/trends`
+- generated scenarios are persisted with their complete render payload and restored via `/scenario/{scenario_id}`
 - when a known `session_id` is reused after restart, in-memory state is restored from persisted snapshot before new updates
 - Alembic migration tooling is now in place and wired in startup flow
 - PostgreSQL is now the default (via `POSTGRES_*` or `DATABASE_URL`); SQLite is opt-in only
 - session progress reads now use persisted state as source of truth (no in-memory progress cache)
+- scenario evaluation is idempotent: score, mastery, and timeline events commit atomically once per `scenario_id`
+- same-option retries return the stored result; retries with a different option return `409 Conflict`
 
 Next persistence step:
-- reduce remaining transient in-memory dependencies (primarily scenario context lifecycle) where practical
 - expand repository-level tests for trend/event query behavior and pagination edge cases
 
 ### 7. Extract reusable hooks or subcomponents further
@@ -430,13 +636,14 @@ Status: **COMPLETE**.
 
 Implemented:
 - login/register screens with cyber-themed UI and Romanian labels
-- `AuthProvider` context with JWT token persistence in AsyncStorage
+- `AuthProvider` with optional "Ține-mă minte" persistence, enabled by default and capped at 7 days
 - automatic token injection on all protected API calls via `setAuthTokenAccessor()`
 - auth gate in `(tabs)/index.tsx` redirecting unauthenticated users to `/login`
 - per-user training session storage (isolated by user ID)
 - personalized dashboard greeting + logout button
-- token validation on app startup via `GET /auth/me`
-- silent refresh before JWT expiry via `POST /auth/refresh`
+- unchecked sessions stay in memory and require login after a cold start
+- remembered sessions use SecureStore on native and are rehydrated through `/auth/me` or `/auth/refresh`
+- silent refresh before access-token expiry via a separate refresh token
 
 ### Recent fixes (2026-05-29)
 - Switched backend default DB config to PostgreSQL using `POSTGRES_*` (or `DATABASE_URL`), with SQLite available only when explicitly set.
@@ -466,36 +673,37 @@ Implemented:
 - Auth state now prefers Firebase-backed sessions when Firebase is configured; otherwise the backend JWT flow remains available as a fallback path
 
 ## Run Instructions
-### Backend
+### Standard full app
 ```bash
-cd /Users/robertbalasoiu/Robert/Licenta2026/LucrareLicenta/BackendAPI
-source .venv/bin/activate
-uvicorn main:app --host 127.0.0.1 --port 8000 --lifespan off
+cd /Users/robertbalasoiu/Robert/Licenta2026/LucrareLicenta
+./run-all.sh
 ```
 
-Backend tests:
+The default opens Expo web. Alternative modes:
+
+```bash
+FRONTEND_MODE=start ./run-all.sh
+FRONTEND_MODE=ios ./run-all.sh
+FRONTEND_MODE=android ./run-all.sh
+RUN_SMOKE_TEST=true ./run-all.sh
+```
+
+Stop with `Ctrl+C`; PostgreSQL, Redis, and Prometheus data volumes are preserved.
+
+### Backend tests
 ```bash
 cd /Users/robertbalasoiu/Robert/Licenta2026/LucrareLicenta/BackendAPI
 source .venv/bin/activate
 ./.venv/bin/python -m unittest discover -s tests -p "test_*.py" -q
 ```
 
-### Frontend
-```bash
-cd /Users/robertbalasoiu/Robert/Licenta2026/LucrareLicenta/CyberSecurityApp
-npx expo start
-```
-
 ## Notes for the Next AI Tool
 Focus on incremental improvements only.
 
 Good next tasks:
-- make scenario generation deterministic from the catalog card selection (`template_id`), not only by attack type/difficulty
-- persist and restore the full generated scenario payload from the backend, including options, red flags, and channel
-- make `/scenario/evaluate` idempotent and block duplicate scoring for the same `scenario_id`
-- add a real session history screen with backend-backed session list and latest-session resume
+- continue Phase 3 with module exams and persisted exam attempts
+- add completion summaries, certificate issuance, and lesson/exam mastery recommendations
 - harden auth/session handling further, especially deep links and stale-session cleanup
-- add LLM integration with strict schema validation + fallback once the deterministic scenario flow is stable
 - finish a full responsive UI pass across all screens
 - add compare-mode analytics, export/share, and richer trend visualizations
 - add selective clear controls for cache if the current broad reset becomes too blunt

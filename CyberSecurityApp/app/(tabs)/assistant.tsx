@@ -1,8 +1,9 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { AppBackdrop } from '@/components/app-backdrop';
 import { useAuth } from '@/features/auth/auth-context';
 import { askAssistant } from '@/features/training/api';
 import {
@@ -10,13 +11,24 @@ import {
   buildUserStorageKey,
   clearTrainingLocalCache,
 } from '@/features/training/local-cache';
+import type { AssistantAskApiResponse } from '@/features/training/types';
 import { TrainingColors } from '@/features/training/ui-theme';
+import { useTrainingSession } from '@/features/training/useTrainingSession';
 
-type Msg = { id: string; role: 'user' | 'assistant'; text: string };
+type Msg = {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+  source?: AssistantAskApiResponse['content_source'];
+  model?: string | null;
+  generationMs?: number | null;
+  safetyStatus?: AssistantAskApiResponse['safety_status'];
+};
 const ASSISTANT_MESSAGES_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 const ASSISTANT_MESSAGES_MAX_ITEMS = 40;
 
 type PersistedAssistantMessages = {
+  ownerUserId: string;
   messages: Msg[];
   updatedAt: number;
 };
@@ -38,10 +50,15 @@ const suggestions = [
 
 export default function AssistantScreen() {
   const { user } = useAuth();
+  const { sessionId, scenario, attackType, difficulty } = useTrainingSession();
   const [messages, setMessages] = useState<Msg[]>(defaultMessages);
   const [draft, setDraft] = useState('');
   const [thinking, setThinking] = useState(false);
   const [isHydrated, setIsHydrated] = useState(false);
+  const [hydratedUserId, setHydratedUserId] = useState<string | null>(null);
+  const currentUserId = user?.id ?? null;
+  const activeUserIdRef = useRef<string | null>(currentUserId);
+  activeUserIdRef.current = currentUserId;
   const storageKey = useMemo(
     () => buildUserStorageKey(ASSISTANT_MESSAGES_STORAGE_KEY, user?.id),
     [user?.id]
@@ -49,10 +66,12 @@ export default function AssistantScreen() {
 
   useEffect(() => {
     let cancelled = false;
+    const hydrationUserId = user?.id ?? null;
 
     setMessages(defaultMessages);
     setDraft('');
     setThinking(false);
+    setHydratedUserId(null);
     setIsHydrated(false);
 
     const hydrate = async () => {
@@ -62,11 +81,9 @@ export default function AssistantScreen() {
           return;
         }
 
-        const parsed = JSON.parse(raw) as Msg[] | PersistedAssistantMessages;
-        if (Array.isArray(parsed)) {
-          if (parsed.length > 0) {
-            setMessages(parsed.slice(-ASSISTANT_MESSAGES_MAX_ITEMS));
-          }
+        const parsed = JSON.parse(raw) as PersistedAssistantMessages;
+        if (parsed.ownerUserId !== hydrationUserId) {
+          await AsyncStorage.removeItem(storageKey);
           return;
         }
 
@@ -85,6 +102,7 @@ export default function AssistantScreen() {
         // Ignore local cache read errors.
       } finally {
         if (!cancelled) {
+          setHydratedUserId(hydrationUserId);
           setIsHydrated(true);
         }
       }
@@ -94,19 +112,20 @@ export default function AssistantScreen() {
     return () => {
       cancelled = true;
     };
-  }, [storageKey]);
+  }, [storageKey, user?.id]);
 
   useEffect(() => {
-    if (!isHydrated) {
+    if (!isHydrated || !user || hydratedUserId !== user.id) {
       return;
     }
 
     const stateToPersist: PersistedAssistantMessages = {
+      ownerUserId: user.id,
       messages: messages.slice(-ASSISTANT_MESSAGES_MAX_ITEMS),
       updatedAt: Date.now(),
     };
     void AsyncStorage.setItem(storageKey, JSON.stringify(stateToPersist));
-  }, [isHydrated, messages, storageKey]);
+  }, [hydratedUserId, isHydrated, messages, storageKey, user]);
 
   const clearLocalCache = async () => {
     await clearTrainingLocalCache(user?.id);
@@ -118,33 +137,64 @@ export default function AssistantScreen() {
 
   const send = async (text: string) => {
     const value = text.trim();
-    if (!value || thinking) return;
+    const requestUserId = user?.id ?? null;
+    if (!value || thinking || !requestUserId) return;
 
     setMessages((m) => [...m, { id: `u-${Date.now()}`, role: 'user', text: value }]);
     setDraft('');
     setThinking(true);
 
     try {
-      const data = await askAssistant({ message: value });
+      const history = messages.slice(-8).map((message) => ({
+        role: message.role,
+        content: message.text.slice(0, 600),
+      }));
+      const data = await askAssistant({
+        message: value,
+        history,
+        session_id: sessionId ?? undefined,
+        scenario_id: scenario?.scenario_id,
+        attack_type: scenario?.attack_type ?? attackType,
+        difficulty: scenario?.difficulty ?? difficulty,
+      });
+      if (activeUserIdRef.current !== requestUserId) {
+        return;
+      }
       const tipsText = data.quick_tips.map((tip, index) => `${index + 1}. ${tip}`).join('\n');
       const assistantText = tipsText ? `${data.answer}\n\n${tipsText}` : data.answer;
-      setMessages((m) => [...m, { id: `a-${Date.now()}`, role: 'assistant', text: assistantText }]);
-    } catch {
       setMessages((m) => [
         ...m,
         {
           id: `a-${Date.now()}`,
           role: 'assistant',
-          text: 'Nu am putut contacta asistentul acum. Verifică backend-ul și încearcă din nou.',
+          text: assistantText,
+          source: data.content_source,
+          model: data.llm_model,
+          generationMs: data.generation_ms,
+          safetyStatus: data.safety_status,
         },
       ]);
+    } catch {
+      if (activeUserIdRef.current === requestUserId) {
+        setMessages((m) => [
+          ...m,
+          {
+            id: `a-${Date.now()}`,
+            role: 'assistant',
+            text: 'Nu am putut contacta asistentul acum. Verifică backend-ul și încearcă din nou.',
+          },
+        ]);
+      }
     } finally {
-      setThinking(false);
+      if (activeUserIdRef.current === requestUserId) {
+        setThinking(false);
+      }
     }
   };
 
   return (
     <View style={styles.screen}>
+      <AppBackdrop grid />
       <View style={styles.header}>
         <View style={styles.headerLeft}>
           <View style={styles.headerIcon}>
@@ -170,6 +220,19 @@ export default function AssistantScreen() {
               </View>
               <View style={styles.assistantBubble}>
                 <Text style={styles.assistantText}>{m.text}</Text>
+                {m.source ? (
+                  <Text style={styles.sourceText}>
+                    {m.source === 'ollama'
+                      ? `Răspuns AI${m.model ? ` · ${m.model}` : ''}${
+                          m.generationMs !== null && m.generationMs !== undefined
+                            ? ` · ${m.generationMs} ms`
+                            : ''
+                        }`
+                      : m.safetyStatus === 'refused'
+                        ? 'Protecție de siguranță'
+                        : 'Ghidare offline verificată'}
+                  </Text>
+                ) : null}
               </View>
             </View>
           ) : (
@@ -288,6 +351,13 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   assistantText: { color: TrainingColors.textPrimary, fontSize: 14, lineHeight: 19 },
+  sourceText: {
+    color: TrainingColors.textMuted,
+    fontSize: 10,
+    fontWeight: '700',
+    marginTop: 8,
+    textTransform: 'uppercase',
+  },
   userRow: { alignItems: 'flex-end' },
   userBubble: {
     maxWidth: '84%',

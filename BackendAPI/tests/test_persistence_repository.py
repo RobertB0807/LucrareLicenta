@@ -10,7 +10,16 @@ from sqlalchemy.orm import sessionmaker
 
 import db
 import persistence_repository
-from persistence_models import ScenarioAttemptORM
+from persistence_models import (
+    LearningQuizAttemptORM,
+    LearningQuizOptionORM,
+    LearningQuizQuestionORM,
+    ScenarioAttemptORM,
+    TrainingSessionORM,
+    UserLearningPathProgressORM,
+    UserLearningProfileORM,
+    UserORM,
+)
 
 
 class PersistenceRepositoryTestCase(unittest.TestCase):
@@ -59,6 +68,42 @@ class PersistenceRepositoryTestCase(unittest.TestCase):
             },
         )
 
+    def _create_user(self, email: str = "repository@example.invalid") -> str:
+        return persistence_repository.create_user(
+            email=email,
+            password_hash="test-hash",
+            display_name="Repository Test",
+        )["id"]
+
+    def _lesson_answers(
+        self,
+        lesson_id: str,
+        *,
+        correct: bool,
+    ) -> list[dict[str, str]]:
+        with persistence_repository.session_scope() as test_session:
+            questions = (
+                test_session.query(LearningQuizQuestionORM)
+                .filter(LearningQuizQuestionORM.lesson_id == lesson_id)
+                .order_by(LearningQuizQuestionORM.order_index.asc())
+                .all()
+            )
+            return [
+                {
+                    "question_id": question.id,
+                    "selected_option_id": (
+                        test_session.query(LearningQuizOptionORM)
+                        .filter(
+                            LearningQuizOptionORM.question_id == question.id,
+                            LearningQuizOptionORM.is_correct.is_(correct),
+                        )
+                        .first()
+                        .id
+                    ),
+                }
+                for question in questions
+            ]
+
     def test_fetch_session_events_respects_order_pagination_and_filters(self) -> None:
         session_id = "repo-events-session"
         self._seed_session(session_id)
@@ -98,6 +143,55 @@ class PersistenceRepositoryTestCase(unittest.TestCase):
         assert empty_page is not None
         self.assertEqual(empty_page["total"], 5)
         self.assertEqual(empty_page["events"], [])
+
+    def test_quiz_attempt_is_atomic_and_awards_lesson_xp_once(self) -> None:
+        user_id = self._create_user()
+        answers = self._lesson_answers("phishing-101", correct=True)
+
+        invalid_answers = [dict(answer) for answer in answers]
+        invalid_answers[0]["selected_option_id"] = "missing-option"
+        with self.assertRaisesRegex(ValueError, "does not belong"):
+            persistence_repository.record_learning_quiz_attempt(
+                user_id=user_id,
+                lesson_id="phishing-101",
+                answers=invalid_answers,
+            )
+
+        with persistence_repository.session_scope() as test_session:
+            self.assertEqual(
+                test_session.query(LearningQuizAttemptORM)
+                .filter(LearningQuizAttemptORM.user_id == user_id)
+                .count(),
+                0,
+            )
+
+        first = persistence_repository.record_learning_quiz_attempt(
+            user_id=user_id,
+            lesson_id="phishing-101",
+            answers=answers,
+        )
+        second = persistence_repository.record_learning_quiz_attempt(
+            user_id=user_id,
+            lesson_id="phishing-101",
+            answers=answers,
+        )
+        failed_retry = persistence_repository.record_learning_quiz_attempt(
+            user_id=user_id,
+            lesson_id="phishing-101",
+            answers=self._lesson_answers("phishing-101", correct=False),
+        )
+
+        self.assertTrue(first["passed"])
+        self.assertEqual(first["xp_awarded"], 25)
+        self.assertTrue(second["passed"])
+        self.assertEqual(second["xp_awarded"], 0)
+        self.assertFalse(failed_retry["passed"])
+        self.assertTrue(failed_retry["lesson_completed"])
+        self.assertTrue(failed_retry["was_already_completed"])
+        self.assertEqual(failed_retry["xp_awarded"], 0)
+        progress = persistence_repository.fetch_learning_path_progress(user_id)
+        self.assertEqual(progress["xp"], 25)
+        self.assertEqual(progress["completed_lessons"], ["phishing-101"])
 
     def test_fetch_session_trends_filters_and_running_metrics(self) -> None:
         session_id = "repo-trends-session"
@@ -177,6 +271,47 @@ class PersistenceRepositoryTestCase(unittest.TestCase):
         self.assertIsNone(persistence_repository.fetch_session_trends("missing-session", limit=20, offset=0))
         self.assertIsNone(persistence_repository.fetch_session_trend_aggregates("missing-session"))
 
+    def test_generated_scenario_payload_is_persisted_and_restored(self) -> None:
+        session_id = "repo-generated-scenario-session"
+        scenario_id = "repo-generated-scenario"
+        self._seed_session(session_id)
+
+        persistence_repository.record_generated_scenario(
+            session_id=session_id,
+            scenario_id=scenario_id,
+            attack_type="phishing",
+            difficulty="medium",
+            template_id="phishing-medium-2",
+            channel="email",
+            attacker_message="Mesaj de test",
+            options=[
+                {"id": "click", "text": "Deschid linkul"},
+                {"id": "report", "text": "Raportez mesajul"},
+            ],
+            red_flags=["Domeniu suspect", "Urgenta artificiala"],
+            correct_option_id="report",
+            correct_explanation="Corect",
+            incorrect_explanation="Incorect",
+            content_source="ollama",
+            llm_model="qwen3:8b",
+            generation_ms=1500,
+        )
+
+        restored = persistence_repository.fetch_generated_scenario(scenario_id)
+        self.assertIsNotNone(restored)
+        assert restored is not None
+        self.assertEqual(restored["session_id"], session_id)
+        self.assertEqual(restored["template_id"], "phishing-medium-2")
+        self.assertEqual(restored["content_source"], "ollama")
+        self.assertEqual(restored["llm_model"], "qwen3:8b")
+        self.assertEqual(restored["generation_ms"], 1500)
+        self.assertEqual(restored["channel"], "email")
+        self.assertEqual(restored["attacker_message"], "Mesaj de test")
+        self.assertEqual(restored["options"][1]["id"], "report")
+        self.assertEqual(restored["red_flags"], ["Domeniu suspect", "Urgenta artificiala"])
+
+        self.assertIsNone(persistence_repository.fetch_generated_scenario("missing-scenario"))
+
     def test_user_creation_and_session_ownership(self) -> None:
         user = persistence_repository.create_user(
             email="owner@example.com",
@@ -208,6 +343,26 @@ class PersistenceRepositoryTestCase(unittest.TestCase):
         self.assertTrue(persistence_repository.ensure_session_owner("owned-session", user["id"]))
         self.assertFalse(persistence_repository.ensure_session_owner("owned-session", "different-user"))
 
+        persistence_repository.upsert_session_progress(
+            session_id="legacy-ownerless-session",
+            total_score=0,
+            total_attempts=0,
+            total_correct=0,
+            correct_streak=0,
+            incorrect_streak=0,
+            per_attack_stats={
+                "phishing": {"attempts": 0, "correct": 0},
+                "smishing": {"attempts": 0, "correct": 0},
+                "impersonation": {"attempts": 0, "correct": 0},
+            },
+        )
+        self.assertFalse(
+            persistence_repository.ensure_session_owner(
+                "legacy-ownerless-session",
+                user["id"],
+            )
+        )
+
     def test_firebase_user_mapping_creates_and_links_local_user(self) -> None:
         firebase_user = persistence_repository.create_or_update_firebase_user(
             firebase_uid="firebase-user-123",
@@ -237,6 +392,83 @@ class PersistenceRepositoryTestCase(unittest.TestCase):
         )
         self.assertEqual(linked["id"], legacy_user["id"])
         self.assertEqual(linked["firebase_uid"], "firebase-linked-456")
+
+    def test_profile_update_and_account_delete_remove_owned_data(self) -> None:
+        user_id = self._create_user("profile-delete@example.invalid")
+        updated = persistence_repository.update_user_display_name(user_id, "Updated Profile")
+        self.assertIsNotNone(updated)
+        assert updated is not None
+        self.assertEqual(updated["display_name"], "Updated Profile")
+
+        persistence_repository.upsert_session_progress(
+            session_id="profile-delete-session",
+            total_score=10,
+            total_attempts=1,
+            total_correct=1,
+            correct_streak=1,
+            incorrect_streak=0,
+            per_attack_stats={
+                "phishing": {"attempts": 1, "correct": 1},
+                "smishing": {"attempts": 0, "correct": 0},
+                "impersonation": {"attempts": 0, "correct": 0},
+            },
+            owner_user_id=user_id,
+        )
+        persistence_repository.record_generated_scenario(
+            session_id="profile-delete-session",
+            scenario_id="profile-delete-scenario",
+            attack_type="phishing",
+            difficulty="easy",
+            template_id="phishing-easy-1",
+            channel="email",
+            attacker_message="Test",
+            options=[{"id": "report", "text": "Raportează"}],
+            red_flags=["Test"],
+            correct_option_id="report",
+            correct_explanation="Corect",
+            incorrect_explanation="Incorect",
+        )
+        persistence_repository.record_user_learning_attempt(
+            user_id=user_id,
+            attack_type="phishing",
+            difficulty="easy",
+            is_correct=True,
+        )
+        persistence_repository.complete_learning_path_lesson(
+            user_id=user_id,
+            lesson_id="phishing-101",
+        )
+
+        self.assertTrue(persistence_repository.delete_user_account(user_id))
+        self.assertIsNone(persistence_repository.fetch_user_by_id(user_id))
+        self.assertFalse(persistence_repository.delete_user_account(user_id))
+
+        with persistence_repository.session_scope() as test_session:
+            self.assertEqual(test_session.query(UserORM).filter(UserORM.id == user_id).count(), 0)
+            self.assertEqual(
+                test_session.query(TrainingSessionORM)
+                .filter(TrainingSessionORM.owner_user_id == user_id)
+                .count(),
+                0,
+            )
+            self.assertEqual(
+                test_session.query(ScenarioAttemptORM)
+                .filter(ScenarioAttemptORM.scenario_id == "profile-delete-scenario")
+                .count(),
+                0,
+            )
+            self.assertEqual(
+                test_session.query(UserLearningProfileORM)
+                .filter(UserLearningProfileORM.user_id == user_id)
+                .count(),
+                0,
+            )
+            self.assertEqual(
+                test_session.query(UserLearningPathProgressORM)
+                .filter(UserLearningPathProgressORM.user_id == user_id)
+                .count(),
+                0,
+            )
 
     def test_learning_profile_attempts_are_persisted_and_updated(self) -> None:
         user = persistence_repository.create_user(

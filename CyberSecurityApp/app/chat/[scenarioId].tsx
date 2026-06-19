@@ -4,6 +4,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { AppBackdrop } from '@/components/app-backdrop';
 import { useAuth } from '@/features/auth/auth-context';
 import {
   buildUserChatProgressPrefix,
@@ -22,15 +23,22 @@ type Msg =
 
 const CHAT_PROGRESS_TTL_MS = 1000 * 60 * 60 * 24 * 7;
 const CHAT_PROGRESS_MAX_ENTRIES = 12;
+const GENERATED_SCENARIO_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type PersistedChatProgress = {
+  ownerUserId: string;
   messages: Msg[];
   scriptDone: boolean;
   scenarioId: string | null;
   updatedAt: number;
 };
 
-async function cleanupChatProgressStorage(currentKey: string, chatProgressPrefix: string): Promise<void> {
+async function cleanupChatProgressStorage(
+  currentKey: string,
+  chatProgressPrefix: string,
+  expectedUserId: string | null
+): Promise<void> {
   const storage = AsyncStorage as typeof AsyncStorage & {
     multiGet?: (keys: readonly string[]) => Promise<[string, string | null][]>;
     multiRemove?: (keys: readonly string[]) => Promise<void>;
@@ -58,7 +66,11 @@ async function cleanupChatProgressStorage(currentKey: string, chatProgressPrefix
 
     try {
       const parsed = JSON.parse(raw) as PersistedChatProgress;
-      if (typeof parsed.updatedAt !== 'number' || now - parsed.updatedAt > CHAT_PROGRESS_TTL_MS) {
+      if (
+        parsed.ownerUserId !== expectedUserId ||
+        typeof parsed.updatedAt !== 'number' ||
+        now - parsed.updatedAt > CHAT_PROGRESS_TTL_MS
+      ) {
         keysToRemove.push(key);
         continue;
       }
@@ -131,19 +143,31 @@ function extractUrl(text: string): { cleanText: string; url: string } | null {
 }
 
 export default function ChatScenarioScreen() {
-  const { scenarioId, attackType, difficulty, sessionId: routeSessionId } = useLocalSearchParams<{
+  const {
+    scenarioId,
+    templateId,
+    generateNew,
+    attackType,
+    difficulty,
+    runId,
+    sessionId: routeSessionId,
+  } = useLocalSearchParams<{
     scenarioId: string;
+    templateId?: string;
+    generateNew?: string;
     attackType?: string;
     difficulty?: string;
+    runId?: string;
     sessionId?: string;
   }>();
 
-  const { user } = useAuth();
+  const { user, isAuthenticated } = useAuth();
   const {
     scenario,
     isLoading,
     error,
     startSimulation,
+    restoreScenario,
     evaluateWithOptionId,
     evaluation,
     sessionId,
@@ -154,9 +178,12 @@ export default function ChatScenarioScreen() {
   const [scriptDone, setScriptDone] = useState(false);
   const [evaluating, setEvaluating] = useState(false);
   const [isChatStateHydrated, setIsChatStateHydrated] = useState(false);
+  const [hydratedUserId, setHydratedUserId] = useState<string | null>(null);
   const [hasRestoredChatState, setHasRestoredChatState] = useState(false);
   const [restoredScenarioId, setRestoredScenarioId] = useState<string | null>(null);
   const hasGeneratedRef = useRef(false);
+  const animatedScenarioIdRef = useRef<string | null>(null);
+  const choiceInFlightRef = useRef(false);
   const feedbackNavigationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollRef = useRef<ScrollView>(null);
   const chatProgressPrefix = useMemo(
@@ -165,8 +192,8 @@ export default function ChatScenarioScreen() {
   );
   const chatStorageKey = useMemo(
     () =>
-      `${chatProgressPrefix}:${String(scenarioId ?? 'unknown')}:${String(attackType ?? 'phishing')}:${String(difficulty ?? 'easy')}:${String(routeSessionId ?? 'new')}`,
-    [attackType, chatProgressPrefix, difficulty, routeSessionId, scenarioId]
+      `${chatProgressPrefix}:${String(scenarioId ?? 'unknown')}:${String(attackType ?? 'phishing')}:${String(difficulty ?? 'easy')}:${String(routeSessionId ?? 'new')}:${generateNew === 'true' ? `fresh-${String(runId ?? 'new')}` : 'restore'}`,
+    [attackType, chatProgressPrefix, difficulty, generateNew, routeSessionId, runId, scenarioId]
   );
   const feedbackStorageKey = useMemo(
     () => buildUserStorageKey(FEEDBACK_CONTEXT_STORAGE_KEY, user?.id),
@@ -175,10 +202,28 @@ export default function ChatScenarioScreen() {
 
   useEffect(() => {
     let cancelled = false;
+    const hydrationUserId = user?.id ?? null;
+
+    setMessages([]);
+    setTyping(false);
+    setScriptDone(false);
+    setEvaluating(false);
+    setHasRestoredChatState(false);
+    setRestoredScenarioId(null);
+    setHydratedUserId(null);
+    setIsChatStateHydrated(false);
+    hasGeneratedRef.current = false;
+    animatedScenarioIdRef.current = null;
+    choiceInFlightRef.current = false;
 
     const hydrateChatProgress = async () => {
       try {
-        await cleanupChatProgressStorage(chatStorageKey, chatProgressPrefix);
+        await cleanupChatProgressStorage(chatStorageKey, chatProgressPrefix, hydrationUserId);
+
+        if (generateNew === 'true') {
+          await AsyncStorage.removeItem(chatStorageKey);
+          return;
+        }
 
         const raw = await AsyncStorage.getItem(chatStorageKey);
         if (!raw || cancelled) {
@@ -186,8 +231,15 @@ export default function ChatScenarioScreen() {
         }
 
         const parsed = JSON.parse(raw) as PersistedChatProgress;
+        if (parsed.ownerUserId !== hydrationUserId) {
+          await AsyncStorage.removeItem(chatStorageKey);
+          return;
+        }
         if (Array.isArray(parsed.messages)) {
           setMessages(parsed.messages);
+          if (parsed.messages.length > 0) {
+            animatedScenarioIdRef.current = parsed.scenarioId ?? null;
+          }
         }
         setScriptDone(Boolean(parsed.scriptDone));
         setRestoredScenarioId(parsed.scenarioId ?? null);
@@ -197,6 +249,7 @@ export default function ChatScenarioScreen() {
         setRestoredScenarioId(null);
       } finally {
         if (!cancelled) {
+          setHydratedUserId(hydrationUserId);
           setIsChatStateHydrated(true);
         }
       }
@@ -206,51 +259,106 @@ export default function ChatScenarioScreen() {
     return () => {
       cancelled = true;
     };
-  }, [chatProgressPrefix, chatStorageKey]);
+  }, [chatProgressPrefix, chatStorageKey, generateNew, user?.id]);
 
   useEffect(() => {
-    if (!isChatStateHydrated) {
+    if (!isChatStateHydrated || !user || hydratedUserId !== user.id) {
       return;
     }
 
     const stateToPersist: PersistedChatProgress = {
+      ownerUserId: user.id,
       messages,
       scriptDone,
       scenarioId: scenario?.scenario_id ?? null,
       updatedAt: Date.now(),
     };
     void AsyncStorage.setItem(chatStorageKey, JSON.stringify(stateToPersist)).then(() =>
-      cleanupChatProgressStorage(chatStorageKey, chatProgressPrefix)
+      cleanupChatProgressStorage(chatStorageKey, chatProgressPrefix, user.id)
     );
-  }, [chatProgressPrefix, chatStorageKey, isChatStateHydrated, messages, scenario?.scenario_id, scriptDone]);
+  }, [
+    chatProgressPrefix,
+    chatStorageKey,
+    hydratedUserId,
+    isChatStateHydrated,
+    messages,
+    scenario?.scenario_id,
+    scriptDone,
+    user,
+  ]);
 
-  // Generate scenario on mount
+  // Restore an existing generated scenario before creating a replacement.
   useEffect(() => {
     if (!isChatStateHydrated) return;
     if (hasGeneratedRef.current) return;
-    if (hasRestoredChatState && restoredScenarioId && scenario?.scenario_id === restoredScenarioId) {
+
+    const directScenarioId =
+      !templateId &&
+      generateNew !== 'true' &&
+      GENERATED_SCENARIO_ID_PATTERN.test(String(scenarioId ?? ''))
+        ? String(scenarioId)
+        : null;
+    const scenarioIdToRestore =
+      generateNew === 'true'
+        ? null
+        : (hasRestoredChatState ? restoredScenarioId : null) ?? directScenarioId;
+
+    if (scenarioIdToRestore && scenario?.scenario_id === scenarioIdToRestore) {
       hasGeneratedRef.current = true;
       return;
     }
     hasGeneratedRef.current = true;
 
-    const at = (attackType as AttackType) || 'phishing';
-    const diff = (difficulty as DifficultyLevel) || 'easy';
-    startSimulation(at, diff, routeSessionId ?? null);
+    let cancelled = false;
+    const restoreOrGenerate = async () => {
+      if (scenarioIdToRestore) {
+        const restored = await restoreScenario(scenarioIdToRestore);
+        if (cancelled || restored) {
+          return;
+        }
+
+        if (hasRestoredChatState) {
+          setMessages([]);
+          setScriptDone(false);
+          setHasRestoredChatState(false);
+          setRestoredScenarioId(null);
+        }
+      }
+
+      const at = (attackType as AttackType) || 'phishing';
+      const diff = (difficulty as DifficultyLevel) || 'easy';
+      await startSimulation(at, diff, routeSessionId ?? null, templateId);
+    };
+
+    void restoreOrGenerate();
+    return () => {
+      cancelled = true;
+    };
   }, [
     attackType,
     difficulty,
+    generateNew,
     hasRestoredChatState,
     isChatStateHydrated,
+    restoreScenario,
     restoredScenarioId,
     routeSessionId,
     scenario?.scenario_id,
+    scenarioId,
     startSimulation,
+    templateId,
   ]);
 
   // When scenario arrives from backend, animate the attacker messages
   useEffect(() => {
-    if (!scenario || messages.length > 0) return;
+    if (
+      !isChatStateHydrated ||
+      !scenario ||
+      animatedScenarioIdRef.current === scenario.scenario_id
+    ) {
+      return;
+    }
+    animatedScenarioIdRef.current = scenario.scenario_id;
 
     const bubbleTexts = splitIntoBubbles(scenario.attacker_message);
     const attackerMessages: Msg[] = [];
@@ -306,43 +414,63 @@ export default function ChatScenarioScreen() {
     return () => {
       cancelled = true;
     };
-  }, [messages.length, scenario]);
+  }, [isChatStateHydrated, scenario]);
 
   // After evaluation completes, navigate to feedback
   useEffect(() => {
-    if (evaluation && evaluating) {
-      void AsyncStorage.setItem(
-        feedbackStorageKey,
-        JSON.stringify({
-          scenarioId: scenario?.scenario_id ?? null,
-          sessionId: sessionId ?? routeSessionId ?? null,
-          attackType: scenario?.attack_type ?? ((attackType as AttackType) || 'phishing'),
-          difficulty: scenario?.difficulty ?? ((difficulty as DifficultyLevel) || 'easy'),
-          isCorrect: evaluation.is_correct,
-          scoreDelta: evaluation.score_delta,
-          explanation: evaluation.explanation,
-          recommendation: evaluation.recommendation,
-          redFlags: scenario?.red_flags ?? [],
-          savedAt: Date.now(),
-        })
-      ).finally(() => {
-        if (feedbackNavigationTimeoutRef.current) {
-          clearTimeout(feedbackNavigationTimeoutRef.current);
-        }
-
-        feedbackNavigationTimeoutRef.current = setTimeout(() => {
-          feedbackNavigationTimeoutRef.current = null;
-          router.push({
-            pathname: '/feedback/[scenarioId]',
-            params: {
-              scenarioId: scenario?.scenario_id ?? 'unknown',
-              sessionId: sessionId ?? undefined,
-            },
-          });
-        }, 600);
-      });
+    if (!evaluation || !evaluating || !isAuthenticated || !user?.id) {
+      return;
     }
+
+    let cancelled = false;
+    const persistAndNavigate = async () => {
+      try {
+        await AsyncStorage.setItem(
+          feedbackStorageKey,
+          JSON.stringify({
+            ownerUserId: user.id,
+            scenarioId: scenario?.scenario_id ?? null,
+            sessionId: sessionId ?? routeSessionId ?? null,
+            attackType: scenario?.attack_type ?? ((attackType as AttackType) || 'phishing'),
+            difficulty: scenario?.difficulty ?? ((difficulty as DifficultyLevel) || 'easy'),
+            isCorrect: evaluation.is_correct,
+            scoreDelta: evaluation.score_delta,
+            explanation: evaluation.explanation,
+            recommendation: evaluation.recommendation,
+            redFlags: scenario?.red_flags ?? [],
+            savedAt: Date.now(),
+          })
+        );
+      } catch {
+        // Navigation can continue even when the local feedback fallback cannot be saved.
+      }
+
+      if (cancelled) {
+        return;
+      }
+
+      if (feedbackNavigationTimeoutRef.current) {
+        clearTimeout(feedbackNavigationTimeoutRef.current);
+      }
+
+      feedbackNavigationTimeoutRef.current = setTimeout(() => {
+        feedbackNavigationTimeoutRef.current = null;
+        if (cancelled) {
+          return;
+        }
+        router.push({
+          pathname: '/feedback/[scenarioId]',
+          params: {
+            scenarioId: scenario?.scenario_id ?? 'unknown',
+            sessionId: sessionId ?? undefined,
+          },
+        });
+      }, 600);
+    };
+
+    void persistAndNavigate();
     return () => {
+      cancelled = true;
       if (feedbackNavigationTimeoutRef.current) {
         clearTimeout(feedbackNavigationTimeoutRef.current);
         feedbackNavigationTimeoutRef.current = null;
@@ -353,6 +481,7 @@ export default function ChatScenarioScreen() {
     difficulty,
     evaluation,
     evaluating,
+    isAuthenticated,
     routeSessionId,
     scenario?.attack_type,
     scenario?.difficulty,
@@ -360,9 +489,14 @@ export default function ChatScenarioScreen() {
     scenario?.scenario_id,
     feedbackStorageKey,
     sessionId,
+    user?.id,
   ]);
 
   const onChoice = async (optionId: string, label: string) => {
+    if (choiceInFlightRef.current || evaluating || isLoading || evaluation) {
+      return;
+    }
+    choiceInFlightRef.current = true;
     // Add user message
     setMessages((m) => [...m, { id: `u-${Date.now()}`, from: 'user', kind: 'text', text: label }]);
     setEvaluating(true);
@@ -370,6 +504,7 @@ export default function ChatScenarioScreen() {
     // Evaluate via backend using the direct method
     const success = await evaluateWithOptionId(optionId);
     if (!success) {
+      choiceInFlightRef.current = false;
       setEvaluating(false);
     }
   };
@@ -388,6 +523,7 @@ export default function ChatScenarioScreen() {
   if (isLoading && !scenario) {
     return (
       <View style={[styles.screen, styles.centered]}>
+        <AppBackdrop />
         <ActivityIndicator size="large" color={TrainingColors.accentTeal} />
         <Text style={styles.loadingText}>Se generează scenariul...</Text>
       </View>
@@ -398,6 +534,7 @@ export default function ChatScenarioScreen() {
   if (error && !scenario) {
     return (
       <View style={[styles.screen, styles.centered]}>
+        <AppBackdrop />
         <View style={styles.errorCard}>
           <Ionicons name="alert-circle" size={32} color={TrainingColors.accentDanger} />
           <Text style={styles.errorText}>{error}</Text>
@@ -407,7 +544,7 @@ export default function ChatScenarioScreen() {
               hasGeneratedRef.current = false;
               const at = (attackType as AttackType) || 'phishing';
               const diff = (difficulty as DifficultyLevel) || 'easy';
-              startSimulation(at, diff, routeSessionId ?? null);
+              startSimulation(at, diff, routeSessionId ?? null, templateId);
             }}>
             <Text style={styles.retryText}>Încearcă din nou</Text>
           </Pressable>
@@ -418,6 +555,7 @@ export default function ChatScenarioScreen() {
 
   return (
     <View style={styles.screen}>
+      <AppBackdrop />
       <View style={styles.header}>
         <Pressable onPress={() => router.push('/(tabs)/scenarios')} style={styles.headerButton}>
           <Ionicons name="arrow-back" size={18} color={TrainingColors.textPrimary} />
@@ -475,8 +613,13 @@ export default function ChatScenarioScreen() {
             {scenario.options.map((option) => (
               <Pressable
                 key={option.id}
+                disabled={evaluating || isLoading}
                 onPress={() => onChoice(option.id, option.text)}
-                style={({ pressed }) => [styles.choiceButton, pressed && styles.choicePressed]}>
+                style={({ pressed }) => [
+                  styles.choiceButton,
+                  pressed && styles.choicePressed,
+                  (evaluating || isLoading) && styles.choiceDisabled,
+                ]}>
                 <Text style={styles.choiceText}>{option.text}</Text>
                 <Ionicons name="send" size={13} color={TrainingColors.accentTeal} />
               </Pressable>
@@ -718,6 +861,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   choicePressed: { opacity: 0.85, borderColor: TrainingColors.accentTeal },
+  choiceDisabled: { opacity: 0.55 },
   choiceText: { color: TrainingColors.textPrimary, fontSize: 13, fontWeight: '700', flex: 1 },
   evaluatingContainer: {
     flexDirection: 'row',

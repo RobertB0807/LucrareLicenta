@@ -6,6 +6,12 @@ import type {
   AttackType,
   DifficultyLevel,
   LearningProfileApiResponse,
+  LearningLessonCatalogApiResponse,
+  LearningLessonDetailApiResponse,
+  LearningQuizAttemptsApiResponse,
+  LearningQuizSubmitApiResponse,
+  LearningPathApiResponse,
+  LearningPathLessonCompletionApiResponse,
   Evaluation,
   GenerateScenarioApiResponse,
   ScenarioCatalogApiResponse,
@@ -13,35 +19,58 @@ import type {
   SessionSnapshotApiResponse,
   SessionTrendAggregatesApiResponse,
   SessionTrendsApiResponse,
+  UserSessionsApiResponse,
 } from './types';
 
 // ── Auth token injection ───────────────────────────────────────────────────────
 // The auth context calls setAuthTokenAccessor on mount so that all protected
 // API calls automatically include the Bearer token header.
 let _tokenAccessor: (() => string | null) | null = null;
-let _authFailureHandler: (() => void) | null = null;
+let _authFailureHandler: ((failedToken: string | null) => void) | null = null;
 
 export function setAuthTokenAccessor(accessor: () => string | null): void {
   _tokenAccessor = accessor;
 }
 
-export function setAuthFailureHandler(handler: (() => void) | null): void {
+export function setAuthFailureHandler(
+  handler: ((failedToken: string | null) => void) | null
+): void {
   _authFailureHandler = handler;
 }
 
-function getAuthHeaders(): Record<string, string> {
-  const token = _tokenAccessor?.();
+function getAuthHeaders(token: string | null): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-function handleAuthFailure(): void {
-  _authFailureHandler?.();
+function handleAuthFailure(failedToken: string | null): void {
+  _authFailureHandler?.(failedToken);
+}
+
+export class ApiRequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number
+  ) {
+    super(message);
+    this.name = 'ApiRequestError';
+  }
+}
+
+async function getResponseError(response: Response, fallbackError: string): Promise<ApiRequestError> {
+  try {
+    const payload = (await response.json()) as { detail?: unknown };
+    const detail = typeof payload.detail === 'string' ? payload.detail : fallbackError;
+    return new ApiRequestError(detail, response.status);
+  } catch {
+    return new ApiRequestError(fallbackError, response.status);
+  }
 }
 
 type GenerateScenarioPayload = {
   attack_type: AttackType;
   difficulty: DifficultyLevel;
   session_id?: string | null;
+  template_id?: string;
 };
 
 type EvaluateScenarioPayload = {
@@ -51,9 +80,16 @@ type EvaluateScenarioPayload = {
 
 type AssistantAskPayload = {
   message: string;
+  history?: {
+    role: 'user' | 'assistant';
+    content: string;
+  }[];
   session_id?: string;
+  scenario_id?: string;
   attack_type?: AttackType;
   difficulty?: DifficultyLevel;
+  context_title?: string;
+  context_summary?: string;
 };
 
 const DEFAULT_API_BASE_URL =
@@ -110,27 +146,65 @@ const API_BASE_URL_CANDIDATES = Array.from(
   )
 );
 
-async function postJson<TResponse>(path: string, payload: unknown, fallbackError: string): Promise<TResponse> {
+const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
+const AI_REQUEST_TIMEOUT_MS = 75_000;
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new ApiRequestError(
+        'Cererea a durat prea mult. Verifică conexiunea și încearcă din nou.',
+        408
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function postJson<TResponse>(
+  path: string,
+  payload: unknown,
+  fallbackError: string,
+  timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS
+): Promise<TResponse> {
   let lastError: Error | null = null;
+  const authToken = _tokenAccessor?.() ?? null;
 
   for (const baseUrl of API_BASE_URL_CANDIDATES) {
     try {
-      const response = await fetch(`${baseUrl}${path}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-        body: JSON.stringify(payload),
-      });
+      const response = await fetchWithTimeout(
+        `${baseUrl}${path}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders(authToken) },
+          body: JSON.stringify(payload),
+        },
+        timeoutMs
+      );
 
       if (response.status === 401) {
-        handleAuthFailure();
-        throw new Error('Sesiune expirată. Autentifică-te din nou.');
+        handleAuthFailure(authToken);
+        throw new ApiRequestError('Sesiune expirată. Autentifică-te din nou.', 401);
       }
       if (!response.ok) {
-        throw new Error(fallbackError);
+        throw await getResponseError(response, fallbackError);
       }
 
       return (await response.json()) as TResponse;
     } catch (error) {
+      if (error instanceof ApiRequestError && error.status >= 400 && error.status < 500) {
+        throw error;
+      }
       lastError = error instanceof Error ? error : new Error(fallbackError);
     }
   }
@@ -138,26 +212,38 @@ async function postJson<TResponse>(path: string, payload: unknown, fallbackError
   throw lastError ?? new Error(fallbackError);
 }
 
-async function getJson<TResponse>(path: string, fallbackError: string): Promise<TResponse> {
+async function getJson<TResponse>(
+  path: string,
+  fallbackError: string,
+  timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS
+): Promise<TResponse> {
   let lastError: Error | null = null;
+  const authToken = _tokenAccessor?.() ?? null;
 
   for (const baseUrl of API_BASE_URL_CANDIDATES) {
     try {
-      const response = await fetch(`${baseUrl}${path}`, {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-      });
+      const response = await fetchWithTimeout(
+        `${baseUrl}${path}`,
+        {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders(authToken) },
+        },
+        timeoutMs
+      );
 
       if (response.status === 401) {
-        handleAuthFailure();
-        throw new Error('Sesiune expirată. Autentifică-te din nou.');
+        handleAuthFailure(authToken);
+        throw new ApiRequestError('Sesiune expirată. Autentifică-te din nou.', 401);
       }
       if (!response.ok) {
-        throw new Error(fallbackError);
+        throw await getResponseError(response, fallbackError);
       }
 
       return (await response.json()) as TResponse;
     } catch (error) {
+      if (error instanceof ApiRequestError && error.status >= 400 && error.status < 500) {
+        throw error;
+      }
       lastError = error instanceof Error ? error : new Error(fallbackError);
     }
   }
@@ -171,7 +257,15 @@ export async function generateScenario(
   return postJson<GenerateScenarioApiResponse>(
     '/scenario/generate',
     payload,
-    'Nu am putut genera scenariul.'
+    'Nu am putut genera scenariul.',
+    AI_REQUEST_TIMEOUT_MS
+  );
+}
+
+export async function getScenario(scenarioId: string): Promise<GenerateScenarioApiResponse> {
+  return getJson<GenerateScenarioApiResponse>(
+    `/scenario/${encodeURIComponent(scenarioId)}`,
+    'Nu am putut restaura scenariul.'
   );
 }
 
@@ -183,6 +277,19 @@ export async function getSessionSnapshot(sessionId: string): Promise<SessionSnap
   return getJson<SessionSnapshotApiResponse>(
     `/session/${encodeURIComponent(sessionId)}`,
     'Nu am putut incarca sumarul sesiunii.'
+  );
+}
+
+export async function getUserSessions(
+  options: { limit?: number; offset?: number } = {}
+): Promise<UserSessionsApiResponse> {
+  const params = new URLSearchParams({
+    limit: String(options.limit ?? 20),
+    offset: String(options.offset ?? 0),
+  });
+  return getJson<UserSessionsApiResponse>(
+    `/sessions?${params.toString()}`,
+    'Nu am putut încărca istoricul sesiunilor.'
   );
 }
 
@@ -267,7 +374,8 @@ export async function askAssistant(payload: AssistantAskPayload): Promise<Assist
   return postJson<AssistantAskApiResponse>(
     '/assistant/ask',
     payload,
-    'Nu am putut obtine raspunsul asistentului.'
+    'Nu am putut obtine raspunsul asistentului.',
+    AI_REQUEST_TIMEOUT_MS
   );
 }
 
@@ -275,5 +383,65 @@ export async function getLearningProfile(): Promise<LearningProfileApiResponse> 
   return getJson<LearningProfileApiResponse>(
     '/learning/profile',
     'Nu am putut incarca profilul adaptiv.'
+  );
+}
+
+export async function getLearningPath(): Promise<LearningPathApiResponse> {
+  return getJson<LearningPathApiResponse>(
+    '/learning/path',
+    'Nu am putut încărca traseul de învățare.'
+  );
+}
+
+export async function getLearningLessons(): Promise<LearningLessonCatalogApiResponse> {
+  return getJson<LearningLessonCatalogApiResponse>(
+    '/learning/lessons',
+    'Nu am putut încărca biblioteca de lecții.'
+  );
+}
+
+export async function getLearningLesson(
+  lessonId: string
+): Promise<LearningLessonDetailApiResponse> {
+  return getJson<LearningLessonDetailApiResponse>(
+    `/learning/lessons/${encodeURIComponent(lessonId)}`,
+    'Nu am putut încărca lecția.'
+  );
+}
+
+export async function submitLearningLessonQuiz(
+  lessonId: string,
+  answers: { question_id: string; selected_option_id: string }[]
+): Promise<LearningQuizSubmitApiResponse> {
+  return postJson<LearningQuizSubmitApiResponse>(
+    `/learning/lessons/${encodeURIComponent(lessonId)}/quiz/submit`,
+    { answers },
+    'Nu am putut evalua testul lecției.'
+  );
+}
+
+export async function getLearningQuizAttempts(
+  options: { lessonId?: string; limit?: number; offset?: number } = {}
+): Promise<LearningQuizAttemptsApiResponse> {
+  const params = new URLSearchParams({
+    limit: String(options.limit ?? 20),
+    offset: String(options.offset ?? 0),
+  });
+  if (options.lessonId) {
+    params.set('lesson_id', options.lessonId);
+  }
+  return getJson<LearningQuizAttemptsApiResponse>(
+    `/learning/attempts?${params.toString()}`,
+    'Nu am putut încărca istoricul testelor.'
+  );
+}
+
+export async function completeLearningPathLesson(
+  lessonId: string
+): Promise<LearningPathLessonCompletionApiResponse> {
+  return postJson<LearningPathLessonCompletionApiResponse>(
+    `/learning/path/lessons/${encodeURIComponent(lessonId)}/complete`,
+    {},
+    'Nu am putut finaliza lecția.'
   );
 }

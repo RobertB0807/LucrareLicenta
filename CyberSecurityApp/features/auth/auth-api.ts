@@ -8,14 +8,60 @@ export type AuthUserResponse = {
   email: string;
   display_name: string;
   is_active: boolean;
+  onboarding_completed: boolean;
+  onboarding_experience: OnboardingExperience | null;
+  learning_goal: LearningGoal | null;
+  assessment_score: number | null;
+  assessment_level: AssessmentLevel | null;
 };
 
 export type AuthTokenResponse = {
   access_token: string;
   refresh_token?: string;
-  expires_in?: string;
+  expires_in?: string | number;
   token_type: string;
   user: AuthUserResponse;
+};
+
+export type OnboardingExperience = 'beginner' | 'intermediate' | 'advanced';
+export type LearningGoal = 'personal_safety' | 'workplace' | 'general_knowledge';
+export type AssessmentLevel = 'beginner' | 'intermediate' | 'advanced';
+
+export type OnboardingQuestion = {
+  id: string;
+  attack_type: 'phishing' | 'smishing' | 'impersonation';
+  channel: string;
+  prompt: string;
+  options: { id: string; text: string }[];
+};
+
+export type OnboardingStatusResponse = {
+  completed: boolean;
+  experience: OnboardingExperience | null;
+  learning_goal: LearningGoal | null;
+  assessment_score: number | null;
+  assessment_level: AssessmentLevel | null;
+  questions: OnboardingQuestion[];
+};
+
+export type OnboardingCompletePayload = {
+  experience: OnboardingExperience;
+  learning_goal: LearningGoal;
+  answers: { question_id: string; selected_option_id: string }[];
+};
+
+export type OnboardingCompleteResponse = {
+  onboarding_completed: boolean;
+  experience: OnboardingExperience;
+  learning_goal: LearningGoal;
+  score: number;
+  total_questions: number;
+  assessment_level: AssessmentLevel;
+  recommendation: {
+    attack_type: 'phishing' | 'smishing' | 'impersonation';
+    difficulty: 'easy' | 'medium' | 'hard';
+    reason: string;
+  };
 };
 
 type FirebaseAuthResponse = {
@@ -323,9 +369,11 @@ async function authGet<TResponse>(path: string, token: string, fallbackError: st
   throw lastError ?? new Error(fallbackError);
 }
 
-async function authPostWithToken<TResponse>(
+async function authWrite<TResponse>(
   path: string,
+  method: 'POST' | 'PATCH' | 'DELETE',
   token: string,
+  payload: unknown,
   fallbackError: string
 ): Promise<TResponse> {
   let lastError: Error | null = null;
@@ -333,18 +381,56 @@ async function authPostWithToken<TResponse>(
   for (const baseUrl of API_BASE_URL_CANDIDATES) {
     try {
       const response = await fetch(`${baseUrl}${path}`, {
-        method: 'POST',
+        method,
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
+        body: method === 'DELETE' ? undefined : JSON.stringify(payload),
       });
 
       if (response.status === 401) {
         throw new Error('Sesiune expirată. Te rog autentifică-te din nou.');
       }
       if (!response.ok) {
-        throw new Error(fallbackError);
+        const body = await response.json().catch(() => ({}));
+        throw new Error((body as { detail?: string }).detail ?? fallbackError);
+      }
+      if (response.status === 204) {
+        return undefined as TResponse;
+      }
+      return (await response.json()) as TResponse;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(fallbackError);
+      if (error instanceof Error && !error.message.includes('fetch')) {
+        throw error;
+      }
+    }
+  }
+
+  throw lastError ?? new Error(fallbackError);
+}
+
+async function authRefreshPost<TResponse>(
+  refreshToken: string,
+  fallbackError: string
+): Promise<TResponse> {
+  let lastError: Error | null = null;
+
+  for (const baseUrl of API_BASE_URL_CANDIDATES) {
+    try {
+      const response = await fetch(`${baseUrl}/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      });
+
+      if (response.status === 401) {
+        throw new Error('Sesiune expirată. Te rog autentifică-te din nou.');
+      }
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error((body as { detail?: string }).detail ?? fallbackError);
       }
 
       return (await response.json()) as TResponse;
@@ -397,7 +483,51 @@ export async function apiGetMe(token: string): Promise<AuthUserResponse> {
   );
 }
 
-export async function apiRefreshToken(token: string, refreshToken?: string | null): Promise<AuthTokenResponse> {
+export async function apiUpdateProfile(
+  token: string,
+  displayName: string
+): Promise<AuthUserResponse> {
+  return authWrite<AuthUserResponse>(
+    '/auth/me',
+    'PATCH',
+    token,
+    { display_name: displayName },
+    'Nu am putut actualiza profilul.'
+  );
+}
+
+export async function apiDeleteAccount(token: string): Promise<void> {
+  return authWrite<void>(
+    '/auth/me',
+    'DELETE',
+    token,
+    undefined,
+    'Nu am putut șterge contul.'
+  );
+}
+
+export async function apiGetOnboarding(token: string): Promise<OnboardingStatusResponse> {
+  return authGet<OnboardingStatusResponse>(
+    '/onboarding',
+    token,
+    'Nu am putut încărca evaluarea inițială.'
+  );
+}
+
+export async function apiCompleteOnboarding(
+  token: string,
+  payload: OnboardingCompletePayload
+): Promise<OnboardingCompleteResponse> {
+  return authWrite<OnboardingCompleteResponse>(
+    '/onboarding/complete',
+    'POST',
+    token,
+    payload,
+    'Nu am putut finaliza evaluarea inițială.'
+  );
+}
+
+export async function apiRefreshToken(_token: string, refreshToken?: string | null): Promise<AuthTokenResponse> {
   if (isFirebaseAuthEnabled()) {
     if (!refreshToken) {
       throw new Error('Sesiune expirată. Te rog autentifică-te din nou.');
@@ -405,11 +535,11 @@ export async function apiRefreshToken(token: string, refreshToken?: string | nul
     return firebaseRefreshAuthToken(refreshToken);
   }
 
-  return authPostWithToken<AuthTokenResponse>(
-    '/auth/refresh',
-    token,
-    'Nu am putut reînnoi sesiunea curentă.'
-  );
+  if (!refreshToken) {
+    throw new Error('Sesiune expirată. Te rog autentifică-te din nou.');
+  }
+
+  return authRefreshPost<AuthTokenResponse>(refreshToken, 'Nu am putut reînnoi sesiunea curentă.');
 }
 
 export async function apiSendPasswordReset(email: string): Promise<void> {

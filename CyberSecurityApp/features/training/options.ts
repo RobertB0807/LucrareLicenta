@@ -6,10 +6,30 @@ export const ATTACK_TYPE_OPTIONS: Array<{ id: AttackType; label: string; shortLa
   { id: 'impersonation', label: 'Impersonare voice/chat', shortLabel: 'Impersonare' },
 ];
 
-export const DIFFICULTY_OPTIONS: Array<{ id: DifficultyLevel; label: string }> = [
-  { id: 'easy', label: 'Ușor' },
-  { id: 'medium', label: 'Mediu' },
-  { id: 'hard', label: 'Greu' },
+export const DIFFICULTY_OPTIONS: Array<{
+  id: DifficultyLevel;
+  label: string;
+  summary: string;
+  detail: string;
+}> = [
+  {
+    id: 'easy',
+    label: 'Ușor',
+    summary: 'Indicii evidente',
+    detail: 'Mesaje directe, presiune vizibilă și semnale de alarmă ușor de identificat.',
+  },
+  {
+    id: 'medium',
+    label: 'Mediu',
+    summary: 'Context credibil',
+    detail: 'Pretexte plauzibile și indicii mai discrete care cer verificarea sursei.',
+  },
+  {
+    id: 'hard',
+    label: 'Greu',
+    summary: 'Atac sofisticat',
+    detail: 'Mesaje bine construite, context realist și diferențe subtile de procedură.',
+  },
 ];
 
 export function getDifficultyLabel(level: DifficultyLevel): string {

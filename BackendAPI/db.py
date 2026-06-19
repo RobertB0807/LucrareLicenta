@@ -2,14 +2,11 @@ from __future__ import annotations
 
 import os
 from getpass import getuser
-from pathlib import Path
 
-from dotenv import load_dotenv
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
-BASE_DIR = Path(__file__).resolve().parent
-load_dotenv(BASE_DIR / ".env")
+from app_config import BASE_DIR
 
 
 def build_default_postgres_url() -> str:
@@ -70,3 +67,8 @@ def init_db() -> None:
     config.set_main_option("script_location", str(BASE_DIR / "migrations"))
     config.set_main_option("sqlalchemy.url", DATABASE_URL)
     command.upgrade(config, "head")
+
+
+def check_database_connection() -> None:
+    with engine.connect() as connection:
+        connection.execute(text("SELECT 1"))

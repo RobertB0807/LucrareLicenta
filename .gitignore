@@ -1,2 +1,7 @@
 *firebase-adminsdk*.json
 .env
+.env.production
+backups/
+*.dump
+__pycache__/
+*.pyc

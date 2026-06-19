@@ -9,6 +9,7 @@ import { TrainingColors } from '@/features/training/ui-theme';
 type ScenarioSetupCardProps = {
   attackType: AttackType;
   difficulty: DifficultyLevel;
+  isLoading?: boolean;
   onSelectAttackType: (value: AttackType) => void;
   onSelectDifficulty: (value: DifficultyLevel) => void;
   onGenerateScenario: () => void;
@@ -23,10 +24,14 @@ const ATTACK_ICONS: Record<AttackType, string> = {
 export function ScenarioSetupCard({
   attackType,
   difficulty,
+  isLoading = false,
   onSelectAttackType,
   onSelectDifficulty,
   onGenerateScenario,
 }: ScenarioSetupCardProps) {
+  const selectedDifficulty =
+    DIFFICULTY_OPTIONS.find((option) => option.id === difficulty) ?? DIFFICULTY_OPTIONS[0];
+
   return (
     <View style={styles.configCard}>
       <View style={styles.scanlineTop} />
@@ -93,9 +98,31 @@ export function ScenarioSetupCard({
         })}
       </View>
 
-      <Pressable style={styles.primaryButton} onPress={onGenerateScenario}>
+      <View style={styles.difficultyGuide}>
+        <View style={styles.difficultyGuideHeader}>
+          <ThemedText style={styles.difficultyGuideTitle}>
+            {selectedDifficulty.label} · {selectedDifficulty.summary}
+          </ThemedText>
+          <ThemedText style={styles.difficultyGuideLevel}>
+            NIVEL {DIFFICULTY_OPTIONS.findIndex((option) => option.id === difficulty) + 1}/3
+          </ThemedText>
+        </View>
+        <ThemedText style={styles.difficultyGuideText}>{selectedDifficulty.detail}</ThemedText>
+      </View>
+
+      <View style={styles.variationNote}>
+        <ThemedText style={styles.variationIcon}>↻</ThemedText>
+        <ThemedText style={styles.variationText}>
+          Generarea ține cont de scenariile recente și evită repetarea imediată.
+        </ThemedText>
+      </View>
+
+      <Pressable
+        style={[styles.primaryButton, isLoading && styles.primaryButtonDisabled]}
+        onPress={onGenerateScenario}
+        disabled={isLoading}>
         <ThemedText type="defaultSemiBold" style={styles.primaryButtonText}>
-          Pornește scenariul
+          {isLoading ? 'Se pregătește scenariul...' : 'Generează scenariu nou'}
         </ThemedText>
       </Pressable>
     </View>
@@ -221,6 +248,53 @@ const styles = StyleSheet.create({
     color: '#FFE7BA',
     fontWeight: '700',
   },
+  difficultyGuide: {
+    borderRadius: 12,
+    padding: 11,
+    gap: 5,
+    backgroundColor: 'rgba(245, 197, 107, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(245, 197, 107, 0.28)',
+  },
+  difficultyGuideHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 8,
+  },
+  difficultyGuideTitle: {
+    flex: 1,
+    color: '#FFE7BA',
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  difficultyGuideLevel: {
+    color: TrainingColors.accentAmber,
+    fontSize: 9,
+    letterSpacing: 0.8,
+    fontFamily: Fonts.mono,
+  },
+  difficultyGuideText: {
+    color: TrainingColors.textSecondary,
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  variationNote: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    paddingHorizontal: 2,
+  },
+  variationIcon: {
+    color: TrainingColors.accentTeal,
+    fontSize: 16,
+  },
+  variationText: {
+    flex: 1,
+    color: TrainingColors.textMuted,
+    fontSize: 11,
+    lineHeight: 15,
+  },
   primaryButton: {
     alignItems: 'center',
     justifyContent: 'center',
@@ -236,5 +310,8 @@ const styles = StyleSheet.create({
     color: '#EEF4FF',
     fontFamily: Fonts.mono,
     letterSpacing: 0.8,
+  },
+  primaryButtonDisabled: {
+    opacity: 0.6,
   },
 });
