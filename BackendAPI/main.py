@@ -68,6 +68,13 @@ from observability import (
     observe_request,
     prometheus_payload,
 )
+from onboarding_service import (
+    OnboardingCompleteRequest,
+    OnboardingCompleteResponse,
+    OnboardingStatusResponse,
+    complete_onboarding,
+    get_onboarding_status,
+)
 from rate_limit import DistributedRateLimiter, RateLimiterUnavailableError
 from scenario_models import AttackType, DifficultyLevel
 from training_service import (
@@ -237,6 +244,11 @@ class UserResponse(BaseModel):
     email: str
     display_name: str
     is_active: bool
+    onboarding_completed: bool
+    onboarding_experience: str | None = None
+    learning_goal: str | None = None
+    assessment_score: int | None = None
+    assessment_level: str | None = None
 
 
 class AuthTokenResponse(BaseModel):
@@ -245,6 +257,20 @@ class AuthTokenResponse(BaseModel):
     expires_in: int = JWT_ACCESS_EXPIRATION_MINUTES * 60
     token_type: str = "bearer"
     user: UserResponse
+
+
+def build_user_response(user: dict[str, object]) -> UserResponse:
+    return UserResponse(
+        id=str(user["id"]),
+        email=str(user["email"]),
+        display_name=str(user["display_name"]),
+        is_active=bool(user["is_active"]),
+        onboarding_completed=bool(user.get("onboarding_completed", False)),
+        onboarding_experience=user.get("onboarding_experience"),  # type: ignore[arg-type]
+        learning_goal=user.get("learning_goal"),  # type: ignore[arg-type]
+        assessment_score=user.get("assessment_score"),  # type: ignore[arg-type]
+        assessment_level=user.get("assessment_level"),  # type: ignore[arg-type]
+    )
 
 
 def is_public_path(path: str) -> bool:
@@ -395,6 +421,11 @@ async def enforce_authentication(request: Request, call_next):
             email=user_data["email"],
             display_name=user_data["display_name"],
             is_active=bool(user_data["is_active"]),
+            onboarding_completed=bool(user_data.get("onboarding_completed", False)),
+            onboarding_experience=user_data.get("onboarding_experience"),
+            learning_goal=user_data.get("learning_goal"),
+            assessment_score=user_data.get("assessment_score"),
+            assessment_level=user_data.get("assessment_level"),
         )
     except ValueError as exc:
         return JSONResponse(
@@ -553,12 +584,7 @@ def register(payload: AuthRegisterRequest) -> AuthTokenResponse:
     return AuthTokenResponse(
         access_token=token,
         refresh_token=refresh_token,
-        user=UserResponse(
-            id=user["id"],
-            email=user["email"],
-            display_name=user["display_name"],
-            is_active=bool(user["is_active"]),
-        ),
+        user=build_user_response(user),
     )
 
 
@@ -575,12 +601,7 @@ def login(payload: AuthLoginRequest) -> AuthTokenResponse:
     return AuthTokenResponse(
         access_token=token,
         refresh_token=refresh_token,
-        user=UserResponse(
-            id=user["id"],
-            email=user["email"],
-            display_name=user["display_name"],
-            is_active=bool(user["is_active"]),
-        ),
+        user=build_user_response(user),
     )
 
 
@@ -602,12 +623,7 @@ def refresh_token(payload: AuthRefreshRequest) -> AuthTokenResponse:
     return AuthTokenResponse(
         access_token=token,
         refresh_token=next_refresh_token,
-        user=UserResponse(
-            id=user["id"],
-            email=user["email"],
-            display_name=user["display_name"],
-            is_active=bool(user["is_active"]),
-        ),
+        user=build_user_response(user),
     )
 
 
@@ -641,12 +657,7 @@ def update_me(payload: AuthProfileUpdateRequest, request: Request) -> UserRespon
     updated = update_user_display_name(current_user.id, payload.display_name)
     if updated is None:
         raise HTTPException(status_code=404, detail="User not found")
-    return UserResponse(
-        id=updated["id"],
-        email=updated["email"],
-        display_name=updated["display_name"],
-        is_active=bool(updated["is_active"]),
-    )
+    return build_user_response(updated)
 
 
 @app.delete("/auth/me", status_code=204)
@@ -673,6 +684,29 @@ def delete_me(request: Request) -> Response:
     if not delete_user_account(current_user.id):
         raise HTTPException(status_code=404, detail="User not found")
     return Response(status_code=204)
+
+
+@app.get("/onboarding", response_model=OnboardingStatusResponse)
+def get_onboarding(request: Request) -> OnboardingStatusResponse:
+    current_user = require_authenticated_user(request)
+    try:
+        return get_onboarding_status(current_user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/onboarding/complete", response_model=OnboardingCompleteResponse)
+def submit_onboarding(
+    payload: OnboardingCompleteRequest,
+    request: Request,
+) -> OnboardingCompleteResponse:
+    current_user = require_authenticated_user(request)
+    try:
+        return complete_onboarding(current_user.id, payload)
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 409 if detail == "Onboarding already completed" else 422
+        raise HTTPException(status_code=status_code, detail=detail) from exc
 
 
 @app.get("/learning/profile", response_model=LearningProfileResponse)

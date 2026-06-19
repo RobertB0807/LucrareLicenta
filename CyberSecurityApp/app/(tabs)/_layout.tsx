@@ -1,17 +1,19 @@
 import { Redirect, Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { ActivityIndicator, View } from 'react-native';
+import { ActivityIndicator, Platform, StyleSheet, View } from 'react-native';
 
+import { AppBackdrop } from '@/components/app-backdrop';
 import { HapticTab } from '@/components/haptic-tab';
 import { useAuth } from '@/features/auth/auth-context';
-import { TrainingColors } from '@/features/training/ui-theme';
+import { TrainingColors, TrainingShadows } from '@/features/training/ui-theme';
 
 export default function TabLayout() {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, user } = useAuth();
 
   if (isLoading) {
     return (
       <View style={styles.loader}>
+        <AppBackdrop />
         <ActivityIndicator size="large" color={TrainingColors.accentTeal} />
       </View>
     );
@@ -21,28 +23,49 @@ export default function TabLayout() {
     return <Redirect href="/login" />;
   }
 
+  if (!user?.onboardingCompleted) {
+    return <Redirect href={'/onboarding' as never} />;
+  }
+
   return (
     <Tabs
       initialRouteName="dashboard"
       screenOptions={{
         tabBarActiveTintColor: TrainingColors.accentTeal,
         tabBarInactiveTintColor: TrainingColors.textMuted,
+        tabBarActiveBackgroundColor: 'rgba(77, 228, 178, 0.1)',
         headerShown: false,
         tabBarButton: HapticTab,
-        tabBarLabelStyle: { fontSize: 10, fontWeight: '600' },
+        tabBarHideOnKeyboard: true,
+        tabBarLabelStyle: {
+          fontSize: 10,
+          fontWeight: '700',
+          letterSpacing: 0.1,
+          marginTop: 1,
+        },
+        tabBarItemStyle: {
+          borderRadius: 14,
+          marginHorizontal: 2,
+          marginVertical: 6,
+        },
+        tabBarIconStyle: {
+          marginTop: 1,
+        },
         tabBarStyle: {
           position: 'absolute',
-          left: 14,
-          right: 14,
-          bottom: 14,
-          height: 68,
-          borderRadius: 18,
+          left: 12,
+          right: 12,
+          bottom: Platform.OS === 'ios' ? 10 : 12,
+          height: Platform.OS === 'ios' ? 76 : 70,
+          borderRadius: 22,
           borderTopWidth: 0,
           borderWidth: 1,
-          borderColor: TrainingColors.border,
-          backgroundColor: TrainingColors.panel,
-          paddingTop: 6,
-          paddingBottom: 6,
+          borderColor: TrainingColors.borderStrong,
+          backgroundColor: 'rgba(13, 24, 40, 0.98)',
+          paddingHorizontal: 5,
+          paddingTop: 2,
+          paddingBottom: Platform.OS === 'ios' ? 8 : 2,
+          ...TrainingShadows.floating,
         },
       }}>
       <Tabs.Screen
@@ -55,28 +78,40 @@ export default function TabLayout() {
         name="dashboard"
         options={{
           title: 'Acasă',
-          tabBarIcon: ({ color, size }) => <Ionicons size={size} name="home" color={color} />,
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons size={size} name={focused ? 'home' : 'home-outline'} color={color} />
+          ),
         }}
       />
       <Tabs.Screen
         name="scenarios"
         options={{
           title: 'Antrenează',
-          tabBarIcon: ({ color, size }) => <Ionicons size={size} name="shield-checkmark" color={color} />,
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons
+              size={size}
+              name={focused ? 'shield-checkmark' : 'shield-checkmark-outline'}
+              color={color}
+            />
+          ),
         }}
       />
       <Tabs.Screen
         name="learn"
         options={{
           title: 'Învață',
-          tabBarIcon: ({ color, size }) => <Ionicons size={size} name="book" color={color} />,
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons size={size} name={focused ? 'book' : 'book-outline'} color={color} />
+          ),
         }}
       />
       <Tabs.Screen
         name="assistant"
         options={{
           title: 'Asistent',
-          tabBarIcon: ({ color, size }) => <Ionicons size={size} name="sparkles" color={color} />,
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons size={size} name={focused ? 'sparkles' : 'sparkles-outline'} color={color} />
+          ),
         }}
       />
       <Tabs.Screen
@@ -89,7 +124,13 @@ export default function TabLayout() {
         name="analytics"
         options={{
           title: 'Statistici',
-          tabBarIcon: ({ color, size }) => <Ionicons size={size} name="stats-chart" color={color} />,
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons
+              size={size}
+              name={focused ? 'stats-chart' : 'stats-chart-outline'}
+              color={color}
+            />
+          ),
         }}
       />
       <Tabs.Screen
@@ -102,11 +143,11 @@ export default function TabLayout() {
   );
 }
 
-const styles = {
+const styles = StyleSheet.create({
   loader: {
     flex: 1,
     backgroundColor: TrainingColors.pageBase,
-    alignItems: 'center' as const,
-    justifyContent: 'center' as const,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-};
+});

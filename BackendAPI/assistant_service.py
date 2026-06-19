@@ -65,6 +65,35 @@ def _is_unsafe_request(message: str) -> bool:
     return _contains_any(normalized, unsafe_phrases)
 
 
+def _is_simple_greeting(message: str) -> bool:
+    normalized = message.casefold().strip()
+    normalized = normalized.strip(" .,!?:;-_")
+    return normalized in {
+        "salut",
+        "buna",
+        "bună",
+        "hello",
+        "hi",
+        "hey",
+        "hei",
+        "ceau",
+        "ciao",
+    }
+
+
+def _build_greeting_answer() -> tuple[str, list[str]]:
+    return (
+        "Salut! Sunt Sentinel, asistentul tău pentru antrenament împotriva atacurilor "
+        "de inginerie socială. Te pot ajuta să recunoști phishing, smishing, apeluri "
+        "suspecte, pagini false și cereri de impersonare.",
+        [
+            "Îmi poți trimite un mesaj suspect și îl analizăm împreună.",
+            "Îți pot explica red flags pentru email, SMS sau apeluri.",
+            "Îți pot recomanda ce să exersezi în funcție de progres.",
+        ],
+    )
+
+
 def build_assistant_answer(
     *,
     message: str,
@@ -147,6 +176,18 @@ def answer_assistant(
             llm_model=None,
             generation_ms=None,
             fallback_reason="unsafe_request",
+        )
+
+    if _is_simple_greeting(message):
+        answer, quick_tips = _build_greeting_answer()
+        return AssistantAnswer(
+            answer=answer,
+            quick_tips=quick_tips,
+            safety_status="answered",
+            content_source="rule_based",
+            llm_model=None,
+            generation_ms=None,
+            fallback_reason="small_talk",
         )
 
     generated = generate_llm_assistant(

@@ -8,6 +8,11 @@ export type AuthUserResponse = {
   email: string;
   display_name: string;
   is_active: boolean;
+  onboarding_completed: boolean;
+  onboarding_experience: OnboardingExperience | null;
+  learning_goal: LearningGoal | null;
+  assessment_score: number | null;
+  assessment_level: AssessmentLevel | null;
 };
 
 export type AuthTokenResponse = {
@@ -16,6 +21,47 @@ export type AuthTokenResponse = {
   expires_in?: string | number;
   token_type: string;
   user: AuthUserResponse;
+};
+
+export type OnboardingExperience = 'beginner' | 'intermediate' | 'advanced';
+export type LearningGoal = 'personal_safety' | 'workplace' | 'general_knowledge';
+export type AssessmentLevel = 'beginner' | 'intermediate' | 'advanced';
+
+export type OnboardingQuestion = {
+  id: string;
+  attack_type: 'phishing' | 'smishing' | 'impersonation';
+  channel: string;
+  prompt: string;
+  options: { id: string; text: string }[];
+};
+
+export type OnboardingStatusResponse = {
+  completed: boolean;
+  experience: OnboardingExperience | null;
+  learning_goal: LearningGoal | null;
+  assessment_score: number | null;
+  assessment_level: AssessmentLevel | null;
+  questions: OnboardingQuestion[];
+};
+
+export type OnboardingCompletePayload = {
+  experience: OnboardingExperience;
+  learning_goal: LearningGoal;
+  answers: { question_id: string; selected_option_id: string }[];
+};
+
+export type OnboardingCompleteResponse = {
+  onboarding_completed: boolean;
+  experience: OnboardingExperience;
+  learning_goal: LearningGoal;
+  score: number;
+  total_questions: number;
+  assessment_level: AssessmentLevel;
+  recommendation: {
+    attack_type: 'phishing' | 'smishing' | 'impersonation';
+    difficulty: 'easy' | 'medium' | 'hard';
+    reason: string;
+  };
 };
 
 type FirebaseAuthResponse = {
@@ -325,7 +371,7 @@ async function authGet<TResponse>(path: string, token: string, fallbackError: st
 
 async function authWrite<TResponse>(
   path: string,
-  method: 'PATCH' | 'DELETE',
+  method: 'POST' | 'PATCH' | 'DELETE',
   token: string,
   payload: unknown,
   fallbackError: string
@@ -457,6 +503,27 @@ export async function apiDeleteAccount(token: string): Promise<void> {
     token,
     undefined,
     'Nu am putut șterge contul.'
+  );
+}
+
+export async function apiGetOnboarding(token: string): Promise<OnboardingStatusResponse> {
+  return authGet<OnboardingStatusResponse>(
+    '/onboarding',
+    token,
+    'Nu am putut încărca evaluarea inițială.'
+  );
+}
+
+export async function apiCompleteOnboarding(
+  token: string,
+  payload: OnboardingCompletePayload
+): Promise<OnboardingCompleteResponse> {
+  return authWrite<OnboardingCompleteResponse>(
+    '/onboarding/complete',
+    'POST',
+    token,
+    payload,
+    'Nu am putut finaliza evaluarea inițială.'
   );
 }
 

@@ -52,6 +52,15 @@ class UserORM(Base):
     password_hash: Mapped[str] = mapped_column(Text)
     display_name: Mapped[str] = mapped_column(String(64))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    onboarding_completed: Mapped[bool] = mapped_column(Boolean, default=False)
+    onboarding_experience: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    learning_goal: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    assessment_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    assessment_level: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    onboarding_completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

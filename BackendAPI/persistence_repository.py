@@ -117,6 +117,7 @@ def create_user(*, email: str, password_hash: str, display_name: str) -> dict[st
             password_hash=password_hash,
             display_name=display_name,
             is_active=True,
+            onboarding_completed=False,
         )
         db.add(user)
         db.flush()
@@ -126,6 +127,11 @@ def create_user(*, email: str, password_hash: str, display_name: str) -> dict[st
             "email": user.email,
             "display_name": user.display_name,
             "is_active": user.is_active,
+            "onboarding_completed": user.onboarding_completed,
+            "onboarding_experience": user.onboarding_experience,
+            "learning_goal": user.learning_goal,
+            "assessment_score": user.assessment_score,
+            "assessment_level": user.assessment_level,
             "created_at": user.created_at.isoformat() if user.created_at else None,
         }
 
@@ -165,6 +171,7 @@ def create_or_update_firebase_user(
                 password_hash="firebase-auth",
                 display_name=resolved_display_name,
                 is_active=True,
+                onboarding_completed=False,
             )
             db.add(user)
         else:
@@ -181,6 +188,11 @@ def create_or_update_firebase_user(
             "email": user.email,
             "display_name": user.display_name,
             "is_active": user.is_active,
+            "onboarding_completed": user.onboarding_completed,
+            "onboarding_experience": user.onboarding_experience,
+            "learning_goal": user.learning_goal,
+            "assessment_score": user.assessment_score,
+            "assessment_level": user.assessment_level,
         }
 
 
@@ -198,6 +210,11 @@ def fetch_user_by_email(email: str) -> dict[str, Any] | None:
             "password_hash": row.password_hash,
             "display_name": row.display_name,
             "is_active": row.is_active,
+            "onboarding_completed": row.onboarding_completed,
+            "onboarding_experience": row.onboarding_experience,
+            "learning_goal": row.learning_goal,
+            "assessment_score": row.assessment_score,
+            "assessment_level": row.assessment_level,
         }
     finally:
         db.close()
@@ -215,6 +232,11 @@ def fetch_user_by_id(user_id: str) -> dict[str, Any] | None:
             "email": row.email,
             "display_name": row.display_name,
             "is_active": row.is_active,
+            "onboarding_completed": row.onboarding_completed,
+            "onboarding_experience": row.onboarding_experience,
+            "learning_goal": row.learning_goal,
+            "assessment_score": row.assessment_score,
+            "assessment_level": row.assessment_level,
         }
     finally:
         db.close()
@@ -236,6 +258,11 @@ def update_user_display_name(user_id: str, display_name: str) -> dict[str, Any] 
             "email": user.email,
             "display_name": user.display_name,
             "is_active": user.is_active,
+            "onboarding_completed": user.onboarding_completed,
+            "onboarding_experience": user.onboarding_experience,
+            "learning_goal": user.learning_goal,
+            "assessment_score": user.assessment_score,
+            "assessment_level": user.assessment_level,
         }
 
 
@@ -321,6 +348,59 @@ def _apply_user_learning_attempt(
     row.last_result_correct = is_correct
     row.last_attempt_at = attempted_at or utc_now()
     row.updated_at = utc_now()
+
+
+def complete_user_onboarding(
+    *,
+    user_id: str,
+    experience: str,
+    learning_goal: str,
+    assessment_score: int,
+    assessment_level: str,
+    outcomes: list[dict[str, Any]],
+) -> dict[str, Any]:
+    with session_scope() as db:
+        user = db.scalar(
+            select(UserORM)
+            .where(UserORM.id == user_id)
+            .with_for_update()
+        )
+        if user is None:
+            raise ValueError("User not found")
+        if user.onboarding_completed:
+            raise ValueError("Onboarding already completed")
+
+        completed_at = utc_now()
+        user.onboarding_completed = True
+        user.onboarding_experience = experience
+        user.learning_goal = learning_goal
+        user.assessment_score = assessment_score
+        user.assessment_level = assessment_level
+        user.onboarding_completed_at = completed_at
+        user.updated_at = completed_at
+
+        for outcome in outcomes:
+            _apply_user_learning_attempt(
+                db,
+                user_id=user_id,
+                attack_type=str(outcome["attack_type"]),
+                difficulty=str(outcome["difficulty"]),
+                is_correct=bool(outcome["is_correct"]),
+                attempted_at=completed_at,
+            )
+
+        db.flush()
+        return {
+            "id": user.id,
+            "email": user.email,
+            "display_name": user.display_name,
+            "is_active": user.is_active,
+            "onboarding_completed": user.onboarding_completed,
+            "onboarding_experience": user.onboarding_experience,
+            "learning_goal": user.learning_goal,
+            "assessment_score": user.assessment_score,
+            "assessment_level": user.assessment_level,
+        }
 
 
 def _update_learning_path_activity_row(

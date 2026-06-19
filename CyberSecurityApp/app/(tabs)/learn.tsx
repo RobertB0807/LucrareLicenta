@@ -15,6 +15,7 @@ import {
   View,
 } from 'react-native';
 
+import { AppBackdrop } from '@/components/app-backdrop';
 import { useAuth } from '@/features/auth/auth-context';
 import {
   askAssistant,
@@ -62,6 +63,17 @@ const LEVEL_LABELS: Record<LearningLessonLevel, string> = {
   intermediate: 'Intermediar',
   advanced: 'Avansat',
 };
+const LEVEL_ICONS: Record<LearningLessonLevel, keyof typeof Ionicons.glyphMap> = {
+  beginner: 'leaf-outline',
+  intermediate: 'shield-outline',
+  advanced: 'ribbon-outline',
+};
+const STATUS_LABELS: Record<LearningLessonSummaryApiResponse['status'], string> = {
+  locked: 'Blocat',
+  available: 'Disponibil',
+  in_progress: 'În lucru',
+  completed: 'Finalizat',
+};
 
 export default function LearnScreen() {
   const { user } = useAuth();
@@ -102,6 +114,14 @@ export default function LearnScreen() {
         : lessons.filter((lesson) => lesson.category === activeCat),
     [activeCat, lessons]
   );
+  const lessonStats = useMemo(() => {
+    const completed = lessons.filter((lesson) => lesson.status === 'completed').length;
+    const inProgress = lessons.filter((lesson) => lesson.status === 'in_progress').length;
+    const available = lessons.filter((lesson) => lesson.status !== 'locked').length;
+    const xpAvailable = lessons.reduce((total, lesson) => total + lesson.xp_reward, 0);
+    const progress = lessons.length > 0 ? Math.round((completed / lessons.length) * 100) : 0;
+    return { completed, inProgress, available, xpAvailable, progress };
+  }, [lessons]);
 
   useEffect(() => {
     if (lessons.length > 0 && !categories.includes(activeCat)) {
@@ -374,6 +394,7 @@ export default function LearnScreen() {
 
   return (
     <View style={styles.screen}>
+      <AppBackdrop grid />
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.header}>
           <View style={styles.headerLeft}>
@@ -402,6 +423,41 @@ export default function LearnScreen() {
             </Text>
           </View>
         </View>
+
+        {lessons.length > 0 ? (
+          <View style={styles.progressPanel}>
+            <View style={styles.progressHeader}>
+              <View>
+                <Text style={styles.progressEyebrow}>PROGRES CURRICULUM</Text>
+                <Text style={styles.progressTitle}>{lessonStats.progress}% finalizat</Text>
+              </View>
+              <View style={styles.progressBadge}>
+                <Ionicons name="flash-outline" size={14} color={TrainingColors.accentAmber} />
+                <Text style={styles.progressBadgeText}>{lessonStats.xpAvailable} XP</Text>
+              </View>
+            </View>
+            <View style={styles.progressTrack}>
+              <View style={[styles.progressFill, { width: `${lessonStats.progress}%` }]} />
+            </View>
+            <View style={styles.metricsGrid}>
+              <LearnMetric
+                icon="checkmark-done-outline"
+                label="Finalizate"
+                value={`${lessonStats.completed}/${lessons.length}`}
+              />
+              <LearnMetric
+                icon="time-outline"
+                label="În lucru"
+                value={`${lessonStats.inProgress}`}
+              />
+              <LearnMetric
+                icon="lock-open-outline"
+                label="Accesibile"
+                value={`${lessonStats.available}`}
+              />
+            </View>
+          </View>
+        ) : null}
 
         {lessons.length > 0 ? (
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filters}>
@@ -464,13 +520,38 @@ export default function LearnScreen() {
               </View>
               <View style={styles.flex}>
                 <View style={styles.lessonHead}>
-                  <Text style={styles.lessonCategory}>{lesson.category}</Text>
-                  <Text style={styles.lessonMeta}>
-                    {lesson.duration_minutes} min · {LEVEL_LABELS[lesson.level]}
-                  </Text>
+                  <View style={styles.lessonCategoryPill}>
+                    <Text style={styles.lessonCategory}>{lesson.category}</Text>
+                  </View>
+                  <View
+                    style={[
+                      styles.lessonStatusPill,
+                      lesson.status === 'completed' && styles.lessonStatusCompleted,
+                      lesson.status === 'locked' && styles.lessonStatusLocked,
+                    ]}>
+                    <Text style={styles.lessonStatusText}>{STATUS_LABELS[lesson.status]}</Text>
+                  </View>
                 </View>
                 <Text style={styles.lessonTitle}>{lesson.title}</Text>
                 <Text style={styles.lessonSummary}>{lesson.summary}</Text>
+                <View style={styles.lessonMetaRow}>
+                  <View style={styles.lessonMetaPill}>
+                    <Ionicons
+                      name={LEVEL_ICONS[lesson.level]}
+                      size={12}
+                      color={TrainingColors.textMuted}
+                    />
+                    <Text style={styles.lessonMetaPillText}>{LEVEL_LABELS[lesson.level]}</Text>
+                  </View>
+                  <View style={styles.lessonMetaPill}>
+                    <Ionicons name="timer-outline" size={12} color={TrainingColors.textMuted} />
+                    <Text style={styles.lessonMetaPillText}>{lesson.duration_minutes} min</Text>
+                  </View>
+                  <View style={styles.lessonMetaPill}>
+                    <Ionicons name="star-outline" size={12} color={TrainingColors.textMuted} />
+                    <Text style={styles.lessonMetaPillText}>{lesson.xp_reward} XP</Text>
+                  </View>
+                </View>
                 <Text style={styles.lessonProgress}>
                   {lesson.passed
                     ? `Promovat · scor maxim ${lesson.best_score}%`
@@ -508,11 +589,33 @@ export default function LearnScreen() {
               </Pressable>
             </View>
 
+            {openLesson ? (
+              <View style={styles.modalStats}>
+                <View style={styles.modalStat}>
+                  <Ionicons name="reader-outline" size={15} color={TrainingColors.accentBlue} />
+                  <Text style={styles.modalStatText}>{openLesson.sections.length} secțiuni</Text>
+                </View>
+                <View style={styles.modalStat}>
+                  <Ionicons name="timer-outline" size={15} color={TrainingColors.accentBlue} />
+                  <Text style={styles.modalStatText}>{openLesson.duration_minutes} min</Text>
+                </View>
+                <View style={styles.modalStat}>
+                  <Ionicons name="checkmark-circle-outline" size={15} color={TrainingColors.accentBlue} />
+                  <Text style={styles.modalStatText}>Prag {openLesson.pass_score}%</Text>
+                </View>
+              </View>
+            ) : null}
+
             <ScrollView style={styles.modalBody} contentContainerStyle={styles.modalBodyContent}>
               {openLesson?.sections.map((section) => (
                 <View key={section.id} style={styles.sectionCard}>
-                  <Text style={styles.sectionTitle}>{section.title}</Text>
-                  <Text style={styles.sectionBody}>{section.body}</Text>
+                  <View style={styles.sectionHeader}>
+                    <View style={styles.sectionNumber}>
+                      <Text style={styles.sectionNumberText}>{section.order_index}</Text>
+                    </View>
+                    <Text style={styles.sectionTitle}>{section.title}</Text>
+                  </View>
+                  <LessonBody body={section.body} />
                 </View>
               ))}
 
@@ -736,6 +839,51 @@ function StateCard({
   );
 }
 
+function LearnMetric({
+  icon,
+  label,
+  value,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  value: string;
+}) {
+  return (
+    <View style={styles.metricTile}>
+      <Ionicons name={icon} size={15} color={TrainingColors.accentTeal} />
+      <Text style={styles.metricValue}>{value}</Text>
+      <Text style={styles.metricLabel}>{label}</Text>
+    </View>
+  );
+}
+
+function LessonBody({ body }: { body: string }) {
+  const blocks = body
+    .split('\n')
+    .map((block) => block.trim())
+    .filter(Boolean);
+
+  return (
+    <View style={styles.lessonBody}>
+      {blocks.map((block, index) => {
+        if (block.startsWith('- ')) {
+          return (
+            <View key={`${block}-${index}`} style={styles.bulletRow}>
+              <View style={styles.bulletDot} />
+              <Text style={styles.bulletText}>{block.slice(2)}</Text>
+            </View>
+          );
+        }
+        return (
+          <Text key={`${block}-${index}`} style={styles.sectionBody}>
+            {block}
+          </Text>
+        );
+      })}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: TrainingColors.pageBase },
   flex: { flex: 1 },
@@ -796,6 +944,68 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   heroText: { color: TrainingColors.textPrimary, fontSize: 13, lineHeight: 18, marginTop: 2 },
+  progressPanel: {
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: TrainingColors.border,
+    backgroundColor: TrainingColors.panelElevated,
+    padding: 14,
+    gap: 12,
+  },
+  progressHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  progressEyebrow: {
+    color: TrainingColors.textMuted,
+    fontSize: 10,
+    letterSpacing: 1,
+    fontWeight: '800',
+  },
+  progressTitle: {
+    color: TrainingColors.textPrimary,
+    fontSize: 20,
+    fontWeight: '900',
+    marginTop: 2,
+  },
+  progressBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(246,199,110,0.36)',
+    backgroundColor: 'rgba(246,199,110,0.11)',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  progressBadgeText: { color: TrainingColors.accentAmber, fontSize: 12, fontWeight: '800' },
+  progressTrack: {
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: TrainingColors.panelAlt,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 999,
+    backgroundColor: TrainingColors.accentTeal,
+  },
+  metricsGrid: { flexDirection: 'row', gap: 8 },
+  metricTile: {
+    flex: 1,
+    minHeight: 70,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: TrainingColors.borderSubtle,
+    backgroundColor: 'rgba(5,10,19,0.3)',
+    padding: 10,
+    justifyContent: 'center',
+  },
+  metricValue: { color: TrainingColors.textPrimary, fontSize: 17, fontWeight: '900', marginTop: 5 },
+  metricLabel: { color: TrainingColors.textMuted, fontSize: 10, fontWeight: '700', marginTop: 2 },
   filters: { gap: 8, paddingVertical: 4 },
   filter: {
     borderRadius: 999,
@@ -851,15 +1061,51 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   lessonHead: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
+  lessonCategoryPill: {
+    borderRadius: 999,
+    backgroundColor: 'rgba(104,169,255,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(104,169,255,0.24)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
   lessonCategory: {
-    color: TrainingColors.textMuted,
+    color: TrainingColors.accentBlue,
     fontSize: 9,
     textTransform: 'uppercase',
     letterSpacing: 0.9,
+    fontWeight: '800',
   },
-  lessonMeta: { color: TrainingColors.textMuted, fontSize: 10 },
+  lessonStatusPill: {
+    borderRadius: 999,
+    backgroundColor: TrainingColors.panelAlt,
+    borderWidth: 1,
+    borderColor: TrainingColors.border,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  lessonStatusCompleted: {
+    backgroundColor: TrainingColors.successBg,
+    borderColor: 'rgba(77,228,178,0.35)',
+  },
+  lessonStatusLocked: {
+    backgroundColor: 'rgba(116,142,171,0.08)',
+    borderColor: TrainingColors.borderSubtle,
+  },
+  lessonStatusText: { color: TrainingColors.textSecondary, fontSize: 9, fontWeight: '800' },
   lessonTitle: { color: TrainingColors.textPrimary, fontSize: 14, fontWeight: '700', marginTop: 2 },
   lessonSummary: { color: TrainingColors.textSecondary, fontSize: 12, lineHeight: 17, marginTop: 2 },
+  lessonMetaRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
+  lessonMetaPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderRadius: 999,
+    backgroundColor: 'rgba(17,31,51,0.72)',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  lessonMetaPillText: { color: TrainingColors.textMuted, fontSize: 10, fontWeight: '700' },
   lessonProgress: { color: TrainingColors.accentTeal, fontSize: 10, marginTop: 5, fontWeight: '700' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(7,13,24,0.78)', justifyContent: 'flex-end' },
   modalCard: {
@@ -895,6 +1141,25 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  modalStats: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingBottom: 10,
+  },
+  modalStat: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: TrainingColors.border,
+    backgroundColor: TrainingColors.panelAlt,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  modalStatText: { color: TrainingColors.textSecondary, fontSize: 11, fontWeight: '700' },
   modalBody: { flex: 1, paddingHorizontal: 16 },
   modalBodyContent: { paddingVertical: 8, paddingBottom: 20, gap: 10 },
   sectionCard: {
@@ -902,10 +1167,32 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: TrainingColors.border,
     backgroundColor: TrainingColors.panelAlt,
-    padding: 13,
+    padding: 14,
   },
-  sectionTitle: { color: TrainingColors.textPrimary, fontSize: 14, fontWeight: '800' },
-  sectionBody: { color: TrainingColors.textSecondary, fontSize: 13, lineHeight: 19, marginTop: 5 },
+  sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 9, marginBottom: 8 },
+  sectionNumber: {
+    width: 26,
+    height: 26,
+    borderRadius: 8,
+    backgroundColor: TrainingColors.buttonSecondary,
+    borderWidth: 1,
+    borderColor: TrainingColors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sectionNumberText: { color: TrainingColors.accentTeal, fontSize: 12, fontWeight: '900' },
+  sectionTitle: { color: TrainingColors.textPrimary, fontSize: 15, fontWeight: '900', flex: 1 },
+  lessonBody: { gap: 8 },
+  sectionBody: { color: TrainingColors.textSecondary, fontSize: 13, lineHeight: 20 },
+  bulletRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  bulletDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: TrainingColors.accentTeal,
+    marginTop: 7,
+  },
+  bulletText: { color: TrainingColors.textSecondary, fontSize: 13, lineHeight: 20, flex: 1 },
   quizHeader: {
     marginTop: 10,
     flexDirection: 'row',

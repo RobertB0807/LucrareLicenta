@@ -4,6 +4,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { AppBackdrop } from '@/components/app-backdrop';
 import { useAuth } from '@/features/auth/auth-context';
 import {
   buildUserChatProgressPrefix,
@@ -522,6 +523,7 @@ export default function ChatScenarioScreen() {
   if (isLoading && !scenario) {
     return (
       <View style={[styles.screen, styles.centered]}>
+        <AppBackdrop />
         <ActivityIndicator size="large" color={TrainingColors.accentTeal} />
         <Text style={styles.loadingText}>Se generează scenariul...</Text>
       </View>
@@ -532,6 +534,7 @@ export default function ChatScenarioScreen() {
   if (error && !scenario) {
     return (
       <View style={[styles.screen, styles.centered]}>
+        <AppBackdrop />
         <View style={styles.errorCard}>
           <Ionicons name="alert-circle" size={32} color={TrainingColors.accentDanger} />
           <Text style={styles.errorText}>{error}</Text>
@@ -552,6 +555,7 @@ export default function ChatScenarioScreen() {
 
   return (
     <View style={styles.screen}>
+      <AppBackdrop />
       <View style={styles.header}>
         <Pressable onPress={() => router.push('/(tabs)/scenarios')} style={styles.headerButton}>
           <Ionicons name="arrow-back" size={18} color={TrainingColors.textPrimary} />

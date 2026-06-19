@@ -4,6 +4,7 @@ import { Link, Redirect, router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { AppBackdrop } from '@/components/app-backdrop';
 import { useAuth } from '@/features/auth/auth-context';
 import { buildUserStorageKey, FEEDBACK_CONTEXT_STORAGE_KEY } from '@/features/training/local-cache';
 import type { AttackType, DifficultyLevel, Recommendation } from '@/features/training/types';
@@ -152,7 +153,12 @@ export default function FeedbackScreen() {
   };
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+    <View style={styles.screen}>
+      <AppBackdrop grid />
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}>
       {/* Hero section */}
       <View style={[styles.hero, { borderColor: heroConfig.color }]}>
         <View style={[styles.heroIcon, { backgroundColor: heroConfig.color }]}>
@@ -283,12 +289,14 @@ export default function FeedbackScreen() {
           </Pressable>
         </Link>
       </View>
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: TrainingColors.pageBase },
+  scroll: { flex: 1, backgroundColor: 'transparent' },
   content: { paddingHorizontal: 20, paddingTop: 54, paddingBottom: 44, gap: 12, minHeight: '100%' },
   hero: {
     borderRadius: 24,

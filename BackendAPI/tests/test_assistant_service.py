@@ -89,6 +89,19 @@ class AssistantServiceTestCase(unittest.TestCase):
         generate_llm_assistant_mock.assert_called_once()
         self.assertEqual(result.safety_status, "answered")
 
+    @patch("assistant_service.generate_llm_assistant")
+    def test_simple_greeting_uses_conversational_fallback_without_model(
+        self,
+        generate_llm_assistant_mock,
+    ) -> None:
+        result = answer_assistant(message="salut")
+
+        generate_llm_assistant_mock.assert_not_called()
+        self.assertEqual(result.content_source, "rule_based")
+        self.assertEqual(result.fallback_reason, "small_talk")
+        self.assertIn("Salut", result.answer)
+        self.assertIn("Sentinel", result.answer)
+
 
 if __name__ == "__main__":
     unittest.main()

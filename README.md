@@ -21,6 +21,7 @@ Useful launch modes:
 
 ```bash
 FRONTEND_MODE=start ./run-all.sh     # Expo interactive/QR mode
+FRONTEND_MODE=phone ./run-all.sh     # Physical phone on the same Wi-Fi
 FRONTEND_MODE=ios ./run-all.sh       # iOS simulator
 FRONTEND_MODE=android ./run-all.sh   # Android emulator
 RUN_SMOKE_TEST=true ./run-all.sh     # verify the main API flow before Expo starts

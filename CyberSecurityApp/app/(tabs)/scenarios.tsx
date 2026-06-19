@@ -3,9 +3,10 @@ import { Link } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 
+import { AppBackdrop } from '@/components/app-backdrop';
 import { getDifficultyLabel } from '@/features/training/options';
 import type { AttackType, DifficultyLevel } from '@/features/training/types';
-import { TrainingColors } from '@/features/training/ui-theme';
+import { TrainingColors, TrainingShadows } from '@/features/training/ui-theme';
 import { useTrainingSession } from '@/features/training/useTrainingSession';
 
 type Scenario = {
@@ -159,15 +160,22 @@ export default function ScenariosScreen() {
   );
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={[styles.content, contentInsets]}>
+    <View style={styles.screen}>
+      <AppBackdrop grid />
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={[styles.content, contentInsets]}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled">
       <View style={styles.header}>
         <View style={styles.headerIcon}>
           <Ionicons name="shield-checkmark-outline" size={19} color="#EFF6FF" />
         </View>
-        <View>
+        <View style={styles.headerCopy}>
+          <Text style={styles.eyebrow}>SIMULĂRI INTERACTIVE</Text>
           <Text style={[styles.title, isCompact && styles.titleCompact]}>Laborator de antrenament</Text>
           <Text style={[styles.subtitle, isCompact && styles.subtitleCompact]}>
-            Alege un scenariu și îți ascuți apărarea
+            Exersează decizii sigure în situații realiste
           </Text>
         </View>
       </View>
@@ -181,6 +189,15 @@ export default function ScenariosScreen() {
           placeholderTextColor={TrainingColors.textMuted}
           style={styles.searchInput}
         />
+        {query ? (
+          <Pressable
+            accessibilityLabel="Șterge căutarea"
+            onPress={() => setQuery('')}
+            hitSlop={10}
+            style={({ pressed }) => [styles.clearSearch, pressed && styles.cardPressed]}>
+            <Ionicons name="close-circle" size={18} color={TrainingColors.textMuted} />
+          </Pressable>
+        ) : null}
       </View>
 
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filters}>
@@ -359,7 +376,8 @@ export default function ScenariosScreen() {
           );
         })}
       </View>
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 }
 
@@ -384,35 +402,51 @@ function DifficultyTag({ level }: { level: DifficultyLevel }) {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: TrainingColors.pageBase },
+  scroll: { flex: 1, backgroundColor: 'transparent' },
   content: { paddingHorizontal: 20, paddingTop: 50, paddingBottom: 130, gap: 12 },
-  header: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 4 },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 8 },
+  headerCopy: { flex: 1 },
   headerIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
+    width: 46,
+    height: 46,
+    borderRadius: 15,
     backgroundColor: TrainingColors.buttonPrimary,
     borderWidth: 1,
     borderColor: TrainingColors.buttonPrimaryBorder,
     alignItems: 'center',
     justifyContent: 'center',
+    shadowColor: TrainingColors.accentBlue,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.28,
+    shadowRadius: 12,
+    elevation: 5,
   },
-  title: { color: TrainingColors.textPrimary, fontSize: 24, fontWeight: '800' },
-  subtitle: { color: TrainingColors.textSecondary, fontSize: 12 },
+  eyebrow: {
+    color: TrainingColors.accentTeal,
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 1.4,
+    marginBottom: 2,
+  },
+  title: { color: TrainingColors.textPrimary, fontSize: 24, fontWeight: '800', letterSpacing: -0.5 },
+  subtitle: { color: TrainingColors.textSecondary, fontSize: 12, marginTop: 2 },
   titleCompact: { fontSize: 21 },
   subtitleCompact: { fontSize: 11 },
   searchBox: {
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: TrainingColors.border,
-    backgroundColor: TrainingColors.panel,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    borderColor: TrainingColors.borderStrong,
+    backgroundColor: 'rgba(13, 24, 40, 0.94)',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    ...TrainingShadows.card,
   },
   searchBoxCompact: { paddingVertical: 8 },
   searchInput: { flex: 1, color: TrainingColors.textPrimary, fontSize: 14 },
+  clearSearch: { padding: 2 },
   filters: { gap: 8, paddingTop: 4, paddingBottom: 2 },
   selectorHeader: {
     flexDirection: 'row',
@@ -435,9 +469,9 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     borderWidth: 1,
     borderColor: TrainingColors.border,
-    backgroundColor: TrainingColors.panel,
+    backgroundColor: 'rgba(13, 24, 40, 0.9)',
     paddingHorizontal: 14,
-    paddingVertical: 7,
+    paddingVertical: 8,
   },
   filterActive: { backgroundColor: TrainingColors.buttonPrimary, borderColor: TrainingColors.buttonPrimaryBorder },
   filterText: { color: TrainingColors.textSecondary, fontSize: 12, fontWeight: '700' },
@@ -449,7 +483,8 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     borderWidth: 1,
     borderColor: TrainingColors.border,
-    backgroundColor: TrainingColors.panel,
+    backgroundColor: 'rgba(13, 24, 40, 0.94)',
+    ...TrainingShadows.card,
   },
   levelButton: {
     flex: 1,
@@ -510,11 +545,12 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     borderWidth: 1,
     borderColor: TrainingColors.border,
-    backgroundColor: TrainingColors.panel,
+    backgroundColor: 'rgba(13, 24, 40, 0.9)',
     flexDirection: 'row',
     gap: 8,
     alignItems: 'center',
-    padding: 10,
+    padding: 12,
+    ...TrainingShadows.card,
   },
   sessionIcon: {
     width: 28,
@@ -530,15 +566,18 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     borderWidth: 1,
     borderColor: TrainingColors.border,
-    backgroundColor: TrainingColors.panel,
-    padding: 14,
-    gap: 8,
+    backgroundColor: 'rgba(13, 24, 40, 0.94)',
+    padding: 16,
+    gap: 9,
+    ...TrainingShadows.card,
   },
   cardCompact: { padding: 12, gap: 6 },
   cardPressed: { opacity: 0.92 },
   cardRecommended: {
     borderColor: 'rgba(69, 224, 177, 0.55)',
-    backgroundColor: 'rgba(20, 43, 57, 0.96)',
+    backgroundColor: 'rgba(18, 46, 53, 0.97)',
+    shadowColor: TrainingColors.accentTeal,
+    shadowOpacity: 0.16,
   },
   cardTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   cardTags: { flexDirection: 'row', alignItems: 'center', gap: 5 },

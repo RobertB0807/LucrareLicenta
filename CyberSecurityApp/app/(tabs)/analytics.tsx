@@ -3,6 +3,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
+import { AppBackdrop } from '@/components/app-backdrop';
 import { getSessionEvents, getSessionSnapshot, getSessionTrendAggregates } from '@/features/training/api';
 import type {
   AttackType,
@@ -361,7 +362,12 @@ export default function AnalyticsScreen() {
   ];
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={[styles.content, contentInsets]}>
+    <View style={styles.screen}>
+      <AppBackdrop grid />
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={[styles.content, contentInsets]}
+        showsVerticalScrollIndicator={false}>
       <View style={styles.header}>
         <View style={styles.headerIcon}>
           <Ionicons name="stats-chart" size={18} color="#EFF6FF" />
@@ -690,12 +696,14 @@ export default function AnalyticsScreen() {
           </View>
         ))}
       </View>
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: TrainingColors.pageBase },
+  scroll: { flex: 1, backgroundColor: 'transparent' },
   content: { paddingHorizontal: 20, paddingTop: 50, paddingBottom: 130, gap: 12 },
   header: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 4 },
   headerIcon: {

@@ -13,12 +13,13 @@ import {
   View,
 } from 'react-native';
 
+import { AppBackdrop } from '@/components/app-backdrop';
 import { useAuth } from '@/features/auth/auth-context';
-import { TrainingColors } from '@/features/training/ui-theme';
+import { TrainingColors, TrainingShadows } from '@/features/training/ui-theme';
 
 export default function RegisterScreen() {
   const router = useRouter();
-  const { register, logout } = useAuth();
+  const { register } = useAuth();
 
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
@@ -51,11 +52,7 @@ export default function RegisterScreen() {
 
     try {
       await register(email.trim().toLowerCase(), password, displayName.trim());
-      await logout();
-      router.replace({
-        pathname: '/login',
-        params: { registered: '1' },
-      });
+      router.replace('/onboarding' as never);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Eroare la crearea contului.');
     } finally {
@@ -65,6 +62,7 @@ export default function RegisterScreen() {
 
   return (
     <View style={styles.container}>
+      <AppBackdrop grid />
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardView}
@@ -73,18 +71,26 @@ export default function RegisterScreen() {
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
         >
+          <View style={styles.authShell}>
           {/* Header */}
           <View style={styles.header}>
             <View style={styles.iconContainer}>
-              <Ionicons name="person-add" size={44} color={TrainingColors.accentBlue} />
+              <View style={styles.iconInner}>
+                <Ionicons name="person-add" size={38} color={TrainingColors.accentBlue} />
+              </View>
             </View>
+            <Text style={styles.brandEyebrow}>ÎNCEPE ANTRENAMENTUL</Text>
             <Text style={styles.title}>Cont nou</Text>
-            <Text style={styles.subtitle}>Începe antrenamentul tău cyber</Text>
+            <Text style={styles.subtitle}>
+              Creează-ți profilul și primești un traseu adaptat nivelului tău.
+            </Text>
           </View>
 
           {/* Form */}
           <View style={styles.card}>
+            <Text style={styles.cardEyebrow}>CONFIGURARE CONT</Text>
             <Text style={styles.cardTitle}>Înregistrare</Text>
+            <Text style={styles.cardSubtitle}>Durează mai puțin de un minut.</Text>
 
             {error && (
               <View style={styles.errorBanner}>
@@ -189,7 +195,10 @@ export default function RegisterScreen() {
               {isSubmitting ? (
                 <ActivityIndicator color="#fff" size="small" />
               ) : (
-                <Text style={styles.submitButtonText}>Creează cont</Text>
+                <>
+                  <Text style={styles.submitButtonText}>Creează cont</Text>
+                  <Ionicons name="arrow-forward" size={18} color="#FFFFFF" />
+                </>
               )}
             </Pressable>
           </View>
@@ -200,6 +209,11 @@ export default function RegisterScreen() {
             <Pressable onPress={() => router.back()}>
               <Text style={styles.footerLink}> Autentifică-te</Text>
             </Pressable>
+          </View>
+          <View style={styles.trustRow}>
+            <Ionicons name="shield-checkmark" size={13} color={TrainingColors.textMuted} />
+            <Text style={styles.trustText}>Evaluare inițială și recomandări personalizate</Text>
+          </View>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -218,51 +232,96 @@ const styles = StyleSheet.create({
   scrollContent: {
     flexGrow: 1,
     justifyContent: 'center',
-    paddingHorizontal: 24,
-    paddingVertical: 48,
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 40,
+  },
+  authShell: {
+    width: '100%',
+    maxWidth: 460,
   },
 
   // Header
   header: {
     alignItems: 'center',
-    marginBottom: 32,
+    marginBottom: 26,
   },
   iconContainer: {
-    width: 88,
-    height: 88,
-    borderRadius: 24,
-    backgroundColor: 'rgba(88, 166, 255, 0.1)',
+    width: 82,
+    height: 82,
+    borderRadius: 26,
+    backgroundColor: 'rgba(104, 169, 255, 0.08)',
     borderWidth: 1,
-    borderColor: 'rgba(88, 166, 255, 0.25)',
+    borderColor: 'rgba(104, 169, 255, 0.32)',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 16,
+    transform: [{ rotate: '-4deg' }],
+    shadowColor: TrainingColors.accentBlue,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.2,
+    shadowRadius: 20,
+    elevation: 8,
+  },
+  iconInner: {
+    width: 62,
+    height: 62,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(104, 169, 255, 0.08)',
+    transform: [{ rotate: '4deg' }],
+  },
+  brandEyebrow: {
+    color: TrainingColors.accentBlue,
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 1.8,
+    marginBottom: 5,
   },
   title: {
-    fontSize: 28,
-    fontWeight: '800',
+    fontSize: 32,
+    fontWeight: '900',
     color: TrainingColors.textPrimary,
-    letterSpacing: 1,
+    letterSpacing: -0.8,
   },
   subtitle: {
     fontSize: 14,
-    color: TrainingColors.textMuted,
-    marginTop: 6,
+    lineHeight: 20,
+    textAlign: 'center',
+    color: TrainingColors.textSecondary,
+    marginTop: 7,
+    maxWidth: 350,
   },
 
   // Card
   card: {
-    backgroundColor: TrainingColors.panel,
-    borderRadius: 16,
+    backgroundColor: 'rgba(13, 24, 40, 0.96)',
+    borderRadius: 24,
     borderWidth: 1,
-    borderColor: TrainingColors.border,
-    padding: 24,
+    borderColor: TrainingColors.borderStrong,
+    padding: 26,
+    ...TrainingShadows.floating,
+  },
+  cardEyebrow: {
+    color: TrainingColors.accentBlue,
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 1.5,
+    marginBottom: 5,
   },
   cardTitle: {
-    fontSize: 20,
-    fontWeight: '700',
+    fontSize: 24,
+    fontWeight: '800',
     color: TrainingColors.textPrimary,
-    marginBottom: 20,
+    letterSpacing: -0.4,
+  },
+  cardSubtitle: {
+    color: TrainingColors.textMuted,
+    fontSize: 13,
+    lineHeight: 18,
+    marginTop: 4,
+    marginBottom: 22,
   },
 
   // Error
@@ -296,11 +355,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: TrainingColors.panelAlt,
-    borderRadius: 12,
+    borderRadius: 14,
     borderWidth: 1,
     borderColor: TrainingColors.border,
     paddingHorizontal: 14,
-    height: 50,
+    height: 54,
   },
   inputError: {
     borderColor: TrainingColors.accentDanger,
@@ -328,13 +387,20 @@ const styles = StyleSheet.create({
   // Submit
   submitButton: {
     backgroundColor: TrainingColors.buttonPrimary,
-    borderRadius: 12,
-    height: 50,
+    borderRadius: 14,
+    height: 54,
+    flexDirection: 'row',
+    gap: 9,
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 8,
     borderWidth: 1,
     borderColor: TrainingColors.buttonPrimaryBorder,
+    shadowColor: TrainingColors.accentBlue,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.24,
+    shadowRadius: 14,
+    elevation: 6,
   },
   submitButtonDisabled: {
     opacity: 0.5,
@@ -356,8 +422,19 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   footerLink: {
-    color: TrainingColors.accentBlue,
+    color: TrainingColors.accentTeal,
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: '700',
+  },
+  trustRow: {
+    marginTop: 18,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 6,
+  },
+  trustText: {
+    color: TrainingColors.textMuted,
+    fontSize: 11,
   },
 });

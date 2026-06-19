@@ -29,6 +29,11 @@ class AuthenticatedUser(BaseModel):
     email: str
     display_name: str
     is_active: bool
+    onboarding_completed: bool
+    onboarding_experience: str | None = None
+    learning_goal: str | None = None
+    assessment_score: int | None = None
+    assessment_level: str | None = None
 
 
 def _b64encode(data: bytes) -> str:

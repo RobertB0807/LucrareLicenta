@@ -1,11 +1,11 @@
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
+import { DarkTheme, ThemeProvider } from '@react-navigation/native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import 'react-native-reanimated';
 
+import { AppBackdrop } from '@/components/app-backdrop';
 import { AuthProvider, useAuth } from '@/features/auth/auth-context';
-import { useColorScheme } from '@/hooks/use-color-scheme';
 import { TrainingSessionProvider } from '@/features/training/useTrainingSession';
 import { TrainingColors } from '@/features/training/ui-theme';
 
@@ -24,24 +24,37 @@ export default function RootLayout() {
 }
 
 function RootNavigator() {
-  const colorScheme = useColorScheme();
   const { isAuthenticated, isLoading } = useAuth();
 
   if (isLoading) {
     return (
       <View style={styles.loader}>
+        <AppBackdrop />
         <ActivityIndicator size="large" color={TrainingColors.accentTeal} />
       </View>
     );
   }
 
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+    <ThemeProvider
+      value={{
+        ...DarkTheme,
+        colors: {
+          ...DarkTheme.colors,
+          primary: TrainingColors.accentTeal,
+          background: TrainingColors.pageBase,
+          card: TrainingColors.panel,
+          text: TrainingColors.textPrimary,
+          border: TrainingColors.border,
+          notification: TrainingColors.accentDanger,
+        },
+      }}>
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="login" />
         <Stack.Screen name="register" />
 
         <Stack.Protected guard={isAuthenticated}>
+          <Stack.Screen name="onboarding" />
           <Stack.Screen name="(tabs)" />
           <Stack.Screen name="sessions" />
           <Stack.Screen name="profile" />
@@ -54,7 +67,7 @@ function RootNavigator() {
           />
         </Stack.Protected>
       </Stack>
-      <StatusBar style="auto" />
+      <StatusBar style="light" />
     </ThemeProvider>
   );
 }

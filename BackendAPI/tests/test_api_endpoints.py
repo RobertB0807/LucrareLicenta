@@ -879,7 +879,7 @@ class ApiEndpointsTestCase(unittest.TestCase):
         )
         self.assertEqual(detail.status_code, 200)
         detail_payload = detail.json()
-        self.assertEqual(len(detail_payload["sections"]), 2)
+        self.assertEqual(len(detail_payload["sections"]), 4)
         self.assertEqual(len(detail_payload["questions"]), 2)
         self.assertNotIn("correct_option_id", detail_payload["questions"][0])
 
@@ -1058,6 +1058,120 @@ class ApiEndpointsTestCase(unittest.TestCase):
             headers=self.auth_headers,
         )
         self.assertEqual(response.status_code, 422)
+
+    def test_onboarding_assessment_initializes_adaptive_profile(self) -> None:
+        status = self.client.get("/onboarding", headers=self.auth_headers)
+        self.assertEqual(status.status_code, 200)
+        self.assertFalse(status.json()["completed"])
+        self.assertEqual(len(status.json()["questions"]), 3)
+        self.assertNotIn("correct_option_id", status.json()["questions"][0])
+
+        completed = self.client.post(
+            "/onboarding/complete",
+            json={
+                "experience": "intermediate",
+                "learning_goal": "workplace",
+                "answers": [
+                    {
+                        "question_id": "email-urgency",
+                        "selected_option_id": "verify_official",
+                    },
+                    {
+                        "question_id": "delivery-sms",
+                        "selected_option_id": "report_sms",
+                    },
+                    {
+                        "question_id": "manager-payment",
+                        "selected_option_id": "verify_identity",
+                    },
+                ],
+            },
+            headers=self.auth_headers,
+        )
+        self.assertEqual(completed.status_code, 200)
+        payload = completed.json()
+        self.assertEqual(payload["score"], 3)
+        self.assertEqual(payload["assessment_level"], "advanced")
+        self.assertEqual(payload["recommendation"]["attack_type"], "impersonation")
+        self.assertEqual(payload["recommendation"]["difficulty"], "hard")
+
+        me = self.client.get("/auth/me", headers=self.auth_headers)
+        self.assertEqual(me.status_code, 200)
+        self.assertTrue(me.json()["onboarding_completed"])
+        self.assertEqual(me.json()["learning_goal"], "workplace")
+        self.assertEqual(me.json()["assessment_score"], 3)
+
+        profile_rows = persistence_repository.fetch_user_learning_profiles(
+            self.auth_user_id
+        )
+        self.assertEqual(len(profile_rows), 3)
+        self.assertTrue(all(row["difficulty"] == "hard" for row in profile_rows))
+        self.assertTrue(all(row["correct"] == 1 for row in profile_rows))
+
+        repeated = self.client.post(
+            "/onboarding/complete",
+            json={
+                "experience": "intermediate",
+                "learning_goal": "workplace",
+                "answers": [
+                    {
+                        "question_id": "email-urgency",
+                        "selected_option_id": "verify_official",
+                    },
+                    {
+                        "question_id": "delivery-sms",
+                        "selected_option_id": "report_sms",
+                    },
+                    {
+                        "question_id": "manager-payment",
+                        "selected_option_id": "verify_identity",
+                    },
+                ],
+            },
+            headers=self.auth_headers,
+        )
+        self.assertEqual(repeated.status_code, 409)
+
+    def test_onboarding_rejects_incomplete_or_invalid_answers(self) -> None:
+        incomplete = self.client.post(
+            "/onboarding/complete",
+            json={
+                "experience": "beginner",
+                "learning_goal": "personal_safety",
+                "answers": [
+                    {
+                        "question_id": "email-urgency",
+                        "selected_option_id": "verify_official",
+                    }
+                ],
+            },
+            headers=self.auth_headers,
+        )
+        self.assertEqual(incomplete.status_code, 422)
+
+        invalid = self.client.post(
+            "/onboarding/complete",
+            json={
+                "experience": "beginner",
+                "learning_goal": "personal_safety",
+                "answers": [
+                    {
+                        "question_id": "email-urgency",
+                        "selected_option_id": "missing",
+                    },
+                    {
+                        "question_id": "delivery-sms",
+                        "selected_option_id": "report_sms",
+                    },
+                    {
+                        "question_id": "manager-payment",
+                        "selected_option_id": "verify_identity",
+                    },
+                ],
+            },
+            headers=self.auth_headers,
+        )
+        self.assertEqual(invalid.status_code, 422)
 
     def test_auth_error_responses_include_cors_headers(self) -> None:
         response = self.client.get(

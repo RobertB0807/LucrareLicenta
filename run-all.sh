@@ -10,6 +10,7 @@ COMPOSE_FILE="$ROOT_DIR/docker-compose.production.yml"
 FRONTEND_MODE="${FRONTEND_MODE:-web}"
 FRONTEND_PORT="${FRONTEND_PORT:-8081}"
 RUN_SMOKE_TEST="${RUN_SMOKE_TEST:-false}"
+PHONE_LAN_IP="${PHONE_LAN_IP:-}"
 
 require_cmd() {
   local command_name="$1"
@@ -59,6 +60,35 @@ export_backend_setting() {
   fi
 }
 
+detect_lan_ip() {
+  local interface_name
+  local detected_ip
+
+  if command -v route >/dev/null 2>&1 && command -v ipconfig >/dev/null 2>&1; then
+    interface_name="$(
+      route -n get default 2>/dev/null |
+        awk '/interface:/{print $2; exit}'
+    )"
+    if [[ -n "$interface_name" ]]; then
+      detected_ip="$(ipconfig getifaddr "$interface_name" 2>/dev/null || true)"
+      if [[ -n "$detected_ip" ]]; then
+        printf '%s' "$detected_ip"
+        return 0
+      fi
+    fi
+
+    for interface_name in en0 en1; do
+      detected_ip="$(ipconfig getifaddr "$interface_name" 2>/dev/null || true)"
+      if [[ -n "$detected_ip" ]]; then
+        printf '%s' "$detected_ip"
+        return 0
+      fi
+    done
+  fi
+
+  return 1
+}
+
 create_local_production_env() {
   local database_password
   local jwt_secret
@@ -94,9 +124,9 @@ if [[ ! -d "$MOBILE_DIR" ]]; then
 fi
 
 case "$FRONTEND_MODE" in
-  web | start | ios | android) ;;
+  web | start | phone | ios | android) ;;
   *)
-    echo "FRONTEND_MODE must be one of: web, start, ios, android" >&2
+    echo "FRONTEND_MODE must be one of: web, start, phone, ios, android" >&2
     exit 1
     ;;
 esac
@@ -169,6 +199,25 @@ fi
 API_PORT="${API_PORT:-$(read_env_value "$ENV_FILE" "API_PORT" || true)}"
 API_PORT="${API_PORT:-8000}"
 API_BASE_URL="http://127.0.0.1:${API_PORT}"
+FRONTEND_API_BASE_URL="$API_BASE_URL"
+FRONTEND_NPM_SCRIPT="$FRONTEND_MODE"
+FRONTEND_ARGS=(--port "$FRONTEND_PORT")
+
+if [[ "$FRONTEND_MODE" == "phone" ]]; then
+  if [[ -z "$PHONE_LAN_IP" ]]; then
+    PHONE_LAN_IP="$(detect_lan_ip || true)"
+  fi
+  if [[ -z "$PHONE_LAN_IP" ]]; then
+    echo "Could not detect this Mac's Wi-Fi IP address." >&2
+    echo "Run again with PHONE_LAN_IP=192.168.x.x FRONTEND_MODE=phone ./run-all.sh" >&2
+    exit 1
+  fi
+
+  FRONTEND_API_BASE_URL="http://${PHONE_LAN_IP}:${API_PORT}"
+  FRONTEND_NPM_SCRIPT="start"
+  FRONTEND_ARGS+=(--lan)
+fi
+
 COMPOSE=(
   docker compose
   --profile monitoring
@@ -226,6 +275,9 @@ fi
 
 echo
 echo "Backend:    $API_BASE_URL"
+if [[ "$FRONTEND_MODE" == "phone" ]]; then
+  echo "Phone API:  $FRONTEND_API_BASE_URL"
+fi
 echo "Readiness:  $API_BASE_URL/health/ready"
 echo "Metrics:    $API_BASE_URL/metrics"
 echo "Prometheus: http://127.0.0.1:9090"
@@ -235,5 +287,5 @@ echo "Press Ctrl+C to stop the app. Database and Redis data will be kept."
 echo
 
 cd "$MOBILE_DIR"
-EXPO_PUBLIC_API_BASE_URL="$API_BASE_URL" \
-  npm run "$FRONTEND_MODE" -- --port "$FRONTEND_PORT"
+EXPO_PUBLIC_API_BASE_URL="$FRONTEND_API_BASE_URL" \
+  npm run "$FRONTEND_NPM_SCRIPT" -- "${FRONTEND_ARGS[@]}"

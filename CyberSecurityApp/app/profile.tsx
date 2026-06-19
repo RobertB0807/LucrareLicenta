@@ -13,6 +13,7 @@ import {
   View,
 } from 'react-native';
 
+import { AppBackdrop } from '@/components/app-backdrop';
 import { useAuth } from '@/features/auth/auth-context';
 import { TrainingColors } from '@/features/training/ui-theme';
 import { useTrainingSession } from '@/features/training/useTrainingSession';
@@ -123,6 +124,7 @@ export default function ProfileScreen() {
     <KeyboardAvoidingView
       style={styles.screen}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <AppBackdrop grid />
       <View style={styles.header}>
         <Pressable
           accessibilityLabel="Înapoi"

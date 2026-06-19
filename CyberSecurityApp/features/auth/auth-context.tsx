@@ -10,6 +10,7 @@ import {
 } from 'react';
 
 import {
+  apiCompleteOnboarding,
   apiDeleteAccount,
   apiGetMe,
   apiLogin,
@@ -17,7 +18,12 @@ import {
   apiRegister,
   apiSendPasswordReset,
   apiUpdateProfile,
+  type AssessmentLevel,
   type AuthUserResponse,
+  type LearningGoal,
+  type OnboardingCompletePayload,
+  type OnboardingCompleteResponse,
+  type OnboardingExperience,
 } from './auth-api';
 import {
   getAuthStorageItem,
@@ -33,6 +39,11 @@ type AuthUser = {
   id: string;
   email: string;
   displayName: string;
+  onboardingCompleted: boolean;
+  onboardingExperience: OnboardingExperience | null;
+  learningGoal: LearningGoal | null;
+  assessmentScore: number | null;
+  assessmentLevel: AssessmentLevel | null;
 };
 
 type AuthContextValue = {
@@ -40,8 +51,11 @@ type AuthContextValue = {
   token: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
-  login: (email: string, password: string, rememberMe?: boolean) => Promise<void>;
+  login: (email: string, password: string, rememberMe?: boolean) => Promise<boolean>;
   register: (email: string, password: string, displayName: string) => Promise<void>;
+  completeOnboarding: (
+    payload: OnboardingCompletePayload
+  ) => Promise<OnboardingCompleteResponse>;
   updateProfile: (displayName: string) => Promise<void>;
   deleteAccount: () => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
@@ -73,6 +87,11 @@ function mapUserResponse(u: AuthUserResponse): AuthUser {
     id: u.id,
     email: u.email,
     displayName: u.display_name,
+    onboardingCompleted: u.onboarding_completed,
+    onboardingExperience: u.onboarding_experience,
+    learningGoal: u.learning_goal,
+    assessmentScore: u.assessment_score,
+    assessmentLevel: u.assessment_level,
   };
 }
 
@@ -271,7 +290,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       authGenerationRef.current = loginGeneration;
       const response = await apiLogin(email, password);
       if (authGenerationRef.current !== loginGeneration) {
-        return;
+        return false;
       }
       const mappedUser = mapUserResponse(response.user);
       setToken(response.access_token);
@@ -292,6 +311,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } else {
         await clearPersistedSession().catch(() => undefined);
       }
+      return mappedUser.onboardingCompleted;
     },
     [clearPersistedSession, persistSession]
   );
@@ -361,6 +381,48 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     },
     [persistSession]
+  );
+
+  const completeOnboarding = useCallback(
+    async (payload: OnboardingCompletePayload) => {
+      const currentToken = tokenRef.current;
+      if (!currentToken) {
+        throw new Error('Sesiune expirată. Te rog autentifică-te din nou.');
+      }
+      if (!user) {
+        throw new Error('Utilizatorul curent nu este disponibil.');
+      }
+
+      const result = await apiCompleteOnboarding(currentToken, payload);
+      const updatedUser: AuthUser = {
+        ...user,
+        onboardingCompleted: true,
+        onboardingExperience: result.experience,
+        learningGoal: result.learning_goal,
+        assessmentScore: result.score,
+        assessmentLevel: result.assessment_level,
+      };
+      setUser(updatedUser);
+
+      const currentRefreshToken = refreshTokenRef.current;
+      const rememberedUntil = rememberedUntilRef.current;
+      if (
+        updatedUser &&
+        shouldPersistRef.current &&
+        currentRefreshToken &&
+        rememberedUntil &&
+        rememberedUntil > Date.now()
+      ) {
+        await persistSession(
+          currentToken,
+          currentRefreshToken,
+          updatedUser,
+          rememberedUntil
+        );
+      }
+      return result;
+    },
+    [persistSession, user]
   );
 
   const deleteAccount = useCallback(async () => {
@@ -470,6 +532,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isLoading,
       login,
       register,
+      completeOnboarding,
       updateProfile,
       deleteAccount,
       resetPassword,
@@ -482,6 +545,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isLoading,
       login,
       register,
+      completeOnboarding,
       updateProfile,
       deleteAccount,
       resetPassword,

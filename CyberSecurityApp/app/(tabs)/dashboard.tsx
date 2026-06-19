@@ -4,9 +4,10 @@ import { Link, useRouter, type Href } from 'expo-router';
 import { useCallback, useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
+import { AppBackdrop } from '@/components/app-backdrop';
 import { useAuth } from '@/features/auth/auth-context';
 import type { AttackType, DifficultyLevel, LearningProfileAttack } from '@/features/training/types';
-import { TrainingColors } from '@/features/training/ui-theme';
+import { TrainingColors, TrainingShadows } from '@/features/training/ui-theme';
 import { useTrainingSession } from '@/features/training/useTrainingSession';
 
 type RiskLevel = 'Scăzut' | 'Mediu' | 'Ridicat' | 'Critic';
@@ -176,13 +177,19 @@ export default function DashboardScreen() {
       : 'Recapitulările apar după primele răspunsuri evaluate.';
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={[styles.content, contentInsets]}>
+    <View style={styles.screen}>
+      <AppBackdrop grid />
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={[styles.content, contentInsets]}
+        showsVerticalScrollIndicator={false}>
       <View style={styles.header}>
         <View style={styles.headerLeft}>
           <View style={styles.headerIcon}>
             <Ionicons name="shield-half" size={18} color="#EFF6FF" />
           </View>
           <View>
+            <Text style={styles.welcomeEyebrow}>CENTRU DE COMANDĂ</Text>
             <Text style={[styles.headerTitle, isCompact && styles.headerTitleCompact]}>
               {user ? `Bună, ${user.displayName}` : 'Panou de antrenament'}
             </Text>
@@ -397,59 +404,108 @@ export default function DashboardScreen() {
       </View>
 
       <View style={styles.sectionHeader}>
-        <Text style={styles.sectionTitle}>Continuă antrenamentul</Text>
+        <View>
+          <Text style={styles.sectionEyebrow}>RECOMANDĂRI PENTRU TINE</Text>
+          <Text style={styles.sectionTitle}>Continuă antrenamentul</Text>
+        </View>
         <Link href="/(tabs)/scenarios" asChild>
           <Pressable style={({ pressed }) => [styles.sectionLinkRow, pressed && styles.pressableFeedback]}>
             <Text style={styles.sectionLink}>Vezi toate</Text>
-            <Ionicons name="chevron-forward" size={13} color={TrainingColors.accentTeal} />
+            <View style={styles.sectionLinkIcon}>
+              <Ionicons name="arrow-forward" size={12} color={TrainingColors.accentTeal} />
+            </View>
           </Pressable>
         </Link>
       </View>
       <View style={styles.scenarioList}>
-        {scenarioCards.map((scenario) => (
-          <Link
-            key={scenario.id}
-            href={{
-              pathname: '/chat/[scenarioId]',
-              params: {
-                scenarioId: scenario.id,
-                attackType: scenario.attackType,
-                difficulty: scenario.difficulty,
-                sessionId: sessionId ?? undefined,
-              },
-            }}
-            asChild>
-            <Pressable
-              style={({ pressed }) => [
-                styles.scenarioCard,
-                isCompact && styles.scenarioCardCompact,
-                pressed && styles.pressableFeedback,
-              ]}>
-              <View style={[styles.scenarioIcon, isCompact && styles.scenarioIconCompact]}>
-                <Ionicons name={scenario.icon} size={18} color={TrainingColors.accentTeal} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.scenarioType}>{scenario.type}</Text>
-                <Text style={[styles.scenarioTitle, isCompact && styles.scenarioTitleCompact]}>{scenario.title}</Text>
-              </View>
-              <RiskBadge level={scenario.risk} />
-            </Pressable>
-          </Link>
-        ))}
+        {scenarioCards.map((scenario, index) => {
+          const accent =
+            scenario.attackType === 'phishing'
+              ? TrainingColors.accentBlue
+              : scenario.attackType === 'smishing'
+                ? TrainingColors.accentTeal
+                : TrainingColors.accentAmber;
+          return (
+            <Link
+              key={scenario.id}
+              href={{
+                pathname: '/chat/[scenarioId]',
+                params: {
+                  scenarioId: scenario.id,
+                  attackType: scenario.attackType,
+                  difficulty: scenario.difficulty,
+                  sessionId: sessionId ?? undefined,
+                },
+              }}
+              asChild>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.scenarioCard,
+                  isCompact && styles.scenarioCardCompact,
+                  pressed && styles.scenarioCardPressed,
+                ]}>
+                <View style={[styles.scenarioAccent, { backgroundColor: accent }]} />
+                <View style={styles.scenarioTopRow}>
+                  <View
+                    style={[
+                      styles.scenarioIcon,
+                      isCompact && styles.scenarioIconCompact,
+                      {
+                        backgroundColor: `${accent}16`,
+                        borderColor: `${accent}42`,
+                      },
+                    ]}>
+                    <Ionicons name={scenario.icon} size={18} color={accent} />
+                  </View>
+                  <View style={styles.scenarioHeading}>
+                    <Text style={[styles.scenarioType, { color: accent }]}>{scenario.type}</Text>
+                    <Text style={styles.scenarioIndex}>SCENARIUL {index + 1}</Text>
+                  </View>
+                  <View style={styles.scenarioArrow}>
+                    <Ionicons name="arrow-forward" size={15} color={TrainingColors.textSecondary} />
+                  </View>
+                </View>
+
+                <Text
+                  numberOfLines={2}
+                  style={[styles.scenarioTitle, isCompact && styles.scenarioTitleCompact]}>
+                  {scenario.title}
+                </Text>
+
+                <View style={styles.scenarioFooter}>
+                  <View style={styles.scenarioMeta}>
+                    <Ionicons name="speedometer-outline" size={13} color={TrainingColors.textMuted} />
+                    <Text style={styles.scenarioMetaText}>
+                      Nivel {DIFFICULTY_LABELS[scenario.difficulty].toLowerCase()}
+                    </Text>
+                  </View>
+                  <RiskBadge level={scenario.risk} />
+                </View>
+              </Pressable>
+            </Link>
+          );
+        })}
       </View>
 
       <View style={[styles.tipCard, isCompact && styles.tipCardCompact]}>
-        <View style={styles.tipIcon}>
-          <Ionicons name="sparkles" size={15} color={TrainingColors.accentTeal} />
+        <View style={styles.tipTopRow}>
+          <View style={styles.tipIcon}>
+            <Ionicons name="sparkles" size={17} color={TrainingColors.accentTeal} />
+          </View>
+          <View style={styles.tipHeading}>
+            <Text style={styles.tipEyebrow}>RECOMANDARE ADAPTIVĂ</Text>
+            <Text style={styles.tipTitle}>Insight-ul zilei</Text>
+          </View>
+          <View style={styles.tipStatus}>
+            <View style={styles.tipStatusDot} />
+            <Text style={styles.tipStatusText}>ACTIV</Text>
+          </View>
         </View>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.tipTitle}>Insight-ul zilei</Text>
-          <Text style={styles.tipText}>
-            {evaluation?.recommendation?.reason ??
-              adaptiveProfile?.recommended_next.reason ??
-              'Antrenează mai întâi categoria cu acuratețea cea mai mică, apoi crește gradual dificultatea.'}
-          </Text>
-        </View>
+        <Text style={styles.tipText}>
+          {evaluation?.recommendation?.reason ??
+            adaptiveProfile?.recommended_next.reason ??
+            'Antrenează mai întâi categoria cu acuratețea cea mai mică, apoi crește gradual dificultatea.'}
+        </Text>
       </View>
 
       <Link href="/(tabs)/learn" asChild>
@@ -457,19 +513,27 @@ export default function DashboardScreen() {
           style={({ pressed }) => [
             styles.learnCard,
             isCompact && styles.learnCardCompact,
-            pressed && styles.pressableFeedback,
+            pressed && styles.scenarioCardPressed,
           ]}>
+          <View style={styles.learnGlow} />
           <View style={styles.learnIcon}>
-            <Ionicons name="book-outline" size={18} color={TrainingColors.accentTeal} />
+            <Ionicons name="book-outline" size={20} color={TrainingColors.accentTeal} />
           </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.learnTitle}>Deschide biblioteca de învățare</Text>
-            <Text style={styles.learnText}>Lecții ghidate de AI despre phishing, scam-uri și altele</Text>
+          <View style={styles.learnContent}>
+            <Text style={styles.learnEyebrow}>BIBLIOTECA CYBER</Text>
+            <Text style={styles.learnTitle}>Transformă greșelile în cunoștințe</Text>
+            <Text style={styles.learnText}>
+              Lecții scurte, quiz-uri și explicații ghidate de AI.
+            </Text>
+            <View style={styles.learnAction}>
+              <Text style={styles.learnActionText}>Explorează lecțiile</Text>
+              <Ionicons name="arrow-forward" size={13} color={TrainingColors.accentTeal} />
+            </View>
           </View>
-          <Ionicons name="chevron-forward" size={16} color={TrainingColors.textMuted} />
         </Pressable>
       </Link>
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 }
 
@@ -490,15 +554,23 @@ function RiskBadge({ level }: { level: RiskLevel }) {
         : level === 'Mediu'
           ? styles.riskTextMedium
           : styles.riskTextLow;
+  const dotColor =
+    level === 'Scăzut'
+      ? TrainingColors.accentTeal
+      : level === 'Mediu'
+        ? TrainingColors.accentAmber
+        : TrainingColors.accentDanger;
   return (
     <View style={[styles.riskBadge, tone]}>
-      <Text style={[styles.riskText, textTone]}>{level}</Text>
+      <View style={[styles.riskDot, { backgroundColor: dotColor }]} />
+      <Text style={[styles.riskText, textTone]}>Risc {level.toLowerCase()}</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: TrainingColors.pageBase },
+  scroll: { flex: 1, backgroundColor: 'transparent' },
   content: { paddingHorizontal: 20, paddingTop: 50, paddingBottom: 130, gap: 14 },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
@@ -512,9 +584,21 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderWidth: 1,
     borderColor: TrainingColors.buttonPrimaryBorder,
+    shadowColor: TrainingColors.accentBlue,
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.28,
+    shadowRadius: 12,
+    elevation: 5,
   },
-  headerTitle: { color: TrainingColors.textPrimary, fontSize: 22, fontWeight: '800' },
-  headerSubtitle: { color: TrainingColors.textSecondary, fontSize: 12 },
+  welcomeEyebrow: {
+    color: TrainingColors.accentTeal,
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 1.5,
+    marginBottom: 1,
+  },
+  headerTitle: { color: TrainingColors.textPrimary, fontSize: 22, fontWeight: '800', letterSpacing: -0.4 },
+  headerSubtitle: { color: TrainingColors.textSecondary, fontSize: 12, marginTop: 1 },
   headerTitleCompact: { fontSize: 20 },
   headerSubtitleCompact: { fontSize: 11 },
   logoutButton: {
@@ -526,6 +610,7 @@ const styles = StyleSheet.create({
     backgroundColor: TrainingColors.panel,
     alignItems: 'center',
     justifyContent: 'center',
+    ...TrainingShadows.card,
   },
   scoreCard: {
     position: 'relative',
@@ -534,10 +619,11 @@ const styles = StyleSheet.create({
     gap: 14,
     borderRadius: 24,
     borderWidth: 1,
-    borderColor: TrainingColors.border,
-    backgroundColor: TrainingColors.panel,
-    padding: 18,
+    borderColor: TrainingColors.borderStrong,
+    backgroundColor: 'rgba(13, 24, 40, 0.94)',
+    padding: 20,
     overflow: 'hidden',
+    ...TrainingShadows.card,
   },
   scoreCardCompact: { padding: 14, gap: 10, borderRadius: 20 },
   pathCard: {
@@ -547,8 +633,9 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     borderWidth: 1,
     borderColor: 'rgba(69,224,177,0.35)',
-    backgroundColor: 'rgba(69,224,177,0.07)',
-    padding: 14,
+    backgroundColor: 'rgba(19, 42, 52, 0.92)',
+    padding: 16,
+    ...TrainingShadows.card,
   },
   pathIcon: {
     width: 44,
@@ -577,9 +664,10 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     borderWidth: 1,
     borderColor: TrainingColors.border,
-    backgroundColor: TrainingColors.panel,
-    padding: 14,
+    backgroundColor: 'rgba(13, 24, 40, 0.9)',
+    padding: 16,
     gap: 8,
+    ...TrainingShadows.card,
   },
   adaptiveTopRow: {
     flexDirection: 'row',
@@ -610,9 +698,10 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     borderWidth: 1,
     borderColor: 'rgba(69,224,177,0.28)',
-    backgroundColor: 'rgba(69,224,177,0.07)',
-    padding: 14,
+    backgroundColor: 'rgba(16, 39, 47, 0.92)',
+    padding: 16,
     gap: 8,
+    ...TrainingShadows.card,
   },
   reviewTopRow: {
     flexDirection: 'row',
@@ -704,11 +793,16 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     borderRadius: 24,
-    backgroundColor: TrainingColors.buttonPrimary,
+    backgroundColor: '#286ED5',
     borderWidth: 1,
     borderColor: TrainingColors.buttonPrimaryBorder,
-    padding: 16,
+    padding: 18,
     gap: 12,
+    shadowColor: TrainingColors.accentBlue,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.25,
+    shadowRadius: 18,
+    elevation: 7,
   },
   challengeCardCompact: { padding: 12, gap: 10, borderRadius: 20 },
   pressableFeedback: { opacity: 0.92 },
@@ -737,10 +831,11 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     borderWidth: 1,
     borderColor: TrainingColors.border,
-    backgroundColor: TrainingColors.panel,
+    backgroundColor: 'rgba(13, 24, 40, 0.92)',
     padding: 12,
     gap: 6,
     minWidth: 105,
+    ...TrainingShadows.card,
   },
   metricCardCompact: { padding: 10 },
   metricTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
@@ -753,44 +848,132 @@ const styles = StyleSheet.create({
   },
   metricValue: { color: TrainingColors.textPrimary, fontSize: 28, fontWeight: '800' },
   metricLabel: { color: TrainingColors.textSecondary, fontSize: 12 },
-  sectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  sectionTitle: { color: TrainingColors.textPrimary, fontSize: 17, fontWeight: '800' },
-  sectionLinkRow: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    marginTop: 4,
+  },
+  sectionEyebrow: {
+    color: TrainingColors.textMuted,
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 1.3,
+    marginBottom: 3,
+  },
+  sectionTitle: {
+    color: TrainingColors.textPrimary,
+    fontSize: 19,
+    fontWeight: '800',
+    letterSpacing: -0.3,
+  },
+  sectionLinkRow: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingVertical: 3 },
   sectionLink: { color: TrainingColors.accentTeal, fontSize: 12, fontWeight: '700' },
-  scenarioList: { gap: 10 },
+  sectionLinkIcon: {
+    width: 24,
+    height: 24,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(77, 228, 178, 0.28)',
+    backgroundColor: 'rgba(77, 228, 178, 0.09)',
+  },
+  scenarioList: { gap: 11 },
   scenarioCard: {
-    borderRadius: 16,
+    position: 'relative',
+    overflow: 'hidden',
+    borderRadius: 18,
     borderWidth: 1,
     borderColor: TrainingColors.border,
-    backgroundColor: TrainingColors.panel,
-    padding: 12,
+    backgroundColor: 'rgba(13, 24, 40, 0.92)',
+    padding: 15,
+    gap: 10,
+    ...TrainingShadows.card,
+  },
+  scenarioCardCompact: { padding: 13, gap: 8 },
+  scenarioCardPressed: {
+    opacity: 0.9,
+    transform: [{ scale: 0.992 }],
+  },
+  scenarioAccent: {
+    position: 'absolute',
+    top: 14,
+    bottom: 14,
+    left: 0,
+    width: 3,
+    borderTopRightRadius: 3,
+    borderBottomRightRadius: 3,
+  },
+  scenarioTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
   },
-  scenarioCardCompact: { padding: 10, gap: 8 },
   scenarioIcon: {
-    width: 42,
-    height: 42,
-    borderRadius: 12,
+    width: 40,
+    height: 40,
+    borderRadius: 13,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: TrainingColors.border,
-    backgroundColor: TrainingColors.panelAlt,
   },
   scenarioIconCompact: { width: 36, height: 36, borderRadius: 10 },
+  scenarioHeading: { flex: 1, gap: 2 },
   scenarioType: {
-    color: TrainingColors.textMuted,
-    fontSize: 10,
+    fontSize: 9,
     textTransform: 'uppercase',
-    letterSpacing: 1,
+    letterSpacing: 1.1,
+    fontWeight: '800',
+  },
+  scenarioIndex: {
+    color: TrainingColors.textMuted,
+    fontSize: 9,
+    letterSpacing: 0.8,
     fontWeight: '700',
   },
-  scenarioTitle: { color: TrainingColors.textPrimary, fontSize: 14, fontWeight: '700', marginTop: 1 },
+  scenarioArrow: {
+    width: 30,
+    height: 30,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: TrainingColors.panelAlt,
+    borderWidth: 1,
+    borderColor: TrainingColors.borderSubtle,
+  },
+  scenarioTitle: {
+    color: TrainingColors.textPrimary,
+    fontSize: 15,
+    fontWeight: '700',
+    lineHeight: 20,
+    letterSpacing: -0.15,
+    paddingLeft: 2,
+  },
   scenarioTitleCompact: { fontSize: 13 },
-  riskBadge: { borderRadius: 999, paddingHorizontal: 9, paddingVertical: 4, borderWidth: 1 },
-  riskText: { fontSize: 9, textTransform: 'uppercase', letterSpacing: 0.8, fontWeight: '800' },
+  scenarioFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderTopWidth: 1,
+    borderTopColor: TrainingColors.borderSubtle,
+    paddingTop: 10,
+    marginTop: 1,
+  },
+  scenarioMeta: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  scenarioMetaText: { color: TrainingColors.textMuted, fontSize: 10, fontWeight: '600' },
+  riskBadge: {
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    alignSelf: 'flex-start',
+  },
+  riskDot: { width: 5, height: 5, borderRadius: 3 },
+  riskText: { fontSize: 9, letterSpacing: 0.3, fontWeight: '800' },
   riskTextLow: { color: TrainingColors.accentTeal },
   riskTextMedium: { color: TrainingColors.accentAmber },
   riskTextHigh: { color: TrainingColors.accentDanger },
@@ -800,44 +983,114 @@ const styles = StyleSheet.create({
   riskHigh: { borderColor: 'rgba(255,125,125,0.35)', backgroundColor: 'rgba(255,125,125,0.1)' },
   riskCritical: { borderColor: 'rgba(255,125,125,0.6)', backgroundColor: 'rgba(255,125,125,0.16)' },
   tipCard: {
-    borderRadius: 16,
+    borderRadius: 20,
     borderWidth: 1,
-    borderColor: TrainingColors.border,
-    backgroundColor: TrainingColors.panel,
-    flexDirection: 'row',
-    gap: 10,
-    padding: 12,
+    borderColor: 'rgba(77, 228, 178, 0.26)',
+    backgroundColor: 'rgba(14, 35, 43, 0.95)',
+    gap: 12,
+    padding: 16,
+    ...TrainingShadows.card,
   },
-  tipCardCompact: { padding: 10, gap: 8 },
+  tipCardCompact: { padding: 13, gap: 10 },
+  tipTopRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   tipIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 11,
-    backgroundColor: 'rgba(69,224,177,0.14)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  tipTitle: { color: TrainingColors.textPrimary, fontSize: 12, fontWeight: '700' },
-  tipText: { color: TrainingColors.textSecondary, fontSize: 12, lineHeight: 17, marginTop: 2 },
-  learnCard: {
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: TrainingColors.border,
-    backgroundColor: TrainingColors.panel,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    padding: 12,
-  },
-  learnCardCompact: { padding: 10, gap: 8 },
-  learnIcon: {
     width: 40,
     height: 40,
-    borderRadius: 12,
+    borderRadius: 13,
+    backgroundColor: 'rgba(77, 228, 178, 0.13)',
+    borderWidth: 1,
+    borderColor: 'rgba(77, 228, 178, 0.2)',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(69,224,177,0.14)',
   },
-  learnTitle: { color: TrainingColors.textPrimary, fontSize: 14, fontWeight: '700' },
-  learnText: { color: TrainingColors.textSecondary, fontSize: 12, marginTop: 2 },
+  tipHeading: { flex: 1 },
+  tipEyebrow: {
+    color: TrainingColors.accentTeal,
+    fontSize: 8,
+    fontWeight: '800',
+    letterSpacing: 1.1,
+  },
+  tipTitle: { color: TrainingColors.textPrimary, fontSize: 14, fontWeight: '800', marginTop: 2 },
+  tipStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: 'rgba(77, 228, 178, 0.08)',
+  },
+  tipStatusDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: TrainingColors.accentTeal,
+  },
+  tipStatusText: {
+    color: TrainingColors.accentTeal,
+    fontSize: 8,
+    fontWeight: '800',
+    letterSpacing: 0.7,
+  },
+  tipText: {
+    color: TrainingColors.textSecondary,
+    fontSize: 12,
+    lineHeight: 18,
+    paddingLeft: 2,
+  },
+  learnCard: {
+    position: 'relative',
+    overflow: 'hidden',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(104, 169, 255, 0.28)',
+    backgroundColor: 'rgba(15, 29, 48, 0.96)',
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    padding: 16,
+    ...TrainingShadows.card,
+  },
+  learnCardCompact: { padding: 13, gap: 10 },
+  learnGlow: {
+    position: 'absolute',
+    width: 150,
+    height: 150,
+    borderRadius: 75,
+    right: -80,
+    top: -90,
+    backgroundColor: 'rgba(104, 169, 255, 0.1)',
+  },
+  learnIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(77, 228, 178, 0.11)',
+    borderWidth: 1,
+    borderColor: 'rgba(77, 228, 178, 0.22)',
+  },
+  learnContent: { flex: 1 },
+  learnEyebrow: {
+    color: TrainingColors.accentBlue,
+    fontSize: 8,
+    fontWeight: '800',
+    letterSpacing: 1.2,
+    marginBottom: 3,
+  },
+  learnTitle: {
+    color: TrainingColors.textPrimary,
+    fontSize: 15,
+    lineHeight: 19,
+    fontWeight: '800',
+  },
+  learnText: { color: TrainingColors.textSecondary, fontSize: 11, lineHeight: 16, marginTop: 3 },
+  learnAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 10,
+  },
+  learnActionText: { color: TrainingColors.accentTeal, fontSize: 11, fontWeight: '800' },
 });
