@@ -9,6 +9,7 @@ import {
   StyleSheet,
   Text,
   View,
+  useWindowDimensions,
 } from 'react-native';
 
 import type {
@@ -31,6 +32,8 @@ const MODULE_ICONS: Record<LearningPathModule['level'], keyof typeof Ionicons.gl
 };
 
 export default function LearningPathScreen() {
+  const { width } = useWindowDimensions();
+  const isCompact = width < 370;
   const {
     learningPath,
     isLoadingLearningPath,
@@ -71,7 +74,7 @@ export default function LearningPathScreen() {
 
   return (
     <View style={styles.screen}>
-      <View style={styles.header}>
+      <View style={[styles.header, isCompact && styles.headerCompact]}>
         <Pressable
           accessibilityLabel="Înapoi"
           onPress={() => router.back()}
@@ -79,7 +82,7 @@ export default function LearningPathScreen() {
           <Ionicons name="arrow-back" size={20} color={TrainingColors.textPrimary} />
         </Pressable>
         <View style={styles.headerText}>
-          <Text style={styles.title}>Traseu de învățare</Text>
+          <Text style={[styles.title, isCompact && styles.titleCompact]}>Traseu de învățare</Text>
           <Text style={styles.subtitle}>Progres ghidat de la fundamente la scenarii avansate</Text>
         </View>
         <Pressable
@@ -90,7 +93,7 @@ export default function LearningPathScreen() {
         </Pressable>
       </View>
 
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView contentContainerStyle={[styles.content, isCompact && styles.contentCompact]}>
         {isLoadingLearningPath && !learningPath ? (
           <View style={styles.stateCard}>
             <ActivityIndicator color={TrainingColors.accentTeal} />
@@ -155,7 +158,7 @@ export default function LearningPathScreen() {
               />
             </View>
 
-            <View style={styles.goalsRow}>
+            <View style={[styles.goalsRow, isCompact && styles.goalsRowCompact]}>
               <GoalCard
                 icon="today-outline"
                 title={learningPath.daily_goal.title}
@@ -321,6 +324,17 @@ function ModuleCard({
         </Text>
       </View>
 
+      {module.next_unlock_hint ? (
+        <View style={[styles.moduleHint, isLocked && styles.moduleHintLocked]}>
+          <Ionicons
+            name={isLocked ? 'lock-closed-outline' : 'navigate-outline'}
+            size={14}
+            color={isLocked ? TrainingColors.accentAmber : TrainingColors.accentTeal}
+          />
+          <Text style={styles.moduleHintText}>{module.next_unlock_hint}</Text>
+        </View>
+      ) : null}
+
       <View style={styles.steps}>
         {module.steps.map((step) => (
           <Pressable
@@ -365,6 +379,9 @@ function ModuleCard({
                     : ''}
                 </Text>
               ) : null}
+              {step.status === 'locked' && step.unlock_reason ? (
+                <Text style={styles.stepUnlockReason}>{step.unlock_reason}</Text>
+              ) : null}
             </View>
             {step.status !== 'locked' && step.status !== 'completed' ? (
               <Ionicons name="chevron-forward" size={17} color={TrainingColors.accentTeal} />
@@ -389,8 +406,10 @@ const styles = StyleSheet.create({
     borderBottomColor: TrainingColors.border,
     backgroundColor: TrainingColors.panel,
   },
+  headerCompact: { paddingTop: 44, paddingHorizontal: 14, gap: 9 },
   headerText: { flex: 1 },
   title: { color: TrainingColors.textPrimary, fontSize: 20, fontWeight: '800' },
+  titleCompact: { fontSize: 18 },
   subtitle: { color: TrainingColors.textSecondary, fontSize: 10, marginTop: 2 },
   iconButton: {
     width: 40,
@@ -403,6 +422,7 @@ const styles = StyleSheet.create({
     backgroundColor: TrainingColors.panelAlt,
   },
   content: { padding: 18, paddingBottom: 42, gap: 12 },
+  contentCompact: { paddingHorizontal: 14 },
   stateCard: {
     minHeight: 180,
     padding: 22,
@@ -463,6 +483,7 @@ const styles = StyleSheet.create({
   summaryValue: { color: TrainingColors.textPrimary, fontSize: 18, fontWeight: '800', marginTop: 3 },
   summaryLabel: { color: TrainingColors.textMuted, fontSize: 9, marginTop: 1 },
   goalsRow: { flexDirection: 'row', gap: 8 },
+  goalsRowCompact: { flexDirection: 'column' },
   goalCard: {
     flex: 1,
     minHeight: 130,
@@ -496,7 +517,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.13)',
   },
-  nextContent: { flex: 1 },
+  nextContent: { flex: 1, minWidth: 0 },
   nextEyebrow: { color: '#CDE4FF', fontSize: 9, fontWeight: '800', letterSpacing: 1.2 },
   nextTitle: { color: '#EFF6FF', fontSize: 14, fontWeight: '800', marginTop: 2 },
   sectionHeader: {
@@ -528,7 +549,7 @@ const styles = StyleSheet.create({
     borderColor: TrainingColors.buttonPrimaryBorder,
   },
   moduleIconCompleted: { backgroundColor: TrainingColors.accentTeal, borderColor: TrainingColors.accentTeal },
-  moduleHeaderText: { flex: 1 },
+  moduleHeaderText: { flex: 1, minWidth: 0 },
   moduleEyebrow: { color: TrainingColors.accentTeal, fontSize: 9, fontWeight: '800', letterSpacing: 1.1 },
   moduleTitle: { color: TrainingColors.textPrimary, fontSize: 16, fontWeight: '800', marginTop: 2 },
   moduleDescription: { color: TrainingColors.textSecondary, fontSize: 10, lineHeight: 15, marginTop: 3 },
@@ -542,6 +563,28 @@ const styles = StyleSheet.create({
   },
   moduleProgressFill: { height: '100%', backgroundColor: TrainingColors.accentTeal },
   moduleProgressText: { color: TrainingColors.textMuted, fontSize: 10, fontWeight: '700' },
+  moduleHint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: 'rgba(69,224,177,0.22)',
+    backgroundColor: 'rgba(69,224,177,0.06)',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  moduleHintLocked: {
+    borderColor: 'rgba(245,197,107,0.24)',
+    backgroundColor: 'rgba(245,197,107,0.07)',
+  },
+  moduleHintText: {
+    flex: 1,
+    color: TrainingColors.textSecondary,
+    fontSize: 10,
+    lineHeight: 14,
+    fontWeight: '700',
+  },
   steps: { gap: 8 },
   stepRow: {
     minHeight: 70,
@@ -557,10 +600,17 @@ const styles = StyleSheet.create({
   stepCompleted: { borderColor: 'rgba(69,224,177,0.32)' },
   stepLocked: { backgroundColor: TrainingColors.panel },
   stepStatus: { width: 25, alignItems: 'center' },
-  stepContent: { flex: 1 },
+  stepContent: { flex: 1, minWidth: 0 },
   stepTitle: { color: TrainingColors.textPrimary, fontSize: 12, fontWeight: '800' },
   stepDescription: { color: TrainingColors.textSecondary, fontSize: 9, lineHeight: 13, marginTop: 2 },
   stepProgress: { color: TrainingColors.accentTeal, fontSize: 9, fontWeight: '700', marginTop: 4 },
+  stepUnlockReason: {
+    color: TrainingColors.accentAmber,
+    fontSize: 9,
+    lineHeight: 13,
+    fontWeight: '700',
+    marginTop: 4,
+  },
   badgesRow: { gap: 9, paddingRight: 18 },
   badgeCard: {
     width: 135,

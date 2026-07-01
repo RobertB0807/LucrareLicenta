@@ -37,33 +37,33 @@ const mockApiGetOnboarding = jest.mocked(apiGetOnboarding);
 
 const questions = [
   {
-    id: 'email-urgency',
+    id: 'knowledge-confidence',
     attack_type: 'phishing' as const,
-    channel: 'email',
-    prompt: 'Întrebarea email',
+    channel: 'profil',
+    prompt: 'Experiență securitate',
     options: [
-      { id: 'wrong-email', text: 'Răspuns email greșit' },
-      { id: 'verify_official', text: 'Răspuns email corect' },
+      { id: 'new_to_security', text: 'Sunt nou' },
+      { id: 'confident', text: 'Am cunoștințe bune' },
     ],
   },
   {
-    id: 'delivery-sms',
+    id: 'real-world-exposure',
     attack_type: 'smishing' as const,
-    channel: 'sms',
-    prompt: 'Întrebarea SMS',
+    channel: 'profil',
+    prompt: 'Expunere practică',
     options: [
-      { id: 'wrong-sms', text: 'Răspuns SMS greșit' },
-      { id: 'report_sms', text: 'Răspuns SMS corect' },
+      { id: 'never', text: 'Aproape niciodată' },
+      { id: 'often', text: 'Fac asta des' },
     ],
   },
   {
-    id: 'manager-payment',
+    id: 'training-pace',
     attack_type: 'impersonation' as const,
-    channel: 'chat',
-    prompt: 'Întrebarea impersonare',
+    channel: 'profil',
+    prompt: 'Ritm antrenament',
     options: [
-      { id: 'wrong-chat', text: 'Răspuns impersonare greșit' },
-      { id: 'verify_identity', text: 'Răspuns impersonare corect' },
+      { id: 'guided', text: 'Pași ghidați' },
+      { id: 'challenge', text: 'Provocări mai grele' },
     ],
   },
 ];
@@ -94,39 +94,32 @@ describe('OnboardingScreen', () => {
     });
   });
 
-  test('submits preferences and all answers then opens the recommended scenario', async () => {
+  test('submits preferences and all answers then opens the dashboard learning path', async () => {
     render(<OnboardingScreen />);
 
     await screen.findByText('Care este experiența ta?');
     fireEvent.press(screen.getByText('Începător'));
     fireEvent.press(screen.getByText('Siguranță personală'));
-    fireEvent.press(screen.getByText('Începe evaluarea'));
+    fireEvent.press(screen.getByText('Continuă profilarea'));
 
-    fireEvent.press(screen.getByText('Răspuns email corect'));
+    fireEvent.press(screen.getByText('Am cunoștințe bune'));
     fireEvent.press(screen.getByText('Continuă'));
-    fireEvent.press(screen.getByText('Răspuns SMS corect'));
+    fireEvent.press(screen.getByText('Fac asta des'));
     fireEvent.press(screen.getByText('Continuă'));
-    fireEvent.press(screen.getByText('Răspuns impersonare corect'));
-    fireEvent.press(screen.getByText('Finalizează'));
+    fireEvent.press(screen.getByText('Provocări mai grele'));
+    fireEvent.press(screen.getByText('Vezi traseul'));
 
     await waitFor(() => {
       expect(mockCompleteOnboarding).toHaveBeenCalledWith({
         experience: 'beginner',
         learning_goal: 'personal_safety',
         answers: [
-          { question_id: 'email-urgency', selected_option_id: 'verify_official' },
-          { question_id: 'delivery-sms', selected_option_id: 'report_sms' },
-          { question_id: 'manager-payment', selected_option_id: 'verify_identity' },
+          { question_id: 'knowledge-confidence', selected_option_id: 'confident' },
+          { question_id: 'real-world-exposure', selected_option_id: 'often' },
+          { question_id: 'training-pace', selected_option_id: 'challenge' },
         ],
       });
-      expect(mockReplace).toHaveBeenCalledWith({
-        pathname: '/chat/[scenarioId]',
-        params: expect.objectContaining({
-          attackType: 'smishing',
-          difficulty: 'hard',
-          generateNew: 'true',
-        }),
-      });
+      expect(mockReplace).toHaveBeenCalledWith('/(tabs)/dashboard');
     });
   });
 });

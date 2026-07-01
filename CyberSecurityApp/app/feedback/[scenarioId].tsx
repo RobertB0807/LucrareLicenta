@@ -2,7 +2,15 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { Link, Redirect, router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+  useWindowDimensions,
+} from 'react-native';
 
 import { AppBackdrop } from '@/components/app-backdrop';
 import { useAuth } from '@/features/auth/auth-context';
@@ -41,6 +49,8 @@ export default function FeedbackScreen() {
   const { sessionId: routeSessionId } = useLocalSearchParams<{
     sessionId?: string;
   }>();
+  const { width } = useWindowDimensions();
+  const isCompact = width < 370;
   const { user } = useAuth();
   const { evaluation, scenario, stats, sessionId } = useTrainingSession();
   const [persistedContext, setPersistedContext] = useState<PersistedFeedbackContext | null>(null);
@@ -157,16 +167,18 @@ export default function FeedbackScreen() {
       <AppBackdrop grid />
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[styles.content, isCompact && styles.contentCompact]}
         showsVerticalScrollIndicator={false}>
       {/* Hero section */}
-      <View style={[styles.hero, { borderColor: heroConfig.color }]}>
-        <View style={[styles.heroIcon, { backgroundColor: heroConfig.color }]}>
+      <View style={[styles.hero, isCompact && styles.heroCompact, { borderColor: heroConfig.color }]}>
+        <View style={[styles.heroIcon, isCompact && styles.heroIconCompact, { backgroundColor: heroConfig.color }]}>
           <Ionicons name={heroConfig.icon} size={26} color="#EFF6FF" />
         </View>
         <View style={{ flex: 1 }}>
           <Text style={styles.heroBadge}>{heroConfig.badge}</Text>
-          <Text style={styles.heroTitle}>{heroConfig.title}</Text>
+          <Text style={[styles.heroTitle, isCompact && styles.heroTitleCompact]}>
+            {heroConfig.title}
+          </Text>
           <View style={styles.scorePill}>
             <Ionicons name="trophy-outline" size={12} color="#EFF6FF" />
             <Text style={styles.scoreText}>{scoreDisplay}</Text>
@@ -211,7 +223,7 @@ export default function FeedbackScreen() {
       {/* Session stats summary */}
       <View style={styles.statsCard}>
         <Text style={styles.statsTitle}>Sesiune curentă</Text>
-        <View style={styles.statsGrid}>
+        <View style={[styles.statsGrid, isCompact && styles.statsGridCompact]}>
           <View style={styles.statItem}>
             <Text style={styles.statValue}>{stats.totalScore}</Text>
             <Text style={styles.statLabel}>Scor</Text>
@@ -298,6 +310,7 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: TrainingColors.pageBase },
   scroll: { flex: 1, backgroundColor: 'transparent' },
   content: { paddingHorizontal: 20, paddingTop: 54, paddingBottom: 44, gap: 12, minHeight: '100%' },
+  contentCompact: { paddingHorizontal: 14, paddingTop: 44 },
   hero: {
     borderRadius: 24,
     borderWidth: 1,
@@ -307,6 +320,7 @@ const styles = StyleSheet.create({
     gap: 12,
     alignItems: 'flex-start',
   },
+  heroCompact: { padding: 13, gap: 10 },
   heroIcon: {
     width: 56,
     height: 56,
@@ -314,8 +328,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  heroIconCompact: { width: 48, height: 48, borderRadius: 14 },
   heroBadge: { color: '#D8E6F8', textTransform: 'uppercase', letterSpacing: 1.2, fontSize: 10, fontWeight: '700' },
   heroTitle: { color: TrainingColors.textPrimary, fontSize: 28, fontWeight: '800', marginTop: 2 },
+  heroTitleCompact: { fontSize: 22, lineHeight: 27 },
   scorePill: {
     marginTop: 8,
     borderRadius: 999,
@@ -365,8 +381,9 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   statsTitle: { color: TrainingColors.textPrimary, fontSize: 14, fontWeight: '800' },
-  statsGrid: { flexDirection: 'row', justifyContent: 'space-between' },
-  statItem: { alignItems: 'center', gap: 2 },
+  statsGrid: { flexDirection: 'row', justifyContent: 'space-between', gap: 8 },
+  statsGridCompact: { flexWrap: 'wrap' },
+  statItem: { flex: 1, minWidth: 66, alignItems: 'center', gap: 2 },
   statValue: { color: TrainingColors.textPrimary, fontSize: 22, fontWeight: '800' },
   statLabel: { color: TrainingColors.textMuted, fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.6 },
   recommendCard: {

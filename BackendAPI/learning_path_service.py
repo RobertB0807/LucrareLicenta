@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from persistence_repository import (
     complete_learning_path_lesson,
     fetch_learning_path_progress,
+    fetch_user_by_id,
     fetch_user_learning_profiles,
     fetch_user_recent_activity,
     has_passed_learning_lesson_quiz,
@@ -32,6 +33,7 @@ class LearningPathStepResponse(BaseModel):
     difficulty: DifficultyLevel | None = None
     mastery_current: float | None = None
     minimum_mastery: float | None = None
+    unlock_reason: str | None = None
 
 
 class LearningPathModuleResponse(BaseModel):
@@ -43,6 +45,8 @@ class LearningPathModuleResponse(BaseModel):
     progress_percent: float
     completed_steps: int
     total_steps: int
+    unlock_reason: str | None = None
+    next_unlock_hint: str | None = None
     steps: list[LearningPathStepResponse]
 
 
@@ -119,6 +123,13 @@ CURRICULUM: tuple[dict[str, object], ...] = (
                 "description": "Înțelege urgența, autoritatea și curiozitatea folosite de atacatori.",
             },
             {
+                "id": "lesson-reporting-basics",
+                "step_type": "lesson",
+                "lesson_id": "reporting-basics",
+                "title": "Raportare sigură",
+                "description": "Învață când și cum raportezi un mesaj suspect fără să crești riscul.",
+            },
+            {
                 "id": "scenario-phishing-easy",
                 "step_type": "scenario",
                 "attack_type": "phishing",
@@ -152,6 +163,34 @@ CURRICULUM: tuple[dict[str, object], ...] = (
                 "lesson_id": "fake-websites",
                 "title": "Pagini false și typosquatting",
                 "description": "Analizează domenii, subdomenii și pagini false de autentificare.",
+            },
+            {
+                "id": "lesson-phishing-attachments",
+                "step_type": "lesson",
+                "lesson_id": "phishing-attachments",
+                "title": "Atașamente suspecte",
+                "description": "Recunoaște documente false, macro-uri și cereri de activare periculoase.",
+            },
+            {
+                "id": "lesson-banking-smishing",
+                "step_type": "lesson",
+                "lesson_id": "banking-smishing",
+                "title": "Alerte bancare false",
+                "description": "Verifică mesajele bancare fără linkuri și fără coduri trimise mai departe.",
+            },
+            {
+                "id": "lesson-safe-link-checking",
+                "step_type": "lesson",
+                "lesson_id": "safe-link-checking",
+                "title": "Verificarea linkurilor",
+                "description": "Citește domenii, subdomenii și linkuri scurtate înainte de a introduce date.",
+            },
+            {
+                "id": "lesson-qr-phishing",
+                "step_type": "lesson",
+                "lesson_id": "qr-phishing",
+                "title": "QR phishing",
+                "description": "Analizează linkurile ascunse în coduri QR și pagini mobile false.",
             },
             {
                 "id": "scenario-phishing-medium",
@@ -189,6 +228,27 @@ CURRICULUM: tuple[dict[str, object], ...] = (
                 "description": "Studiază spear-phishing, BEC și pretexte complexe.",
             },
             {
+                "id": "lesson-workplace-impersonation",
+                "step_type": "lesson",
+                "lesson_id": "workplace-impersonation",
+                "title": "Impersonare la locul de muncă",
+                "description": "Validează cereri urgente de plată, acces și date sensibile prin proceduri separate.",
+            },
+            {
+                "id": "lesson-account-recovery-abuse",
+                "step_type": "lesson",
+                "lesson_id": "account-recovery-abuse",
+                "title": "Recuperare cont abuzată",
+                "description": "Protejează codurile de recuperare, resetările și sesiunile active.",
+            },
+            {
+                "id": "lesson-incident-response-basics",
+                "step_type": "lesson",
+                "lesson_id": "incident-response-basics",
+                "title": "Răspuns după o greșeală",
+                "description": "Învață ce faci imediat după click, date introduse sau cod comunicat.",
+            },
+            {
                 "id": "scenario-smishing-hard",
                 "step_type": "scenario",
                 "attack_type": "smishing",
@@ -211,6 +271,12 @@ CURRICULUM: tuple[dict[str, object], ...] = (
         ),
     },
 )
+
+LEVEL_ORDER = {
+    "beginner": 0,
+    "intermediate": 1,
+    "advanced": 2,
+}
 
 
 def _build_profile_map(user_id: str) -> dict[tuple[str, str], dict[str, object]]:
@@ -241,6 +307,9 @@ def _build_step(
             progress_current=1 if completed else 0,
             progress_required=1,
             lesson_id=lesson_id,
+            unlock_reason=None
+            if module_unlocked
+            else "Finalizează modulul anterior ca să deblochezi această lecție.",
         )
 
     attack_type = str(definition["attack_type"])
@@ -272,6 +341,9 @@ def _build_step(
         difficulty=difficulty,  # type: ignore[arg-type]
         mastery_current=mastery_score,
         minimum_mastery=minimum_mastery,
+        unlock_reason=None
+        if module_unlocked
+        else "Finalizează modulul anterior ca să deblochezi acest scenariu.",
     )
 
 
@@ -279,11 +351,15 @@ def build_learning_path(user_id: str) -> LearningPathResponse:
     progress = fetch_learning_path_progress(user_id)
     completed_lessons = set(progress["completed_lessons"])
     profile_map = _build_profile_map(user_id)
+    user = fetch_user_by_id(user_id) or {}
+    raw_user_level = user.get("assessment_level") or user.get("onboarding_experience") or "beginner"
+    user_level_index = LEVEL_ORDER.get(str(raw_user_level), 0)
     modules: list[LearningPathModuleResponse] = []
     previous_completed = True
 
     for definition in CURRICULUM:
-        module_unlocked = previous_completed
+        module_level_index = LEVEL_ORDER.get(str(definition["level"]), 0)
+        module_unlocked = previous_completed or module_level_index <= user_level_index
         steps = [
             _build_step(
                 step,
@@ -305,6 +381,25 @@ def build_learning_path(user_id: str) -> LearningPathResponse:
         else:
             module_status = "available"
 
+        next_step = next((step for step in steps if step.status != "completed"), None)
+        if not module_unlocked:
+            unlock_reason = "Finalizează modulul anterior pentru a deschide acest nivel."
+            next_unlock_hint = unlock_reason
+        elif next_step is not None:
+            unlock_reason = None
+            if next_step.status == "locked":
+                next_unlock_hint = next_step.unlock_reason
+            elif next_step.step_type == "lesson":
+                next_unlock_hint = f"Următor: promovează lecția „{next_step.title}”."
+            else:
+                next_unlock_hint = (
+                    f"Următor: rulează {int(next_step.progress_required)} scenarii "
+                    f"și atinge mastery {next_step.minimum_mastery or 0:g}."
+                )
+        else:
+            unlock_reason = None
+            next_unlock_hint = "Modul finalizat."
+
         modules.append(
             LearningPathModuleResponse(
                 id=str(definition["id"]),
@@ -315,6 +410,8 @@ def build_learning_path(user_id: str) -> LearningPathResponse:
                 progress_percent=progress_percent,
                 completed_steps=completed_steps,
                 total_steps=total_steps,
+                unlock_reason=unlock_reason,
+                next_unlock_hint=next_unlock_hint,
                 steps=steps,
             )
         )

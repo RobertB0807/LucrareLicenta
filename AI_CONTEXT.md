@@ -84,6 +84,9 @@ Backend features currently implemented:
 - scenario evaluation is restart-safe: when in-memory scenario context is missing, backend restores rule context from persisted `scenario_attempts` data
 - authenticated users can list their persisted sessions with pagination, summary metrics, latest scenario metadata, and pending scenario recovery
 - structured learning path with beginner/intermediate/advanced modules, lesson completion, scenario mastery requirements, XP, levels, streaks, goals, and badges
+- onboarding is now a self-assessment/profile flow (experience, familiarity, exposure, preferred pace), not a theory quiz; users land on the dashboard learning path after completion
+- lesson catalog recommendations are personalized by onboarding level, learning goal, unfinished lessons, and adaptive weak areas
+- scenario catalog items expose `locked` + `unlock_reason`; advanced scenarios are gated after onboarding until lesson/XP/mastery thresholds are reached
 - persisted lesson catalog, ordered lesson sections, quiz questions/options, per-user attempts, answer history, scores, pass rules, and one-time XP awards
 - learning-path lessons can no longer be completed manually; a passing persisted quiz attempt is required
 - learning-path scenario progress reuses the persisted adaptive profile; lesson/gamification state is stored in `user_learning_path_progress`
@@ -126,9 +129,11 @@ Current integration level:
 - analytics now consumes persisted backend session snapshot + recent events when a session is active
 - assistant and learn tabs now use real backend AI responses via `POST /assistant/ask`
 - the Learn tab loads lesson content and quiz state from backend APIs instead of a hardcoded frontend array
-- lesson detail screens render persisted sections, submit scored quizzes, display answer explanations, and refresh XP/path unlocks
+- lesson detail is now a three-step lesson player (`Conținut`, `Quiz`, `Rezultat`) that renders persisted sections, tracks quiz answer progress, submits scored quizzes, displays pass/fail state, XP, answer explanations, and refreshes XP/path unlocks
 - dashboard and scenarios now consume backend scenario catalog (`GET /scenario/catalog`) through shared `useTrainingSession` state
 - dashboard header shows personalized greeting ("Bună, {displayName}") and logout button
+- dashboard/Home now has a primary personalized "Planul tău" panel with the next lesson/scenario action, current level, path progress, unlocked scenario counts, advanced scenario availability, and clear CTAs to continue the path or open `/learning-path`
+- dashboard/Home also shows scenario access by difficulty, using backend `locked` / `unlock_reason` data so beginners see what is available and what needs to be unlocked
 - local continuity is enabled via AsyncStorage for training session state, assistant/learn conversations, and in-progress chat/feedback continuity
 - login includes an enabled-by-default "Ține-mă minte" option; remembered sessions persist for a fixed maximum of 7 days, while unchecked sessions remain memory-only
 - local continuity keys for training, assistant, learn, chat, and feedback are scoped per-user (storage key includes user ID) so each account has isolated training data
@@ -136,8 +141,19 @@ Current integration level:
 - protected API calls in `useTrainingSession` are gated on `isAuthenticated` — no backend calls are made before login
 - the dashboard exposes session history; users can activate a previous session, open its analytics, or resume its latest pending scenario
 - the dashboard includes a learning-path card showing current level, XP, overall progress, and next required activity
+- the Learn tab groups lessons visibly by level: beginner, intermediate, and advanced/very advanced, with personalized recommendation cards first
+- the Scenarios tab shows locked higher-difficulty scenarios with unlock reasons instead of letting beginners jump directly to advanced simulations
+- `run-all.sh` supports `FRONTEND_MODE=phone` more reliably by setting `REACT_NATIVE_PACKAGER_HOSTNAME` from the detected or explicit `PHONE_LAN_IP`, so Expo Go receives the correct LAN host
 
 ## Recent Progress (April-June 2026)
+- Completed the personalized onboarding, Home path, scenario locking, and lesson-player milestone:
+  - onboarding now asks profile/self-assessment questions instead of theory/certification questions
+  - onboarding result drives recommended lessons and learning-path entry from the dashboard
+  - scenario catalog exposes locked/unlocked state and unlock reasons; frontend avoids opening locked scenarios
+  - dashboard/Home now shows the next recommended path action, level, progress, unlocked scenario counts, and access by difficulty
+  - Learn now has recommended lesson cards, level-grouped catalog sections, and a three-stage lesson modal (`Conținut`, `Quiz`, `Rezultat`)
+  - quiz results show score, threshold, XP, pass/fail state, retry/continue actions, and explanations per question
+  - `run-all.sh` now sets the Expo Go LAN hostname in phone mode to avoid wrong `exp://<ip>:8081` URLs
 - Completed the first backend-driven learning and assessment milestone:
   - Alembic revision `20260612_0009` adds normalized lesson, section, quiz question/option, attempt, and answer tables
   - migration seeds seven Romanian lessons, fourteen questions, and their answer options
@@ -453,8 +469,8 @@ The target is now a complete production-ready v1, not an MVP. Implement in this 
 
 ### Phase 3. Backend-driven learning and assessment system (in progress)
 - move lesson content out of frontend screens into persisted backend models and APIs
-- add lesson quizzes, module exams, scoring, attempts, prerequisites, and mastery rules
-- persist lesson/exam history and issue completion summaries or certificates
+- add richer lesson quizzes, scoring, attempts, prerequisites, and mastery rules
+- organize lesson recommendations by onboarding level, learning goal, and adaptive weaknesses
 - connect recommendations to learning-path gaps and adaptive scenario performance
 
 ### Phase 4. Complete training modes and scenario coverage
@@ -500,7 +516,7 @@ The target is now a complete production-ready v1, not an MVP. Implement in this 
 - validate on physical Android/iOS devices and supported web sizes
 - complete deployment, backup/restore drill, monitoring alerts, security review, and release checklist
 
-### Current Production V1 Progress (2026-06-12)
+### Current Production V1 Progress (2026-06-19)
 Phases 1 and 2 are complete.
 
 Phase 1 implemented:
@@ -544,8 +560,25 @@ Phase 3 first milestone implemented:
 - backend-driven Learn UI and quiz completion flow
 - Alembic revision `20260612_0009` with seeded curriculum data
 
-Next implementation milestone: Phase 3 module exams, richer mastery rules, completion summaries,
-and downloadable certificates.
+Phase 3 personalization and lesson-player milestone implemented:
+- onboarding is a profile/self-assessment flow instead of a theory exam/certification flow
+- onboarding estimates beginner/intermediate/advanced level using experience, exposure, familiarity, and preferred pace
+- lesson recommendations use onboarding level, learning goal, unfinished lessons, and adaptive weak areas
+- newer lesson seeds add more practical category coverage such as reporting basics, phishing attachments, banking smishing, IT-support vishing, QR phishing, and account-recovery abuse
+- Learn screen is organized by difficulty level and shows personalized recommendation cards before the full library
+- lesson modal is now a complete three-stage experience: content reading, quiz answering, and result/feedback review
+- quiz result UI shows pass/fail state, score, pass threshold, correct-answer count, XP award, path-progress update, retry action, and per-answer explanations
+- dashboard/Home now exposes the current learning path, next recommended action, path progress, unlocked/locked scenario access, and scenario availability by difficulty
+- scenario catalog and scenario cards respect backend locks and avoid recommending locked scenarios to beginners
+- `run-all.sh` now supports Expo Go LAN mode by forcing `REACT_NATIVE_PACKAGER_HOSTNAME` to the detected or explicitly supplied phone LAN IP
+
+Verified after the latest frontend lesson-player work:
+- `CyberSecurityApp`: `npx tsc --noEmit`
+- `CyberSecurityApp`: `npm run lint`
+- `CyberSecurityApp`: `npm test -- --watchAll=false`
+
+Next implementation milestone: deepen the lesson library, mastery recommendations, and release-quality UX. The app is
+not intended as a certification product, so module exams and certificates are out of scope.
 
 ## Previous MVP Roadmap
 The items below remain useful implementation detail, but the production phases above define priority.
@@ -683,10 +716,20 @@ The default opens Expo web. Alternative modes:
 
 ```bash
 FRONTEND_MODE=start ./run-all.sh
+FRONTEND_MODE=phone ./run-all.sh
 FRONTEND_MODE=ios ./run-all.sh
 FRONTEND_MODE=android ./run-all.sh
 RUN_SMOKE_TEST=true ./run-all.sh
 ```
+
+For physical-device Expo Go testing, `FRONTEND_MODE=phone` detects the Mac LAN IP and passes it to Expo through `REACT_NATIVE_PACKAGER_HOSTNAME`.
+If Expo Go shows the wrong `exp://...:8081` host, run with an explicit IP:
+
+```bash
+PHONE_LAN_IP=192.168.1.x FRONTEND_MODE=phone ./run-all.sh
+```
+
+The phone and Mac must be on the same Wi-Fi network, and Docker Desktop must be running.
 
 Stop with `Ctrl+C`; PostgreSQL, Redis, and Prometheus data volumes are preserved.
 
@@ -701,10 +744,11 @@ source .venv/bin/activate
 Focus on incremental improvements only.
 
 Good next tasks:
-- continue Phase 3 with module exams and persisted exam attempts
-- add completion summaries, certificate issuance, and lesson/exam mastery recommendations
+- continue Phase 3 with more level-based lessons, quiz coverage, and mastery recommendations
+- add category-level progress and clearer "what unlocks next" messaging across Learn, Home, and Learning Path
+- add frontend component tests for the lesson player, quiz result states, and locked-scenario UI
+- run a visual responsive pass on auth, chat, feedback, assistant, analytics, learning path, and lesson modal on phone/tablet/web widths
 - harden auth/session handling further, especially deep links and stale-session cleanup
-- finish a full responsive UI pass across all screens
 - add compare-mode analytics, export/share, and richer trend visualizations
 - add selective clear controls for cache if the current broad reset becomes too blunt
 

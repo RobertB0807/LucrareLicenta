@@ -852,9 +852,10 @@ def evaluate_scenario(
 
 @app.get("/scenario/catalog", response_model=ScenarioCatalogResponse)
 def get_scenario_catalog(request: Request = None) -> ScenarioCatalogResponse:
+    current_user = None
     if request is not None:
-        require_authenticated_user(request)
-    return get_training_scenario_catalog()
+        current_user = require_authenticated_user(request)
+    return get_training_scenario_catalog(current_user.id if current_user else None)
 
 
 @app.get("/scenario/{scenario_id}", response_model=GenerateScenarioResponse)

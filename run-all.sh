@@ -218,6 +218,14 @@ if [[ "$FRONTEND_MODE" == "phone" ]]; then
   FRONTEND_ARGS+=(--lan)
 fi
 
+FRONTEND_ENV=(
+  "EXPO_PUBLIC_API_BASE_URL=$FRONTEND_API_BASE_URL"
+)
+
+if [[ "$FRONTEND_MODE" == "phone" ]]; then
+  FRONTEND_ENV+=("REACT_NATIVE_PACKAGER_HOSTNAME=$PHONE_LAN_IP")
+fi
+
 COMPOSE=(
   docker compose
   --profile monitoring
@@ -277,6 +285,7 @@ echo
 echo "Backend:    $API_BASE_URL"
 if [[ "$FRONTEND_MODE" == "phone" ]]; then
   echo "Phone API:  $FRONTEND_API_BASE_URL"
+  echo "Expo host:  $PHONE_LAN_IP"
 fi
 echo "Readiness:  $API_BASE_URL/health/ready"
 echo "Metrics:    $API_BASE_URL/metrics"
@@ -287,5 +296,4 @@ echo "Press Ctrl+C to stop the app. Database and Redis data will be kept."
 echo
 
 cd "$MOBILE_DIR"
-EXPO_PUBLIC_API_BASE_URL="$FRONTEND_API_BASE_URL" \
-  npm run "$FRONTEND_NPM_SCRIPT" -- "${FRONTEND_ARGS[@]}"
+env "${FRONTEND_ENV[@]}" npm run "$FRONTEND_NPM_SCRIPT" -- "${FRONTEND_ARGS[@]}"

@@ -2,7 +2,16 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 
 import { AppBackdrop } from '@/components/app-backdrop';
 import { useAuth } from '@/features/auth/auth-context';
@@ -142,6 +151,46 @@ function extractUrl(text: string): { cleanText: string; url: string } | null {
   return null;
 }
 
+function sameMessageContent(a: Msg, b: Msg): boolean {
+  return (
+    a.from === b.from &&
+    a.kind === b.kind &&
+    a.text === b.text &&
+    ('url' in a ? a.url : undefined) === ('url' in b ? b.url : undefined)
+  );
+}
+
+function normalizeChatMessages(messages: Msg[]): Msg[] {
+  const normalized: Msg[] = [];
+  const seenById = new Map<string, Msg>();
+
+  messages.filter(Boolean).forEach((message, index) => {
+    const existing = seenById.get(message.id);
+    if (!existing) {
+      seenById.set(message.id, message);
+      normalized.push(message);
+      return;
+    }
+
+    if (sameMessageContent(existing, message)) {
+      return;
+    }
+
+    const recoveredMessage = {
+      ...message,
+      id: `${message.id}-recovered-${index}`,
+    } as Msg;
+    seenById.set(recoveredMessage.id, recoveredMessage);
+    normalized.push(recoveredMessage);
+  });
+
+  return normalized;
+}
+
+function appendNormalizedMessages(current: Msg[], next: Msg | Msg[]): Msg[] {
+  return normalizeChatMessages([...current, ...(Array.isArray(next) ? next : [next])]);
+}
+
 export default function ChatScenarioScreen() {
   const {
     scenarioId,
@@ -186,6 +235,7 @@ export default function ChatScenarioScreen() {
   const choiceInFlightRef = useRef(false);
   const feedbackNavigationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollRef = useRef<ScrollView>(null);
+  const messagesRef = useRef<Msg[]>([]);
   const chatProgressPrefix = useMemo(
     () => buildUserChatProgressPrefix(user?.id),
     [user?.id]
@@ -199,6 +249,10 @@ export default function ChatScenarioScreen() {
     () => buildUserStorageKey(FEEDBACK_CONTEXT_STORAGE_KEY, user?.id),
     [user?.id]
   );
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   useEffect(() => {
     let cancelled = false;
@@ -236,9 +290,11 @@ export default function ChatScenarioScreen() {
           return;
         }
         if (Array.isArray(parsed.messages)) {
-          setMessages(parsed.messages);
+          const restoredMessages = normalizeChatMessages(parsed.messages);
+          setMessages(restoredMessages);
           if (parsed.messages.length > 0) {
-            animatedScenarioIdRef.current = parsed.scenarioId ?? null;
+            animatedScenarioIdRef.current =
+              parsed.scenarioId ?? (restoredMessages.some((message) => message.from === 'attacker') ? 'restored' : null);
           }
         }
         setScriptDone(Boolean(parsed.scriptDone));
@@ -268,7 +324,7 @@ export default function ChatScenarioScreen() {
 
     const stateToPersist: PersistedChatProgress = {
       ownerUserId: user.id,
-      messages,
+      messages: normalizeChatMessages(messages),
       scriptDone,
       scenarioId: scenario?.scenario_id ?? null,
       updatedAt: Date.now(),
@@ -358,6 +414,15 @@ export default function ChatScenarioScreen() {
     ) {
       return;
     }
+
+    if (messagesRef.current.some((message) => message.from === 'attacker')) {
+      animatedScenarioIdRef.current = scenario.scenario_id;
+      if (!scriptDone) {
+        setScriptDone(true);
+      }
+      return;
+    }
+
     animatedScenarioIdRef.current = scenario.scenario_id;
 
     const bubbleTexts = splitIntoBubbles(scenario.attacker_message);
@@ -369,7 +434,7 @@ export default function ChatScenarioScreen() {
 
       if (urlData) {
         attackerMessages.push({
-          id: `atk-${i}`,
+          id: `atk-${scenario.scenario_id}-${i}`,
           from: 'attacker',
           kind: 'link',
           text: urlData.cleanText,
@@ -377,7 +442,7 @@ export default function ChatScenarioScreen() {
         });
       } else {
         attackerMessages.push({
-          id: `atk-${i}`,
+          id: `atk-${scenario.scenario_id}-${i}`,
           from: 'attacker',
           kind: 'text',
           text,
@@ -402,7 +467,7 @@ export default function ChatScenarioScreen() {
         if (cancelled) return;
         const msg = attackerMessages[currentIdx];
         if (msg) {
-          setMessages((m) => [...m, msg]);
+          setMessages((m) => appendNormalizedMessages(m, msg));
         }
         idx += 1;
         setTyping(false);
@@ -414,7 +479,7 @@ export default function ChatScenarioScreen() {
     return () => {
       cancelled = true;
     };
-  }, [isChatStateHydrated, scenario]);
+  }, [isChatStateHydrated, scenario, scriptDone]);
 
   // After evaluation completes, navigate to feedback
   useEffect(() => {
@@ -498,7 +563,14 @@ export default function ChatScenarioScreen() {
     }
     choiceInFlightRef.current = true;
     // Add user message
-    setMessages((m) => [...m, { id: `u-${Date.now()}`, from: 'user', kind: 'text', text: label }]);
+    setMessages((m) =>
+      appendNormalizedMessages(m, {
+        id: `u-${Date.now()}-${optionId}`,
+        from: 'user',
+        kind: 'text',
+        text: label,
+      })
+    );
     setEvaluating(true);
 
     // Evaluate via backend using the direct method
@@ -554,16 +626,22 @@ export default function ChatScenarioScreen() {
   }
 
   return (
-    <View style={styles.screen}>
+    <KeyboardAvoidingView
+      style={styles.screen}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}>
       <AppBackdrop />
       <View style={styles.header}>
-        <Pressable onPress={() => router.push('/(tabs)/scenarios')} style={styles.headerButton}>
+        <Pressable
+          accessibilityLabel="Înapoi la scenarii"
+          onPress={() => router.push('/(tabs)/scenarios')}
+          style={styles.headerButton}>
           <Ionicons name="arrow-back" size={18} color={TrainingColors.textPrimary} />
         </Pressable>
         <View style={styles.avatar}>
           <Ionicons name={channelConfig.icon} size={18} color="#FDECEC" />
         </View>
-        <View style={{ flex: 1 }}>
+        <View style={styles.headerCopy}>
           <Text style={styles.headerTitle}>{channelConfig.name}</Text>
           <Text style={styles.headerSubtitle}>{channelConfig.subtitle}</Text>
         </View>
@@ -631,7 +709,7 @@ export default function ChatScenarioScreen() {
           </View>
         )}
       </View>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -726,6 +804,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  headerCopy: { flex: 1, minWidth: 0 },
   headerTitle: { color: TrainingColors.textPrimary, fontSize: 15, fontWeight: '700' },
   headerSubtitle: { color: TrainingColors.accentTeal, fontSize: 10 },
   difficultyBadge: {
@@ -774,7 +853,7 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
   messages: { flex: 1 },
-  messageContent: { paddingHorizontal: 14, paddingVertical: 12, gap: 8 },
+  messageContent: { paddingHorizontal: 14, paddingTop: 12, paddingBottom: 18, gap: 8 },
   attackerRow: { alignItems: 'flex-start' },
   attackerBubble: {
     maxWidth: '83%',
@@ -799,7 +878,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
   },
-  linkText: { color: TrainingColors.accentDanger, fontSize: 12 },
+  linkText: { color: TrainingColors.accentDanger, fontSize: 12, flex: 1, flexWrap: 'wrap' },
   userRow: { alignItems: 'flex-end' },
   userBubble: {
     maxWidth: '80%',

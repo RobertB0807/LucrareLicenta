@@ -227,6 +227,8 @@ export type ScenarioCatalogItemApiResponse = {
   channel: string;
   attacker_message_preview: string;
   red_flags: string[];
+  locked: boolean;
+  unlock_reason: string | null;
 };
 
 export type ScenarioCatalogApiResponse = {
@@ -253,9 +255,29 @@ export type LearningLessonSummaryApiResponse = {
   best_score: number | null;
   passed: boolean;
   status: LearningLessonStatus;
+  recommended: boolean;
+  recommendation_reason: string | null;
+};
+
+export type LearningLessonCategoryApiResponse = {
+  name: string;
+  total: number;
+  completed: number;
+  in_progress: number;
+  available: number;
+  locked: number;
+  recommended: number;
+  progress_percent: number;
+  next_lesson_id: string | null;
+  next_lesson_title: string | null;
+  next_action_label: string | null;
 };
 
 export type LearningLessonCatalogApiResponse = {
+  user_level: LearningLessonLevel;
+  learning_goal: string | null;
+  recommended_lesson_ids: string[];
+  categories: LearningLessonCategoryApiResponse[];
   items: LearningLessonSummaryApiResponse[];
 };
 
@@ -343,6 +365,7 @@ export type LearningPathStep = {
   difficulty: DifficultyLevel | null;
   mastery_current: number | null;
   minimum_mastery: number | null;
+  unlock_reason: string | null;
 };
 
 export type LearningPathModule = {
@@ -354,6 +377,8 @@ export type LearningPathModule = {
   progress_percent: number;
   completed_steps: number;
   total_steps: number;
+  unlock_reason: string | null;
+  next_unlock_hint: string | null;
   steps: LearningPathStep[];
 };
 

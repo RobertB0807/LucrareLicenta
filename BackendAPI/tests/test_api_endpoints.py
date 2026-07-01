@@ -557,6 +557,50 @@ class ApiEndpointsTestCase(unittest.TestCase):
         self.assertIn("difficulty", first_item)
         self.assertIn("channel", first_item)
         self.assertIn("attacker_message_preview", first_item)
+        self.assertIn("locked", first_item)
+        self.assertIn("unlock_reason", first_item)
+
+    def test_beginner_onboarding_locks_advanced_scenarios(self) -> None:
+        completed = self.client.post(
+            "/onboarding/complete",
+            json={
+                "experience": "beginner",
+                "learning_goal": "personal_safety",
+                "answers": [
+                    {
+                        "question_id": "knowledge-confidence",
+                        "selected_option_id": "new_to_security",
+                    },
+                    {
+                        "question_id": "real-world-exposure",
+                        "selected_option_id": "never",
+                    },
+                    {
+                        "question_id": "training-pace",
+                        "selected_option_id": "guided",
+                    },
+                ],
+            },
+            headers=self.auth_headers,
+        )
+        self.assertEqual(completed.status_code, 200)
+        self.assertEqual(completed.json()["assessment_level"], "beginner")
+
+        catalog = self.client.get("/scenario/catalog", headers=self.auth_headers)
+        self.assertEqual(catalog.status_code, 200)
+        hard_items = [
+            item for item in catalog.json()["items"] if item["difficulty"] == "hard"
+        ]
+        self.assertGreater(len(hard_items), 0)
+        self.assertTrue(all(item["locked"] for item in hard_items))
+        self.assertTrue(all(item["unlock_reason"] for item in hard_items))
+
+        blocked = self.client.post(
+            "/scenario/generate",
+            json={"attack_type": "smishing", "difficulty": "hard"},
+            headers=self.auth_headers,
+        )
+        self.assertEqual(blocked.status_code, 422)
 
     def test_generate_uses_exact_catalog_template_when_template_id_is_provided(self) -> None:
         catalog = self.client.get("/scenario/catalog", headers=self.auth_headers).json()
@@ -783,6 +827,15 @@ class ApiEndpointsTestCase(unittest.TestCase):
         self.assertEqual(duplicate_lesson.json()["xp_awarded"], 0)
         self.assertEqual(duplicate_lesson.json()["path"]["xp"], 25)
 
+        completed_reporting = self.client.post(
+            "/learning/lessons/reporting-basics/quiz/submit",
+            json={"answers": self._lesson_quiz_answers("reporting-basics", correct=True)},
+            headers=self.auth_headers,
+        )
+        self.assertEqual(completed_reporting.status_code, 200)
+        self.assertTrue(completed_reporting.json()["passed"])
+        self.assertEqual(completed_reporting.json()["xp_awarded"], 25)
+
         locked_lesson = self.client.post(
             "/learning/path/lessons/fake-websites/complete",
             headers=self.auth_headers,
@@ -816,7 +869,7 @@ class ApiEndpointsTestCase(unittest.TestCase):
         path = self.client.get("/learning/path", headers=self.auth_headers)
         self.assertEqual(path.status_code, 200)
         payload = path.json()
-        self.assertEqual(payload["xp"], 105)
+        self.assertEqual(payload["xp"], 130)
         self.assertEqual(payload["level"], 2)
         self.assertEqual(payload["modules"][0]["status"], "completed")
         self.assertEqual(payload["modules"][1]["status"], "available")
@@ -866,12 +919,21 @@ class ApiEndpointsTestCase(unittest.TestCase):
     def test_learning_lesson_catalog_detail_quiz_and_attempt_history(self) -> None:
         catalog = self.client.get("/learning/lessons", headers=self.auth_headers)
         self.assertEqual(catalog.status_code, 200)
-        items = catalog.json()["items"]
-        self.assertEqual(len(items), 7)
+        catalog_payload = catalog.json()
+        items = catalog_payload["items"]
+        self.assertEqual(len(items), 16)
+        self.assertEqual(catalog_payload["user_level"], "beginner")
+        self.assertGreaterEqual(len(catalog_payload["recommended_lesson_ids"]), 1)
+        self.assertGreaterEqual(len(catalog_payload["categories"]), 6)
+        first_category = catalog_payload["categories"][0]
+        self.assertIn("progress_percent", first_category)
+        self.assertIn("next_lesson_id", first_category)
+        self.assertIn("next_action_label", first_category)
         phishing = next(item for item in items if item["id"] == "phishing-101")
         self.assertEqual(phishing["status"], "available")
         self.assertEqual(phishing["attempts"], 0)
         self.assertIsNone(phishing["best_score"])
+        self.assertIn("recommended", phishing)
 
         detail = self.client.get(
             "/learning/lessons/phishing-101",
@@ -1073,16 +1135,16 @@ class ApiEndpointsTestCase(unittest.TestCase):
                 "learning_goal": "workplace",
                 "answers": [
                     {
-                        "question_id": "email-urgency",
-                        "selected_option_id": "verify_official",
+                        "question_id": "knowledge-confidence",
+                        "selected_option_id": "confident",
                     },
                     {
-                        "question_id": "delivery-sms",
-                        "selected_option_id": "report_sms",
+                        "question_id": "real-world-exposure",
+                        "selected_option_id": "often",
                     },
                     {
-                        "question_id": "manager-payment",
-                        "selected_option_id": "verify_identity",
+                        "question_id": "training-pace",
+                        "selected_option_id": "challenge",
                     },
                 ],
             },
@@ -1090,7 +1152,7 @@ class ApiEndpointsTestCase(unittest.TestCase):
         )
         self.assertEqual(completed.status_code, 200)
         payload = completed.json()
-        self.assertEqual(payload["score"], 3)
+        self.assertEqual(payload["score"], 7)
         self.assertEqual(payload["assessment_level"], "advanced")
         self.assertEqual(payload["recommendation"]["attack_type"], "impersonation")
         self.assertEqual(payload["recommendation"]["difficulty"], "hard")
@@ -1099,7 +1161,7 @@ class ApiEndpointsTestCase(unittest.TestCase):
         self.assertEqual(me.status_code, 200)
         self.assertTrue(me.json()["onboarding_completed"])
         self.assertEqual(me.json()["learning_goal"], "workplace")
-        self.assertEqual(me.json()["assessment_score"], 3)
+        self.assertEqual(me.json()["assessment_score"], 7)
 
         profile_rows = persistence_repository.fetch_user_learning_profiles(
             self.auth_user_id
@@ -1115,16 +1177,16 @@ class ApiEndpointsTestCase(unittest.TestCase):
                 "learning_goal": "workplace",
                 "answers": [
                     {
-                        "question_id": "email-urgency",
-                        "selected_option_id": "verify_official",
+                        "question_id": "knowledge-confidence",
+                        "selected_option_id": "confident",
                     },
                     {
-                        "question_id": "delivery-sms",
-                        "selected_option_id": "report_sms",
+                        "question_id": "real-world-exposure",
+                        "selected_option_id": "often",
                     },
                     {
-                        "question_id": "manager-payment",
-                        "selected_option_id": "verify_identity",
+                        "question_id": "training-pace",
+                        "selected_option_id": "challenge",
                     },
                 ],
             },
@@ -1140,8 +1202,8 @@ class ApiEndpointsTestCase(unittest.TestCase):
                 "learning_goal": "personal_safety",
                 "answers": [
                     {
-                        "question_id": "email-urgency",
-                        "selected_option_id": "verify_official",
+                        "question_id": "knowledge-confidence",
+                        "selected_option_id": "new_to_security",
                     }
                 ],
             },
@@ -1156,16 +1218,16 @@ class ApiEndpointsTestCase(unittest.TestCase):
                 "learning_goal": "personal_safety",
                 "answers": [
                     {
-                        "question_id": "email-urgency",
+                        "question_id": "knowledge-confidence",
                         "selected_option_id": "missing",
                     },
                     {
-                        "question_id": "delivery-sms",
-                        "selected_option_id": "report_sms",
+                        "question_id": "real-world-exposure",
+                        "selected_option_id": "sometimes",
                     },
                     {
-                        "question_id": "manager-payment",
-                        "selected_option_id": "verify_identity",
+                        "question_id": "training-pace",
+                        "selected_option_id": "balanced",
                     },
                 ],
             },

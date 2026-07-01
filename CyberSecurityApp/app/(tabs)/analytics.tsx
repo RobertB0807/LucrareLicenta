@@ -372,7 +372,7 @@ export default function AnalyticsScreen() {
         <View style={styles.headerIcon}>
           <Ionicons name="stats-chart" size={18} color="#EFF6FF" />
         </View>
-        <View>
+        <View style={styles.headerCopy}>
           <Text style={[styles.title, isCompact && styles.titleCompact]}>Progres</Text>
           <Text style={[styles.subtitle, isCompact && styles.subtitleCompact]}>Apărarea ta, măsurată</Text>
         </View>
@@ -414,7 +414,7 @@ export default function AnalyticsScreen() {
 
       <View style={styles.adaptiveCard}>
         <View style={styles.adaptiveHeader}>
-          <View>
+          <View style={styles.adaptiveCopy}>
             <Text style={styles.adaptiveEyebrow}>Profil adaptiv</Text>
             <Text style={styles.adaptiveTitle}>
               {adaptiveProfile?.overall_mastery ?? stats.accuracy}% stăpânire globală
@@ -479,7 +479,7 @@ export default function AnalyticsScreen() {
 
       <View style={styles.chartCard}>
         <View style={styles.chartHeader}>
-          <View>
+          <View style={styles.chartHeaderCopy}>
             <Text style={styles.chartEyebrow}>Evoluție sesiune</Text>
             <Text style={[styles.chartScore, isCompact && styles.chartScoreCompact]}>
               {trendEnd?.cumulative_score_after ?? effectiveStats.total_score}
@@ -539,7 +539,7 @@ export default function AnalyticsScreen() {
 
       <View style={styles.chartCard}>
         <View style={styles.chartHeader}>
-          <View>
+          <View style={styles.chartHeaderCopy}>
             <Text style={styles.chartEyebrow}>Acuratețe de detecție pe tip de atac</Text>
             <Text style={[styles.chartScore, isCompact && styles.chartScoreCompact]}>
               {effectiveStats.accuracy}%
@@ -573,7 +573,7 @@ export default function AnalyticsScreen() {
 
       <View style={styles.chartCard}>
         <View style={styles.chartHeader}>
-          <View>
+          <View style={styles.chartHeaderCopy}>
             <Text style={styles.chartEyebrow}>Trend acuratețe pe tip de atac</Text>
             <Text style={[styles.chartScore, isCompact && styles.chartScoreCompact]}>{trendAttemptsCount}</Text>
             <Text style={styles.chartMeta}>încercări urmărite</Text>
@@ -594,7 +594,7 @@ export default function AnalyticsScreen() {
                   ]}>
                   <Ionicons name={ATTACK_ICONS[series.attackType]} size={14} color={series.color} />
                 </View>
-                <View style={{ flex: 1 }}>
+                <View style={styles.attackTrendCopy}>
                   <Text style={styles.attackTrendLabel}>{series.label}</Text>
                   <Text style={styles.attackTrendMeta}>{series.attempts} încercări</Text>
                 </View>
@@ -639,7 +639,7 @@ export default function AnalyticsScreen() {
                   color={spot.tone === 'danger' ? TrainingColors.accentDanger : TrainingColors.accentAmber}
                 />
               </View>
-              <View style={{ flex: 1 }}>
+              <View style={styles.weakSpotCopy}>
                 <Text style={styles.weakSpotName}>{spot.label}</Text>
                 <Text style={styles.weakSpotMeta}>{spot.detail}</Text>
               </View>
@@ -706,6 +706,7 @@ const styles = StyleSheet.create({
   scroll: { flex: 1, backgroundColor: 'transparent' },
   content: { paddingHorizontal: 20, paddingTop: 50, paddingBottom: 130, gap: 12 },
   header: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 4 },
+  headerCopy: { flex: 1, minWidth: 0 },
   headerIcon: {
     width: 40,
     height: 40,
@@ -778,6 +779,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   adaptiveHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 },
+  adaptiveCopy: { flex: 1, minWidth: 0 },
   adaptiveEyebrow: {
     color: TrainingColors.accentTeal,
     fontSize: 10,
@@ -785,7 +787,7 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     fontWeight: '700',
   },
-  adaptiveTitle: { color: TrainingColors.textPrimary, fontSize: 18, fontWeight: '800', marginTop: 2 },
+  adaptiveTitle: { color: TrainingColors.textPrimary, fontSize: 18, fontWeight: '800', lineHeight: 23, marginTop: 2 },
   adaptivePill: {
     borderRadius: 999,
     backgroundColor: 'rgba(69,224,177,0.12)',
@@ -831,7 +833,8 @@ const styles = StyleSheet.create({
     padding: 14,
     gap: 10,
   },
-  chartHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  chartHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  chartHeaderCopy: { flex: 1, minWidth: 0 },
   chartEyebrow: { color: TrainingColors.textMuted, fontSize: 10, textTransform: 'uppercase', letterSpacing: 1 },
   chartScore: { color: TrainingColors.textPrimary, fontSize: 32, fontWeight: '800' },
   chartScoreCompact: { fontSize: 28 },
@@ -897,6 +900,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   attackTrendHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  attackTrendCopy: { flex: 1, minWidth: 0 },
   attackTrendIcon: {
     width: 32,
     height: 32,
@@ -932,6 +936,7 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   weakSpotTop: { flexDirection: 'row', alignItems: 'center', gap: 9 },
+  weakSpotCopy: { flex: 1, minWidth: 0 },
   weakSpotIcon: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   weakSpotIconDanger: { backgroundColor: 'rgba(255,125,125,0.14)' },
   weakSpotIconWarning: { backgroundColor: 'rgba(245,197,107,0.15)' },

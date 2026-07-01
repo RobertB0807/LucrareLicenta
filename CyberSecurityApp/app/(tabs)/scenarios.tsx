@@ -19,6 +19,8 @@ type Scenario = {
   attackType: AttackType;
   backendDifficulty: DifficultyLevel;
   channel: 'Email' | 'SMS' | 'Vocal' | 'Web';
+  locked: boolean;
+  unlockReason: string | null;
 };
 
 type DifficultyFilter = DifficultyLevel | 'all';
@@ -120,6 +122,8 @@ export default function ScenariosScreen() {
           attackType: item.attack_type,
           backendDifficulty: item.difficulty,
           channel: channelLabel(item.channel),
+          locked: item.locked,
+          unlockReason: item.unlock_reason,
         };
       }),
     [scenarioCatalog]
@@ -316,6 +320,67 @@ export default function ScenariosScreen() {
                 const recommended =
                   evaluation?.recommendation?.attack_type === scenario.attackType &&
                   evaluation.recommendation.difficulty === scenario.backendDifficulty;
+                const card = (
+                  <Pressable
+                    disabled={scenario.locked}
+                    style={({ pressed }) => [
+                      styles.card,
+                      isCompact && styles.cardCompact,
+                      recommended && styles.cardRecommended,
+                      scenario.locked && styles.cardLocked,
+                      pressed && !scenario.locked && styles.cardPressed,
+                    ]}>
+                    <View style={styles.cardTop}>
+                      <Text style={styles.cardType}>{scenario.type}</Text>
+                      <View style={styles.cardTags}>
+                        {scenario.locked ? (
+                          <View style={styles.lockedPill}>
+                            <Ionicons name="lock-closed" size={10} color={TrainingColors.textMuted} />
+                            <Text style={styles.lockedPillText}>Blocat</Text>
+                          </View>
+                        ) : null}
+                        {recommended ? (
+                          <View style={styles.recommendedPill}>
+                            <Text style={styles.recommendedText}>Recomandat</Text>
+                          </View>
+                        ) : null}
+                        <DifficultyTag level={scenario.backendDifficulty} />
+                      </View>
+                    </View>
+                    <Text style={[styles.cardTitle, isCompact && styles.cardTitleCompact]}>
+                      {scenario.title}
+                    </Text>
+                    <Text style={[styles.cardDescription, isCompact && styles.cardDescriptionCompact]}>
+                      {scenario.description}
+                    </Text>
+                    {scenario.locked && scenario.unlockReason ? (
+                      <Text style={styles.unlockReason}>{scenario.unlockReason}</Text>
+                    ) : null}
+                    <View style={styles.cardFooter}>
+                      <View style={styles.cardMeta}>
+                        <View style={styles.metaItem}>
+                          <Ionicons name="pulse-outline" size={12} color={TrainingColors.textMuted} />
+                          <Text style={styles.metaText}>{scenario.difficulty}</Text>
+                        </View>
+                        <Text style={styles.metaDivider}>|</Text>
+                        <View style={styles.metaItem}>
+                          <Ionicons name="time-outline" size={12} color={TrainingColors.textMuted} />
+                          <Text style={styles.metaText}>{scenario.time}</Text>
+                        </View>
+                      </View>
+                      <Ionicons
+                        name={scenario.locked ? 'lock-closed-outline' : 'arrow-forward'}
+                        size={15}
+                        color={scenario.locked ? TrainingColors.textMuted : TrainingColors.accentTeal}
+                      />
+                    </View>
+                  </Pressable>
+                );
+
+                if (scenario.locked) {
+                  return <View key={scenario.id}>{card}</View>;
+                }
+
                 return (
                   <Link
                     key={scenario.id}
@@ -330,45 +395,7 @@ export default function ScenariosScreen() {
                       },
                     }}
                     asChild>
-                    <Pressable
-                      style={({ pressed }) => [
-                        styles.card,
-                        isCompact && styles.cardCompact,
-                        recommended && styles.cardRecommended,
-                        pressed && styles.cardPressed,
-                      ]}>
-                      <View style={styles.cardTop}>
-                        <Text style={styles.cardType}>{scenario.type}</Text>
-                        <View style={styles.cardTags}>
-                          {recommended ? (
-                            <View style={styles.recommendedPill}>
-                              <Text style={styles.recommendedText}>Recomandat</Text>
-                            </View>
-                          ) : null}
-                          <DifficultyTag level={scenario.backendDifficulty} />
-                        </View>
-                      </View>
-                      <Text style={[styles.cardTitle, isCompact && styles.cardTitleCompact]}>
-                        {scenario.title}
-                      </Text>
-                      <Text style={[styles.cardDescription, isCompact && styles.cardDescriptionCompact]}>
-                        {scenario.description}
-                      </Text>
-                      <View style={styles.cardFooter}>
-                        <View style={styles.cardMeta}>
-                          <View style={styles.metaItem}>
-                            <Ionicons name="pulse-outline" size={12} color={TrainingColors.textMuted} />
-                            <Text style={styles.metaText}>{scenario.difficulty}</Text>
-                          </View>
-                          <Text style={styles.metaDivider}>|</Text>
-                          <View style={styles.metaItem}>
-                            <Ionicons name="time-outline" size={12} color={TrainingColors.textMuted} />
-                            <Text style={styles.metaText}>{scenario.time}</Text>
-                          </View>
-                        </View>
-                        <Ionicons name="arrow-forward" size={15} color={TrainingColors.accentTeal} />
-                      </View>
-                    </Pressable>
+                    {card}
                   </Link>
                 );
               })}
@@ -579,6 +606,11 @@ const styles = StyleSheet.create({
     shadowColor: TrainingColors.accentTeal,
     shadowOpacity: 0.16,
   },
+  cardLocked: {
+    opacity: 0.68,
+    borderColor: TrainingColors.borderSubtle,
+    backgroundColor: 'rgba(13, 24, 40, 0.72)',
+  },
   cardTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   cardTags: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   cardType: {
@@ -592,6 +624,12 @@ const styles = StyleSheet.create({
   cardTitleCompact: { fontSize: 15 },
   cardDescription: { color: TrainingColors.textSecondary, fontSize: 13, lineHeight: 18 },
   cardDescriptionCompact: { fontSize: 12, lineHeight: 16 },
+  unlockReason: {
+    color: TrainingColors.accentAmber,
+    fontSize: 11,
+    lineHeight: 16,
+    fontWeight: '700',
+  },
   cardFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 2 },
   cardMeta: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   metaItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
@@ -623,6 +661,24 @@ const styles = StyleSheet.create({
   },
   recommendedText: {
     color: TrainingColors.accentTeal,
+    fontSize: 9,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    fontWeight: '800',
+  },
+  lockedPill: {
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderWidth: 1,
+    borderColor: TrainingColors.borderSubtle,
+    backgroundColor: 'rgba(116, 142, 171, 0.08)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  lockedPillText: {
+    color: TrainingColors.textMuted,
     fontSize: 9,
     textTransform: 'uppercase',
     letterSpacing: 0.6,
