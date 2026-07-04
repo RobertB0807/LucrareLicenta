@@ -1,16 +1,19 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { Link, useRouter, type Href } from 'expo-router';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
 import { AppBackdrop } from '@/components/app-backdrop';
+import { StateCard } from '@/components/state-card';
 import { useAuth } from '@/features/auth/auth-context';
+import { getRecentLiveDrills } from '@/features/training/api';
 import type {
   AttackType,
   DifficultyLevel,
   LearningPathNextAction,
   LearningProfileAttack,
+  LiveDrillSummaryApiResponse,
 } from '@/features/training/types';
 import { TrainingColors, TrainingShadows } from '@/features/training/ui-theme';
 import { useTrainingSession } from '@/features/training/useTrainingSession';
@@ -65,14 +68,19 @@ export default function DashboardScreen() {
     scenarioCatalog,
     adaptiveProfile,
     isLoadingAdaptiveProfile,
+    adaptiveProfileError,
     learningPath,
     isLoadingLearningPath,
+    learningPathError,
     refreshActiveSession,
     refreshAdaptiveProfile,
     refreshLearningPath,
   } = useTrainingSession();
   const { user } = useAuth();
   const router = useRouter();
+  const [liveDrills, setLiveDrills] = useState<LiveDrillSummaryApiResponse[]>([]);
+  const [isLoadingLiveDrills, setIsLoadingLiveDrills] = useState(false);
+  const [liveDrillError, setLiveDrillError] = useState<string | null>(null);
   const { width } = useWindowDimensions();
   const isCompact = width < 360;
   const contentInsets = useMemo(
@@ -132,12 +140,33 @@ export default function DashboardScreen() {
     return map;
   }, [adaptiveProfile?.by_attack]);
 
+  const refreshLiveDrills = useCallback(async () => {
+    if (!user) {
+      setLiveDrills([]);
+      setIsLoadingLiveDrills(false);
+      return;
+    }
+
+    setIsLoadingLiveDrills(true);
+    setLiveDrillError(null);
+    try {
+      const response = await getRecentLiveDrills({ limit: 12 });
+      setLiveDrills(response.items);
+    } catch {
+      setLiveDrills([]);
+      setLiveDrillError('Nu am putut sincroniza exercițiile live.');
+    } finally {
+      setIsLoadingLiveDrills(false);
+    }
+  }, [user]);
+
   useFocusEffect(
     useCallback(() => {
       void refreshActiveSession();
       void refreshAdaptiveProfile();
       void refreshLearningPath();
-    }, [refreshActiveSession, refreshAdaptiveProfile, refreshLearningPath])
+      void refreshLiveDrills();
+    }, [refreshActiveSession, refreshAdaptiveProfile, refreshLearningPath, refreshLiveDrills])
   );
 
   const sessionScore = stats.totalScore;
@@ -273,6 +302,81 @@ export default function DashboardScreen() {
       ? 'Se calculează recapitulările din progresul tău...'
       : 'Recapitulările apar după primele răspunsuri evaluate.';
 
+  const liveSummary = useMemo(() => {
+    const opened = liveDrills.filter((item) => item.opened_at).length;
+    const reported = liveDrills.filter((item) => item.reported_at && !item.opened_at).length;
+    const pending = liveDrills.filter((item) => !item.opened_at && !item.reported_at).length;
+    const completed = opened + reported;
+    const safeRate = completed > 0 ? Math.round((reported / completed) * 100) : 0;
+    const latest = liveDrills[0] ?? null;
+    return { opened, reported, pending, completed, safeRate, latest };
+  }, [liveDrills]);
+
+  const liveStatusText = isLoadingLiveDrills
+    ? 'Se sincronizează inbox-ul'
+    : liveSummary.latest?.opened_at
+      ? 'Ultimul email a fost deschis'
+      : liveSummary.latest?.reported_at
+        ? 'Ultimul email a fost raportat'
+        : liveSummary.pending > 0
+          ? `${liveSummary.pending} email live în desfășurare`
+          : liveSummary.completed > 0
+            ? `${liveSummary.safeRate}% raportare sigură`
+            : 'Trimite primul email live';
+
+  const liveStatusTone =
+    liveSummary.latest?.opened_at
+      ? 'danger'
+      : liveSummary.pending > 0
+        ? 'warning'
+        : liveSummary.completed > 0
+          ? 'success'
+          : 'neutral';
+
+  const dashboardState = useMemo(() => {
+    if (isLoadingLearningPath && !learningPath) {
+      return {
+        type: 'loading' as const,
+        title: 'Se sincronizează traseul',
+        message: 'Încărcăm recomandarea curentă și progresul salvat.',
+      };
+    }
+    if (learningPathError) {
+      return {
+        type: 'error' as const,
+        title: 'Traseul nu s-a încărcat',
+        message: learningPathError,
+        retry: refreshLearningPath,
+      };
+    }
+    if (adaptiveProfileError) {
+      return {
+        type: 'error' as const,
+        title: 'Profil adaptiv indisponibil',
+        message: adaptiveProfileError,
+        retry: refreshAdaptiveProfile,
+      };
+    }
+    if (liveDrillError) {
+      return {
+        type: 'error' as const,
+        title: 'Live inbox nesincronizat',
+        message: liveDrillError,
+        retry: refreshLiveDrills,
+      };
+    }
+    return null;
+  }, [
+    adaptiveProfileError,
+    isLoadingLearningPath,
+    learningPath,
+    learningPathError,
+    liveDrillError,
+    refreshAdaptiveProfile,
+    refreshLearningPath,
+    refreshLiveDrills,
+  ]);
+
   return (
     <View style={styles.screen}>
       <AppBackdrop grid />
@@ -310,6 +414,19 @@ export default function DashboardScreen() {
           </Pressable>
         </View>
       </View>
+
+      {dashboardState ? (
+        <StateCard
+          compact
+          loading={dashboardState.type === 'loading'}
+          icon={dashboardState.type === 'loading' ? undefined : 'cloud-offline-outline'}
+          title={dashboardState.title}
+          message={dashboardState.message}
+          tone={dashboardState.type === 'loading' ? 'info' : 'danger'}
+          actionLabel={dashboardState.type === 'error' ? 'Reîncearcă' : undefined}
+          onAction={dashboardState.type === 'error' ? () => void dashboardState.retry() : undefined}
+        />
+      ) : null}
 
       <View style={styles.focusPanel}>
         <View style={styles.focusTopRow}>
@@ -356,11 +473,56 @@ export default function DashboardScreen() {
             value={`${scenarioAccess.unlocked}/${scenarioAccess.total || 0}`}
           />
           <FocusStat
-            icon="sparkles-outline"
-            label="Avansate"
-            value={`${scenarioAccess.unlockedAdvanced}`}
+            icon="mail-unread-outline"
+            label="Live"
+            value={
+              liveSummary.pending > 0
+                ? `${liveSummary.pending} activ`
+                : liveSummary.completed > 0
+                  ? `${liveSummary.safeRate}%`
+                  : '0'
+            }
           />
         </View>
+
+        <Pressable
+          onPress={() => router.push('/live-drills' as Href)}
+          style={({ pressed }) => [
+            styles.liveSnapshot,
+            liveStatusTone === 'danger'
+              ? styles.liveSnapshotDanger
+              : liveStatusTone === 'warning'
+                ? styles.liveSnapshotWarning
+                : liveStatusTone === 'success'
+                  ? styles.liveSnapshotSuccess
+                  : null,
+            pressed && styles.pressableFeedback,
+          ]}>
+          <View style={styles.liveSnapshotIcon}>
+            <Ionicons
+              name={
+                liveStatusTone === 'danger'
+                  ? 'warning-outline'
+                  : liveStatusTone === 'success'
+                    ? 'flag-outline'
+                    : 'mail-unread-outline'
+              }
+              size={15}
+              color={
+                liveStatusTone === 'danger'
+                  ? TrainingColors.accentDanger
+                  : liveStatusTone === 'warning'
+                    ? TrainingColors.accentAmber
+                    : TrainingColors.accentTeal
+              }
+            />
+          </View>
+          <View style={styles.liveSnapshotCopy}>
+            <Text style={styles.liveSnapshotLabel}>Live inbox</Text>
+            <Text style={styles.liveSnapshotText}>{liveStatusText}</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={15} color={TrainingColors.textSecondary} />
+        </Pressable>
 
         <View style={styles.focusActions}>
           <Pressable
@@ -410,39 +572,6 @@ export default function DashboardScreen() {
           </Text>
         </View>
       </View>
-
-      <Pressable
-        style={({ pressed }) => [styles.pathCard, pressed && styles.pressableFeedback]}
-        onPress={() => router.push('/learning-path' as Href)}>
-        <View style={styles.pathIcon}>
-          <Ionicons name="map-outline" size={21} color="#EFF6FF" />
-        </View>
-        <View style={styles.pathContent}>
-          <View style={styles.pathTopRow}>
-            <Text style={styles.pathEyebrow}>TRASEU DE ÎNVĂȚARE</Text>
-            <Text style={styles.pathLevel}>
-              {learningPath ? `Nivel ${learningPath.level}` : isLoadingLearningPath ? '...' : 'Nivel 1'}
-            </Text>
-          </View>
-          <Text style={styles.pathTitle}>
-            {learningPath?.next_action?.title ?? 'Construiește-ți progresul pas cu pas'}
-          </Text>
-          <View style={styles.pathProgressTrack}>
-            <View
-              style={[
-                styles.pathProgressFill,
-                { width: `${learningPath?.overall_progress ?? 0}%` },
-              ]}
-            />
-          </View>
-          <Text style={styles.pathMeta}>
-            {learningPath
-              ? `${learningPath.completed_modules}/${learningPath.total_modules} module · ${learningPath.xp} XP`
-              : 'Module, obiective, niveluri și insigne'}
-          </Text>
-        </View>
-        <Ionicons name="chevron-forward" size={18} color={TrainingColors.accentTeal} />
-      </Pressable>
 
       <View style={styles.unlockPanel}>
         <View style={styles.unlockPanelHeader}>
@@ -929,6 +1058,51 @@ const styles = StyleSheet.create({
   },
   focusStatValue: { color: TrainingColors.textPrimary, fontSize: 16, fontWeight: '900', marginTop: 4 },
   focusStatLabel: { color: TrainingColors.textMuted, fontSize: 9, fontWeight: '800', marginTop: 1 },
+  liveSnapshot: {
+    minHeight: 48,
+    borderRadius: 15,
+    borderWidth: 1,
+    borderColor: TrainingColors.borderSubtle,
+    backgroundColor: 'rgba(5,10,19,0.24)',
+    paddingHorizontal: 11,
+    paddingVertical: 9,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+  },
+  liveSnapshotSuccess: {
+    borderColor: 'rgba(77, 228, 178, 0.22)',
+    backgroundColor: 'rgba(77, 228, 178, 0.07)',
+  },
+  liveSnapshotWarning: {
+    borderColor: 'rgba(246, 199, 110, 0.24)',
+    backgroundColor: 'rgba(246, 199, 110, 0.08)',
+  },
+  liveSnapshotDanger: {
+    borderColor: 'rgba(255, 133, 141, 0.25)',
+    backgroundColor: 'rgba(255, 133, 141, 0.08)',
+  },
+  liveSnapshotIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: TrainingColors.borderSubtle,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  liveSnapshotCopy: { flex: 1, minWidth: 0 },
+  liveSnapshotLabel: {
+    color: TrainingColors.textPrimary,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  liveSnapshotText: {
+    color: TrainingColors.textMuted,
+    fontSize: 11,
+    marginTop: 1,
+  },
   focusActions: { flexDirection: 'row', gap: 8 },
   primaryPathButton: {
     flex: 1.35,

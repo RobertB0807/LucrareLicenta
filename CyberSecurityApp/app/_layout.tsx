@@ -57,6 +57,7 @@ function RootNavigator() {
           <Stack.Screen name="onboarding" />
           <Stack.Screen name="(tabs)" />
           <Stack.Screen name="sessions" />
+          <Stack.Screen name="live-drills" />
           <Stack.Screen name="profile" />
           <Stack.Screen name="learning-path" />
           <Stack.Screen name="chat/[scenarioId]" />

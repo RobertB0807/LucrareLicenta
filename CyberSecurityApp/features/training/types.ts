@@ -128,6 +128,58 @@ export type GenerateScenarioApiResponse = Scenario & {
   session_id: string;
 };
 
+export type LiveDrillApiResponse = {
+  id: string;
+  session_id: string;
+  scenario_id: string;
+  delivery_channel: 'email';
+  recipient: string;
+  subject: string;
+  tracking_url: string;
+  delivery_status: 'sent' | 'dry_run' | 'failed';
+  delivery_error: string | null;
+  opened_at: string | null;
+  reported_at: string | null;
+  created_at: string;
+  scenario: GenerateScenarioApiResponse;
+};
+
+export type LiveDrillSummaryApiResponse = {
+  id: string;
+  session_id: string;
+  scenario_id: string;
+  delivery_channel: 'email';
+  recipient: string;
+  subject: string;
+  tracking_url: string;
+  delivery_status: 'sent' | 'dry_run' | 'failed';
+  delivery_error: string | null;
+  opened_at: string | null;
+  reported_at: string | null;
+  created_at: string;
+  attack_type: AttackType;
+  difficulty: DifficultyLevel;
+  red_flags: string[];
+};
+
+export type LiveDrillListApiResponse = {
+  items: LiveDrillSummaryApiResponse[];
+};
+
+export type LiveDrillReportApiResponse = {
+  id: string;
+  scenario_id: string;
+  session_id: string;
+  is_correct: boolean;
+  score_delta: number;
+  explanation: string;
+  opened_at: string | null;
+  reported_at: string;
+  attack_type: AttackType;
+  difficulty: DifficultyLevel;
+  red_flags: string[];
+};
+
 export type SessionSnapshotApiResponse = {
   session_id: string;
   session_stats: SessionStats;

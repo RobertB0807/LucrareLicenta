@@ -307,6 +307,108 @@ class ApiEndpointsTestCase(unittest.TestCase):
         self.assertEqual(len(matching_rows), 1)
         self.assertEqual(matching_rows[0]["attempts"], 1)
 
+    def test_live_drill_creates_dry_run_and_tracks_open(self) -> None:
+        with patch.dict(os.environ, {"LIVE_DRILL_EMAIL_ENABLED": "false"}, clear=False):
+            response = self.client.post(
+                "/live-drills",
+                headers=self.auth_headers,
+                json={
+                    "delivery_channel": "email",
+                    "attack_type": "phishing",
+                    "difficulty": "easy",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["delivery_status"], "dry_run")
+        self.assertEqual(payload["recipient"], "tester@example.com")
+        self.assertIn("/live-drills/track/", payload["tracking_url"])
+        self.assertEqual(payload["scenario"]["attack_type"], "phishing")
+
+        tracking_token = payload["tracking_url"].rsplit("/", maxsplit=1)[-1]
+        opened = self.client.get(f"/live-drills/track/{tracking_token}")
+
+        self.assertEqual(opened.status_code, 200)
+        self.assertIn("Link de training deschis", opened.text)
+
+        recent = self.client.get("/live-drills/recent", headers=self.auth_headers)
+
+        self.assertEqual(recent.status_code, 200)
+        self.assertEqual(len(recent.json()["items"]), 1)
+        self.assertEqual(recent.json()["items"][0]["id"], payload["id"])
+        self.assertIsNotNone(recent.json()["items"][0]["opened_at"])
+        self.assertEqual(recent.json()["items"][0]["attack_type"], "phishing")
+
+    def test_live_drill_explicit_dry_run_skips_smtp_even_when_enabled(self) -> None:
+        with (
+            patch.dict(os.environ, {"LIVE_DRILL_EMAIL_ENABLED": "true"}, clear=False),
+            patch("live_drill_service._send_email") as send_email,
+        ):
+            response = self.client.post(
+                "/live-drills",
+                headers=self.auth_headers,
+                json={
+                    "delivery_channel": "email",
+                    "recipient": "smoke@example.invalid",
+                    "dry_run": True,
+                    "attack_type": "phishing",
+                    "difficulty": "easy",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["delivery_status"], "dry_run")
+        send_email.assert_not_called()
+
+    def test_live_drill_report_scores_safe_report_before_click(self) -> None:
+        with patch.dict(os.environ, {"LIVE_DRILL_EMAIL_ENABLED": "false"}, clear=False):
+            response = self.client.post(
+                "/live-drills",
+                headers=self.auth_headers,
+                json={
+                    "delivery_channel": "email",
+                    "attack_type": "phishing",
+                    "difficulty": "easy",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        reported = self.client.post(
+            f"/live-drills/{response.json()['id']}/report",
+            headers=self.auth_headers,
+        )
+
+        self.assertEqual(reported.status_code, 200)
+        self.assertTrue(reported.json()["is_correct"])
+        self.assertEqual(reported.json()["score_delta"], 10)
+        self.assertIsNotNone(reported.json()["reported_at"])
+        self.assertIsNone(reported.json()["opened_at"])
+
+    def test_live_drill_report_after_click_is_partial_credit(self) -> None:
+        with patch.dict(os.environ, {"LIVE_DRILL_EMAIL_ENABLED": "false"}, clear=False):
+            response = self.client.post(
+                "/live-drills",
+                headers=self.auth_headers,
+                json={
+                    "delivery_channel": "email",
+                    "attack_type": "phishing",
+                    "difficulty": "easy",
+                },
+            )
+
+        tracking_token = response.json()["tracking_url"].rsplit("/", maxsplit=1)[-1]
+        self.client.get(f"/live-drills/track/{tracking_token}")
+        reported = self.client.post(
+            f"/live-drills/{response.json()['id']}/report",
+            headers=self.auth_headers,
+        )
+
+        self.assertEqual(reported.status_code, 200)
+        self.assertFalse(reported.json()["is_correct"])
+        self.assertEqual(reported.json()["score_delta"], 0)
+        self.assertIsNotNone(reported.json()["opened_at"])
+
     def test_evaluate_retry_with_different_option_returns_conflict(self) -> None:
         generated = self.client.post(
             "/scenario/generate",

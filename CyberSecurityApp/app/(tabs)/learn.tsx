@@ -26,7 +26,6 @@ import {
 } from '@/features/training/api';
 import {
   buildUserStorageKey,
-  clearTrainingLocalCache,
   LEARN_SCREEN_STORAGE_KEY,
 } from '@/features/training/local-cache';
 import type {
@@ -362,7 +361,7 @@ export default function LearnScreen() {
   };
 
   const clearLocalCache = async () => {
-    await clearTrainingLocalCache(user?.id);
+    await AsyncStorage.removeItem(storageKey);
     closeLessonModal();
     setActiveCat(recommendedLessons.length > 0 ? 'Recomandate' : 'Toate');
     Alert.alert('Cache șters', 'Datele locale pentru lecții au fost resetate.');

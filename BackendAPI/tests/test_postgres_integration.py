@@ -39,6 +39,7 @@ class PostgresIntegrationTestCase(unittest.TestCase):
                 "learning_quiz_options",
                 "learning_quiz_attempts",
                 "learning_quiz_answers",
+                "live_drills",
             }.issubset(table_names)
         )
 

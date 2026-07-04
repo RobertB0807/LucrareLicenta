@@ -85,6 +85,10 @@ class UserORM(Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+    live_drills: Mapped[list["LiveDrillORM"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
 
 
 class UserLearningProfileORM(Base):
@@ -360,3 +364,25 @@ class SessionEventORM(Base):
     tone: Mapped[str] = mapped_column(String(16))
 
     session: Mapped[TrainingSessionORM] = relationship(back_populates="events")
+
+
+class LiveDrillORM(Base):
+    __tablename__ = "live_drills"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey("training_sessions.session_id"), index=True)
+    scenario_id: Mapped[str] = mapped_column(String(64), index=True)
+    delivery_channel: Mapped[str] = mapped_column(String(16), default="email")
+    recipient: Mapped[str] = mapped_column(String(254))
+    subject: Mapped[str] = mapped_column(String(180))
+    tracking_token: Mapped[str] = mapped_column(String(96), unique=True, index=True)
+    tracking_url: Mapped[str] = mapped_column(Text)
+    delivery_status: Mapped[str] = mapped_column(String(24), default="dry_run")
+    delivery_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+
+    user: Mapped["UserORM"] = relationship(back_populates="live_drills")
+    session: Mapped[TrainingSessionORM] = relationship()

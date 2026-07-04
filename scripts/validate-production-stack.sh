@@ -15,6 +15,8 @@ if [[ ! -f "$ENV_FILE" ]]; then
   exit 1
 fi
 
+python3 "$ROOT_DIR/scripts/security-audit.py"
+
 cleanup() {
   if [[ "$KEEP_STACK" != "true" ]]; then
     if [[ "$REMOVE_VOLUMES" == "true" ]]; then

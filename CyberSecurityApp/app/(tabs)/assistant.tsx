@@ -20,7 +20,6 @@ import { askAssistant } from '@/features/training/api';
 import {
   ASSISTANT_MESSAGES_STORAGE_KEY,
   buildUserStorageKey,
-  clearTrainingLocalCache,
 } from '@/features/training/local-cache';
 import type { AssistantAskApiResponse } from '@/features/training/types';
 import { TrainingColors } from '@/features/training/ui-theme';
@@ -141,7 +140,7 @@ export default function AssistantScreen() {
   }, [hydratedUserId, isHydrated, messages, storageKey, user]);
 
   const clearLocalCache = async () => {
-    await clearTrainingLocalCache(user?.id);
+    await AsyncStorage.removeItem(storageKey);
     setMessages(defaultMessages);
     setDraft('');
     setThinking(false);
