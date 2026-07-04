@@ -1,12 +1,20 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { Link, useRouter, type Href } from 'expo-router';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
 import { AppBackdrop } from '@/components/app-backdrop';
+import { StateCard } from '@/components/state-card';
 import { useAuth } from '@/features/auth/auth-context';
-import type { AttackType, DifficultyLevel, LearningProfileAttack } from '@/features/training/types';
+import { getRecentLiveDrills } from '@/features/training/api';
+import type {
+  AttackType,
+  DifficultyLevel,
+  LearningPathNextAction,
+  LearningProfileAttack,
+  LiveDrillSummaryApiResponse,
+} from '@/features/training/types';
 import { TrainingColors, TrainingShadows } from '@/features/training/ui-theme';
 import { useTrainingSession } from '@/features/training/useTrainingSession';
 
@@ -44,6 +52,13 @@ function adaptiveDifficulty(masteryScore: number, attempts: number): DifficultyL
   return 'hard';
 }
 
+function getNextActionLabel(nextAction: LearningPathNextAction | null | undefined): string {
+  if (!nextAction) {
+    return 'Continuă traseul';
+  }
+  return nextAction.step_type === 'lesson' ? 'Deschide lecția' : 'Pornește scenariul';
+}
+
 export default function DashboardScreen() {
   const {
     stats,
@@ -53,14 +68,19 @@ export default function DashboardScreen() {
     scenarioCatalog,
     adaptiveProfile,
     isLoadingAdaptiveProfile,
+    adaptiveProfileError,
     learningPath,
     isLoadingLearningPath,
+    learningPathError,
     refreshActiveSession,
     refreshAdaptiveProfile,
     refreshLearningPath,
   } = useTrainingSession();
   const { user } = useAuth();
   const router = useRouter();
+  const [liveDrills, setLiveDrills] = useState<LiveDrillSummaryApiResponse[]>([]);
+  const [isLoadingLiveDrills, setIsLoadingLiveDrills] = useState(false);
+  const [liveDrillError, setLiveDrillError] = useState<string | null>(null);
   const { width } = useWindowDimensions();
   const isCompact = width < 360;
   const contentInsets = useMemo(
@@ -76,12 +96,40 @@ export default function DashboardScreen() {
   const scenarioPreviewByKey = useMemo(() => {
     const map: Record<string, string> = {};
     for (const item of scenarioCatalog) {
+      if (item.locked) {
+        continue;
+      }
       const key = `${item.attack_type}-${item.difficulty}`;
       if (!map[key]) {
         map[key] = item.attacker_message_preview;
       }
     }
     return map;
+  }, [scenarioCatalog]);
+
+  const scenarioAccess = useMemo(() => {
+    const unlocked = scenarioCatalog.filter((item) => !item.locked);
+    const locked = scenarioCatalog.filter((item) => item.locked);
+    const unlockedAdvanced = unlocked.filter((item) => item.difficulty !== 'easy');
+    const nextLocked = locked.find((item) => item.unlock_reason);
+    const byDifficulty = (['easy', 'medium', 'hard'] as DifficultyLevel[]).map((difficulty) => {
+      const items = scenarioCatalog.filter((item) => item.difficulty === difficulty);
+      const available = items.filter((item) => !item.locked).length;
+      return {
+        difficulty,
+        total: items.length,
+        available,
+        locked: items.length - available,
+      };
+    });
+    return {
+      total: scenarioCatalog.length,
+      unlocked: unlocked.length,
+      locked: locked.length,
+      unlockedAdvanced: unlockedAdvanced.length,
+      nextLocked,
+      byDifficulty,
+    };
   }, [scenarioCatalog]);
 
   const adaptiveAttackMap = useMemo(() => {
@@ -92,12 +140,33 @@ export default function DashboardScreen() {
     return map;
   }, [adaptiveProfile?.by_attack]);
 
+  const refreshLiveDrills = useCallback(async () => {
+    if (!user) {
+      setLiveDrills([]);
+      setIsLoadingLiveDrills(false);
+      return;
+    }
+
+    setIsLoadingLiveDrills(true);
+    setLiveDrillError(null);
+    try {
+      const response = await getRecentLiveDrills({ limit: 12 });
+      setLiveDrills(response.items);
+    } catch {
+      setLiveDrills([]);
+      setLiveDrillError('Nu am putut sincroniza exercițiile live.');
+    } finally {
+      setIsLoadingLiveDrills(false);
+    }
+  }, [user]);
+
   useFocusEffect(
     useCallback(() => {
       void refreshActiveSession();
       void refreshAdaptiveProfile();
       void refreshLearningPath();
-    }, [refreshActiveSession, refreshAdaptiveProfile, refreshLearningPath])
+      void refreshLiveDrills();
+    }, [refreshActiveSession, refreshAdaptiveProfile, refreshLearningPath, refreshLiveDrills])
   );
 
   const sessionScore = stats.totalScore;
@@ -141,6 +210,24 @@ export default function DashboardScreen() {
     const recommendation = evaluation?.recommendation ?? adaptiveProfile?.recommended_next;
     if (recommendation) {
       const attack = recommendation.attack_type;
+      const recommendedUnlocked = scenarioCatalog.some(
+        (item) =>
+          item.attack_type === recommendation.attack_type &&
+          item.difficulty === recommendation.difficulty &&
+          !item.locked
+      );
+      if (!recommendedUnlocked) {
+        const fallbackUnlocked = scenarioCatalog.find(
+          (item) => item.attack_type === recommendation.attack_type && !item.locked
+        );
+        if (fallbackUnlocked) {
+          return {
+            title: `Scenariu disponibil · ${ATTACK_LABELS[fallbackUnlocked.attack_type]}`,
+            difficulty: fallbackUnlocked.difficulty,
+            attackType: fallbackUnlocked.attack_type,
+          };
+        }
+      }
       return {
         title: `Scenariu recomandat · ${ATTACK_LABELS[attack]}`,
         difficulty: recommendation.difficulty,
@@ -154,7 +241,46 @@ export default function DashboardScreen() {
       difficulty: fallback?.difficulty ?? 'easy',
       attackType: fallback?.attackType ?? 'phishing',
     };
-  }, [adaptiveProfile?.recommended_next, evaluation?.recommendation, scenarioCards]);
+  }, [adaptiveProfile?.recommended_next, evaluation?.recommendation, scenarioCards, scenarioCatalog]);
+
+  const nextPathUnlockHint = useMemo(() => {
+    if (!learningPath) {
+      return null;
+    }
+    const activeModule =
+      learningPath.modules.find((module) => module.status === 'in_progress') ??
+      learningPath.modules.find((module) => module.status === 'available') ??
+      learningPath.modules.find((module) => module.status === 'locked');
+    return activeModule?.next_unlock_hint ?? activeModule?.unlock_reason ?? null;
+  }, [learningPath]);
+
+  const continuePath = useCallback(() => {
+    const nextAction = learningPath?.next_action;
+    if (!nextAction) {
+      router.push('/learning-path' as Href);
+      return;
+    }
+    if (nextAction.step_type === 'lesson' && nextAction.lesson_id) {
+      router.push({
+        pathname: '/(tabs)/learn',
+        params: { lessonId: nextAction.lesson_id },
+      });
+      return;
+    }
+    if (nextAction.attack_type && nextAction.difficulty) {
+      router.push({
+        pathname: '/chat/[scenarioId]',
+        params: {
+          scenarioId: `path-${nextAction.step_id}`,
+          attackType: nextAction.attack_type,
+          difficulty: nextAction.difficulty,
+          sessionId: sessionId ?? undefined,
+        },
+      });
+      return;
+    }
+    router.push('/learning-path' as Href);
+  }, [learningPath?.next_action, router, sessionId]);
 
   const weakestAdaptiveArea = adaptiveProfile?.weak_areas[0];
   const topReview = adaptiveProfile?.review_queue?.[0];
@@ -175,6 +301,81 @@ export default function DashboardScreen() {
     : isLoadingAdaptiveProfile && !adaptiveProfile
       ? 'Se calculează recapitulările din progresul tău...'
       : 'Recapitulările apar după primele răspunsuri evaluate.';
+
+  const liveSummary = useMemo(() => {
+    const opened = liveDrills.filter((item) => item.opened_at).length;
+    const reported = liveDrills.filter((item) => item.reported_at && !item.opened_at).length;
+    const pending = liveDrills.filter((item) => !item.opened_at && !item.reported_at).length;
+    const completed = opened + reported;
+    const safeRate = completed > 0 ? Math.round((reported / completed) * 100) : 0;
+    const latest = liveDrills[0] ?? null;
+    return { opened, reported, pending, completed, safeRate, latest };
+  }, [liveDrills]);
+
+  const liveStatusText = isLoadingLiveDrills
+    ? 'Se sincronizează inbox-ul'
+    : liveSummary.latest?.opened_at
+      ? 'Ultimul email a fost deschis'
+      : liveSummary.latest?.reported_at
+        ? 'Ultimul email a fost raportat'
+        : liveSummary.pending > 0
+          ? `${liveSummary.pending} email live în desfășurare`
+          : liveSummary.completed > 0
+            ? `${liveSummary.safeRate}% raportare sigură`
+            : 'Trimite primul email live';
+
+  const liveStatusTone =
+    liveSummary.latest?.opened_at
+      ? 'danger'
+      : liveSummary.pending > 0
+        ? 'warning'
+        : liveSummary.completed > 0
+          ? 'success'
+          : 'neutral';
+
+  const dashboardState = useMemo(() => {
+    if (isLoadingLearningPath && !learningPath) {
+      return {
+        type: 'loading' as const,
+        title: 'Se sincronizează traseul',
+        message: 'Încărcăm recomandarea curentă și progresul salvat.',
+      };
+    }
+    if (learningPathError) {
+      return {
+        type: 'error' as const,
+        title: 'Traseul nu s-a încărcat',
+        message: learningPathError,
+        retry: refreshLearningPath,
+      };
+    }
+    if (adaptiveProfileError) {
+      return {
+        type: 'error' as const,
+        title: 'Profil adaptiv indisponibil',
+        message: adaptiveProfileError,
+        retry: refreshAdaptiveProfile,
+      };
+    }
+    if (liveDrillError) {
+      return {
+        type: 'error' as const,
+        title: 'Live inbox nesincronizat',
+        message: liveDrillError,
+        retry: refreshLiveDrills,
+      };
+    }
+    return null;
+  }, [
+    adaptiveProfileError,
+    isLoadingLearningPath,
+    learningPath,
+    learningPathError,
+    liveDrillError,
+    refreshAdaptiveProfile,
+    refreshLearningPath,
+    refreshLiveDrills,
+  ]);
 
   return (
     <View style={styles.screen}>
@@ -214,6 +415,146 @@ export default function DashboardScreen() {
         </View>
       </View>
 
+      {dashboardState ? (
+        <StateCard
+          compact
+          loading={dashboardState.type === 'loading'}
+          icon={dashboardState.type === 'loading' ? undefined : 'cloud-offline-outline'}
+          title={dashboardState.title}
+          message={dashboardState.message}
+          tone={dashboardState.type === 'loading' ? 'info' : 'danger'}
+          actionLabel={dashboardState.type === 'error' ? 'Reîncearcă' : undefined}
+          onAction={dashboardState.type === 'error' ? () => void dashboardState.retry() : undefined}
+        />
+      ) : null}
+
+      <View style={styles.focusPanel}>
+        <View style={styles.focusTopRow}>
+          <View style={styles.focusHeading}>
+            <Text style={styles.focusEyebrow}>PLANUL TĂU</Text>
+            <Text style={styles.focusTitle}>
+              {learningPath?.next_action?.title ?? 'Începe traseul personalizat'}
+            </Text>
+          </View>
+          <View style={styles.focusLevelPill}>
+            <Ionicons name="flash-outline" size={13} color={TrainingColors.accentAmber} />
+            <Text style={styles.focusLevelText}>
+              {learningPath ? `Nivel ${learningPath.level}` : 'Nivel 1'}
+            </Text>
+          </View>
+        </View>
+
+        <Text style={styles.focusText}>
+          {learningPath?.next_action?.step_type === 'lesson'
+            ? 'Continuă cu lecția recomandată pentru nivelul tău, apoi promovează quiz-ul ca să crești progresul.'
+            : learningPath?.next_action?.step_type === 'scenario'
+              ? 'Aplică ce ai învățat într-un scenariu potrivit nivelului tău actual.'
+              : 'Finalizează prima lecție ca să deblochezi treptat scenarii mai dificile.'}
+        </Text>
+
+        <View style={styles.focusProgressTrack}>
+          <View
+            style={[
+              styles.focusProgressFill,
+              { width: `${learningPath?.overall_progress ?? 0}%` },
+            ]}
+          />
+        </View>
+
+        <View style={styles.focusStatsRow}>
+          <FocusStat
+            icon="book-outline"
+            label="Traseu"
+            value={`${learningPath?.overall_progress ?? 0}%`}
+          />
+          <FocusStat
+            icon="lock-open-outline"
+            label="Scenarii"
+            value={`${scenarioAccess.unlocked}/${scenarioAccess.total || 0}`}
+          />
+          <FocusStat
+            icon="mail-unread-outline"
+            label="Live"
+            value={
+              liveSummary.pending > 0
+                ? `${liveSummary.pending} activ`
+                : liveSummary.completed > 0
+                  ? `${liveSummary.safeRate}%`
+                  : '0'
+            }
+          />
+        </View>
+
+        <Pressable
+          onPress={() => router.push('/live-drills' as Href)}
+          style={({ pressed }) => [
+            styles.liveSnapshot,
+            liveStatusTone === 'danger'
+              ? styles.liveSnapshotDanger
+              : liveStatusTone === 'warning'
+                ? styles.liveSnapshotWarning
+                : liveStatusTone === 'success'
+                  ? styles.liveSnapshotSuccess
+                  : null,
+            pressed && styles.pressableFeedback,
+          ]}>
+          <View style={styles.liveSnapshotIcon}>
+            <Ionicons
+              name={
+                liveStatusTone === 'danger'
+                  ? 'warning-outline'
+                  : liveStatusTone === 'success'
+                    ? 'flag-outline'
+                    : 'mail-unread-outline'
+              }
+              size={15}
+              color={
+                liveStatusTone === 'danger'
+                  ? TrainingColors.accentDanger
+                  : liveStatusTone === 'warning'
+                    ? TrainingColors.accentAmber
+                    : TrainingColors.accentTeal
+              }
+            />
+          </View>
+          <View style={styles.liveSnapshotCopy}>
+            <Text style={styles.liveSnapshotLabel}>Live inbox</Text>
+            <Text style={styles.liveSnapshotText}>{liveStatusText}</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={15} color={TrainingColors.textSecondary} />
+        </Pressable>
+
+        <View style={styles.focusActions}>
+          <Pressable
+            onPress={continuePath}
+            style={({ pressed }) => [styles.primaryPathButton, pressed && styles.pressableFeedback]}>
+            <Text style={styles.primaryPathButtonText}>
+              {getNextActionLabel(learningPath?.next_action)}
+            </Text>
+            <Ionicons name="arrow-forward" size={16} color="#FFFFFF" />
+          </Pressable>
+          <Pressable
+            onPress={() => router.push('/learning-path' as Href)}
+            style={({ pressed }) => [styles.secondaryPathButton, pressed && styles.pressableFeedback]}>
+            <Ionicons name="map-outline" size={15} color={TrainingColors.accentTeal} />
+            <Text style={styles.secondaryPathButtonText}>Vezi traseul</Text>
+          </Pressable>
+        </View>
+
+        {scenarioAccess.nextLocked?.unlock_reason ? (
+          <View style={styles.unlockHint}>
+            <Ionicons name="lock-closed-outline" size={14} color={TrainingColors.accentAmber} />
+            <Text style={styles.unlockHintText}>{scenarioAccess.nextLocked.unlock_reason}</Text>
+          </View>
+        ) : null}
+        {nextPathUnlockHint ? (
+          <View style={styles.unlockHint}>
+            <Ionicons name="map-outline" size={14} color={TrainingColors.accentTeal} />
+            <Text style={styles.unlockHintText}>{nextPathUnlockHint}</Text>
+          </View>
+        ) : null}
+      </View>
+
       <View style={[styles.scoreCard, isCompact && styles.scoreCardCompact]}>
         <View style={styles.scoreGlow} />
         <View style={[styles.scoreRing, isCompact && styles.scoreRingCompact]}>
@@ -232,38 +573,59 @@ export default function DashboardScreen() {
         </View>
       </View>
 
-      <Pressable
-        style={({ pressed }) => [styles.pathCard, pressed && styles.pressableFeedback]}
-        onPress={() => router.push('/learning-path' as Href)}>
-        <View style={styles.pathIcon}>
-          <Ionicons name="map-outline" size={21} color="#EFF6FF" />
-        </View>
-        <View style={styles.pathContent}>
-          <View style={styles.pathTopRow}>
-            <Text style={styles.pathEyebrow}>TRASEU DE ÎNVĂȚARE</Text>
-            <Text style={styles.pathLevel}>
-              {learningPath ? `Nivel ${learningPath.level}` : isLoadingLearningPath ? '...' : 'Nivel 1'}
-            </Text>
+      <View style={styles.unlockPanel}>
+        <View style={styles.unlockPanelHeader}>
+          <View style={styles.unlockPanelHeading}>
+            <Text style={styles.unlockPanelEyebrow}>ACCES SCENARII</Text>
+            <Text style={styles.unlockPanelTitle}>Ce poți exersa acum</Text>
           </View>
-          <Text style={styles.pathTitle}>
-            {learningPath?.next_action?.title ?? 'Construiește-ți progresul pas cu pas'}
-          </Text>
-          <View style={styles.pathProgressTrack}>
-            <View
-              style={[
-                styles.pathProgressFill,
-                { width: `${learningPath?.overall_progress ?? 0}%` },
-              ]}
-            />
-          </View>
-          <Text style={styles.pathMeta}>
-            {learningPath
-              ? `${learningPath.completed_modules}/${learningPath.total_modules} module · ${learningPath.xp} XP`
-              : 'Module, obiective, niveluri și insigne'}
-          </Text>
+          <Pressable
+            onPress={() => router.push('/(tabs)/scenarios' as Href)}
+            style={({ pressed }) => [styles.unlockPanelAction, pressed && styles.pressableFeedback]}>
+            <Text style={styles.unlockPanelActionText}>Laborator</Text>
+            <Ionicons name="arrow-forward" size={12} color={TrainingColors.accentTeal} />
+          </Pressable>
         </View>
-        <Ionicons name="chevron-forward" size={18} color={TrainingColors.accentTeal} />
-      </Pressable>
+        <View style={styles.unlockRows}>
+          {scenarioAccess.byDifficulty.map((row) => {
+            const isFullyUnlocked = row.locked === 0 && row.total > 0;
+            return (
+              <View key={row.difficulty} style={styles.unlockRow}>
+                <View
+                  style={[
+                    styles.unlockDifficultyDot,
+                    row.difficulty === 'easy'
+                      ? styles.unlockDotEasy
+                      : row.difficulty === 'medium'
+                        ? styles.unlockDotMedium
+                        : styles.unlockDotHard,
+                  ]}
+                />
+                <View style={styles.unlockRowText}>
+                  <Text style={styles.unlockRowTitle}>{DIFFICULTY_LABELS[row.difficulty]}</Text>
+                  <Text style={styles.unlockRowMeta}>
+                    {row.available}/{row.total} disponibile
+                  </Text>
+                </View>
+                <View style={[styles.unlockStatusPill, isFullyUnlocked && styles.unlockStatusOpen]}>
+                  <Ionicons
+                    name={isFullyUnlocked ? 'lock-open-outline' : 'lock-closed-outline'}
+                    size={12}
+                    color={isFullyUnlocked ? TrainingColors.accentTeal : TrainingColors.textMuted}
+                  />
+                  <Text
+                    style={[
+                      styles.unlockStatusText,
+                      isFullyUnlocked && styles.unlockStatusTextOpen,
+                    ]}>
+                    {isFullyUnlocked ? 'Deblocat' : `${row.locked} blocate`}
+                  </Text>
+                </View>
+              </View>
+            );
+          })}
+        </View>
+      </View>
 
       <View style={styles.adaptiveCard}>
         <View style={styles.adaptiveTopRow}>
@@ -568,6 +930,24 @@ function RiskBadge({ level }: { level: RiskLevel }) {
   );
 }
 
+function FocusStat({
+  icon,
+  label,
+  value,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  value: string;
+}) {
+  return (
+    <View style={styles.focusStat}>
+      <Ionicons name={icon} size={14} color={TrainingColors.accentTeal} />
+      <Text style={styles.focusStatValue}>{value}</Text>
+      <Text style={styles.focusStatLabel}>{label}</Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: TrainingColors.pageBase },
   scroll: { flex: 1, backgroundColor: 'transparent' },
@@ -612,6 +992,157 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     ...TrainingShadows.card,
   },
+  focusPanel: {
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(77, 228, 178, 0.34)',
+    backgroundColor: 'rgba(15, 35, 45, 0.96)',
+    padding: 18,
+    gap: 13,
+    ...TrainingShadows.card,
+  },
+  focusTopRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  focusHeading: { flex: 1 },
+  focusEyebrow: {
+    color: TrainingColors.accentTeal,
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 1.4,
+  },
+  focusTitle: {
+    color: TrainingColors.textPrimary,
+    fontSize: 20,
+    lineHeight: 25,
+    fontWeight: '900',
+    marginTop: 3,
+  },
+  focusLevelPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(246,199,110,0.35)',
+    backgroundColor: 'rgba(246,199,110,0.11)',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  focusLevelText: { color: TrainingColors.accentAmber, fontSize: 11, fontWeight: '900' },
+  focusText: { color: TrainingColors.textSecondary, fontSize: 12, lineHeight: 18 },
+  focusProgressTrack: {
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: TrainingColors.panelSoft,
+    overflow: 'hidden',
+  },
+  focusProgressFill: {
+    height: '100%',
+    borderRadius: 999,
+    backgroundColor: TrainingColors.accentTeal,
+  },
+  focusStatsRow: { flexDirection: 'row', gap: 8 },
+  focusStat: {
+    flex: 1,
+    minHeight: 68,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: TrainingColors.borderSubtle,
+    backgroundColor: 'rgba(5,10,19,0.3)',
+    padding: 10,
+    justifyContent: 'center',
+  },
+  focusStatValue: { color: TrainingColors.textPrimary, fontSize: 16, fontWeight: '900', marginTop: 4 },
+  focusStatLabel: { color: TrainingColors.textMuted, fontSize: 9, fontWeight: '800', marginTop: 1 },
+  liveSnapshot: {
+    minHeight: 48,
+    borderRadius: 15,
+    borderWidth: 1,
+    borderColor: TrainingColors.borderSubtle,
+    backgroundColor: 'rgba(5,10,19,0.24)',
+    paddingHorizontal: 11,
+    paddingVertical: 9,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+  },
+  liveSnapshotSuccess: {
+    borderColor: 'rgba(77, 228, 178, 0.22)',
+    backgroundColor: 'rgba(77, 228, 178, 0.07)',
+  },
+  liveSnapshotWarning: {
+    borderColor: 'rgba(246, 199, 110, 0.24)',
+    backgroundColor: 'rgba(246, 199, 110, 0.08)',
+  },
+  liveSnapshotDanger: {
+    borderColor: 'rgba(255, 133, 141, 0.25)',
+    backgroundColor: 'rgba(255, 133, 141, 0.08)',
+  },
+  liveSnapshotIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: TrainingColors.borderSubtle,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  liveSnapshotCopy: { flex: 1, minWidth: 0 },
+  liveSnapshotLabel: {
+    color: TrainingColors.textPrimary,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  liveSnapshotText: {
+    color: TrainingColors.textMuted,
+    fontSize: 11,
+    marginTop: 1,
+  },
+  focusActions: { flexDirection: 'row', gap: 8 },
+  primaryPathButton: {
+    flex: 1.35,
+    minHeight: 46,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: TrainingColors.buttonPrimaryBorder,
+    backgroundColor: TrainingColors.buttonPrimary,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+  },
+  primaryPathButtonText: { color: '#FFFFFF', fontSize: 13, fontWeight: '900' },
+  secondaryPathButton: {
+    flex: 1,
+    minHeight: 46,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: TrainingColors.border,
+    backgroundColor: TrainingColors.panel,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    paddingHorizontal: 10,
+  },
+  secondaryPathButtonText: { color: TrainingColors.textPrimary, fontSize: 12, fontWeight: '800' },
+  unlockHint: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 7,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(246,199,110,0.22)',
+    backgroundColor: 'rgba(246,199,110,0.08)',
+    padding: 10,
+  },
+  unlockHintText: { flex: 1, color: TrainingColors.accentAmber, fontSize: 11, lineHeight: 16 },
   scoreCard: {
     position: 'relative',
     flexDirection: 'row',
@@ -660,6 +1191,86 @@ const styles = StyleSheet.create({
   },
   pathProgressFill: { height: '100%', backgroundColor: TrainingColors.accentTeal },
   pathMeta: { color: TrainingColors.textSecondary, fontSize: 9 },
+  unlockPanel: {
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: TrainingColors.border,
+    backgroundColor: 'rgba(13, 24, 40, 0.9)',
+    padding: 16,
+    gap: 12,
+    ...TrainingShadows.card,
+  },
+  unlockPanelHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  unlockPanelHeading: { flex: 1 },
+  unlockPanelEyebrow: {
+    color: TrainingColors.textMuted,
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 1.3,
+  },
+  unlockPanelTitle: {
+    color: TrainingColors.textPrimary,
+    fontSize: 16,
+    fontWeight: '900',
+    marginTop: 2,
+  },
+  unlockPanelAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(77, 228, 178, 0.28)',
+    backgroundColor: 'rgba(77, 228, 178, 0.08)',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  unlockPanelActionText: { color: TrainingColors.accentTeal, fontSize: 11, fontWeight: '900' },
+  unlockRows: { gap: 8 },
+  unlockRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: TrainingColors.borderSubtle,
+    backgroundColor: 'rgba(5, 10, 19, 0.25)',
+    paddingHorizontal: 11,
+    paddingVertical: 10,
+    gap: 10,
+  },
+  unlockDifficultyDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  unlockDotEasy: { backgroundColor: TrainingColors.accentTeal },
+  unlockDotMedium: { backgroundColor: TrainingColors.accentAmber },
+  unlockDotHard: { backgroundColor: TrainingColors.accentDanger },
+  unlockRowText: { flex: 1 },
+  unlockRowTitle: { color: TrainingColors.textPrimary, fontSize: 12, fontWeight: '900' },
+  unlockRowMeta: { color: TrainingColors.textMuted, fontSize: 10, marginTop: 1 },
+  unlockStatusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: TrainingColors.borderSubtle,
+    backgroundColor: TrainingColors.panel,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  unlockStatusOpen: {
+    borderColor: 'rgba(77, 228, 178, 0.32)',
+    backgroundColor: 'rgba(77, 228, 178, 0.09)',
+  },
+  unlockStatusText: { color: TrainingColors.textMuted, fontSize: 10, fontWeight: '800' },
+  unlockStatusTextOpen: { color: TrainingColors.accentTeal },
   adaptiveCard: {
     borderRadius: 20,
     borderWidth: 1,

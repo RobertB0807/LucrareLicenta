@@ -131,6 +131,34 @@ Același provider este folosit de `POST /assistant/ask`. Asistentul:
 Răspunsul asistentului include `content_source`, `llm_model`, `generation_ms`,
 `fallback_reason` și `safety_status`.
 
+### Exerciții live prin email
+
+`POST /live-drills` generează un scenariu și îl pregătește pentru livrare în inbox-ul real
+al utilizatorului. Dacă SMTP nu este configurat, endpoint-ul returnează `delivery_status=dry_run`
+și include `tracking_url`, util pentru demo local. Link-ul public `GET /live-drills/track/{token}`
+marchează exercițiul ca deschis.
+
+Pentru demo-uri, teste smoke sau validări unde nu trebuie trimis email real, trimite
+`"dry_run": true` în payload-ul `POST /live-drills`. În acest mod SMTP este ignorat chiar
+dacă este configurat, iar exercițiul rămâne raportabil și urmărit în aplicație.
+
+Configurație SMTP opțională:
+
+```env
+LIVE_DRILL_PUBLIC_BASE_URL=http://192.168.1.XX:8000
+LIVE_DRILL_EMAIL_ENABLED=true
+LIVE_DRILL_SMTP_HOST=smtp.example.com
+LIVE_DRILL_SMTP_PORT=587
+LIVE_DRILL_SMTP_USERNAME=training@example.com
+LIVE_DRILL_SMTP_PASSWORD=replace-with-smtp-app-password
+LIVE_DRILL_SMTP_TLS=true
+LIVE_DRILL_EMAIL_FROM=training@example.com
+```
+
+Pentru telefon fizic sau email real, `LIVE_DRILL_PUBLIC_BASE_URL` trebuie să fie o adresă
+accesibilă din afara procesului backend, de exemplu IP-ul laptopului în aceeași rețea Wi-Fi
+sau un URL public de tunel.
+
 ### Firebase Auth optional
 
 Backend-ul accepta in continuare JWT-urile locale existente, dar poate valida si Firebase ID tokens.

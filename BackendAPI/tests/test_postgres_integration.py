@@ -10,12 +10,17 @@ from sqlalchemy import inspect
 import db
 import main
 
+EXPECTED_LEARNING_LESSON_COUNT = 16
+
 
 @unittest.skipUnless(
     os.getenv("RUN_POSTGRES_INTEGRATION", "").lower() == "true",
     "PostgreSQL integration tests are disabled",
 )
 class PostgresIntegrationTestCase(unittest.TestCase):
+    def tearDown(self) -> None:
+        db.engine.dispose()
+
     def test_migrations_and_primary_user_training_flow(self) -> None:
         self.assertTrue(db.DATABASE_URL.startswith("postgresql+psycopg://"))
 
@@ -34,6 +39,7 @@ class PostgresIntegrationTestCase(unittest.TestCase):
                 "learning_quiz_options",
                 "learning_quiz_attempts",
                 "learning_quiz_answers",
+                "live_drills",
             }.issubset(table_names)
         )
 
@@ -55,7 +61,7 @@ class PostgresIntegrationTestCase(unittest.TestCase):
 
             lessons = client.get("/learning/lessons", headers=headers)
             self.assertEqual(lessons.status_code, 200)
-            self.assertEqual(len(lessons.json()["items"]), 7)
+            self.assertEqual(len(lessons.json()["items"]), EXPECTED_LEARNING_LESSON_COUNT)
 
             generated = client.post(
                 "/scenario/generate",

@@ -8,7 +8,7 @@ from typing import Annotated, Literal
 
 from fastapi import FastAPI, HTTPException, Path, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field, NonNegativeInt, StringConstraints
 from jwt import InvalidTokenError
 from redis.exceptions import RedisError
@@ -51,6 +51,16 @@ from learning_content_service import (
     get_learning_lessons as get_learning_lessons_content,
     get_learning_quiz_attempts as get_learning_attempt_history,
     submit_learning_quiz,
+)
+from live_drill_service import (
+    LiveDrillCreateRequest,
+    LiveDrillListResponse,
+    LiveDrillReportResponse,
+    LiveDrillResponse,
+    create_live_drill,
+    list_recent_live_drills,
+    mark_live_drill_opened,
+    report_live_drill,
 )
 from persistence_repository import (
     create_or_update_firebase_user,
@@ -288,6 +298,8 @@ def is_public_path(path: str) -> bool:
         or path.startswith("/openapi")
         or path.startswith("/redoc")
     ):
+        return True
+    if path.startswith("/live-drills/track/"):
         return True
     return False
 
@@ -826,6 +838,70 @@ def generate_scenario(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@app.post("/live-drills", response_model=LiveDrillResponse)
+def start_live_drill(
+    payload: LiveDrillCreateRequest,
+    request: Request = None,
+) -> LiveDrillResponse:
+    current_user = require_authenticated_user(request)
+    if payload.session_id and not ensure_session_owner(payload.session_id, current_user.id):
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    try:
+        return create_live_drill(current_user.id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/live-drills/recent", response_model=LiveDrillListResponse)
+def get_recent_live_drills(
+    limit: int = Query(default=20, ge=1, le=50),
+    request: Request = None,
+) -> LiveDrillListResponse:
+    current_user = require_authenticated_user(request)
+    return list_recent_live_drills(current_user.id, limit=limit)
+
+
+@app.post("/live-drills/{drill_id}/report", response_model=LiveDrillReportResponse)
+def report_live_drill_endpoint(
+    drill_id: ScenarioId,
+    request: Request = None,
+) -> LiveDrillReportResponse:
+    current_user = require_authenticated_user(request)
+    try:
+        return report_live_drill(current_user.id, drill_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/live-drills/track/{tracking_token}", response_class=HTMLResponse)
+def track_live_drill_open(
+    tracking_token: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=16, max_length=128),
+    ],
+) -> HTMLResponse:
+    row = mark_live_drill_opened(tracking_token)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Live drill not found")
+
+    return HTMLResponse(
+        content=(
+            "<!doctype html><html lang=\"ro\"><head>"
+            "<meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+            "<title>Training link deschis</title>"
+            "<style>body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#0b1220;color:#eaf2ff;"
+            "display:grid;min-height:100vh;place-items:center;margin:0;padding:24px}"
+            "main{max-width:620px;border:1px solid rgba(148,163,184,.35);border-radius:16px;padding:28px;"
+            "background:#111c2f}h1{margin:0 0 12px;font-size:24px}p{line-height:1.55;color:#b8c7dc}</style>"
+            "</head><body><main><h1>Link de training deschis</h1>"
+            "<p>Click-ul a fost înregistrat în exercițiul live. Revino în aplicația CyberSecurity Coach "
+            "și analizează semnalele de alarmă înainte să alegi răspunsul.</p>"
+            "</main></body></html>"
+        )
+    )
+
+
 @app.post("/scenario/evaluate", response_model=EvaluateScenarioResponse)
 def evaluate_scenario(
     payload: EvaluateScenarioRequest,
@@ -852,9 +928,10 @@ def evaluate_scenario(
 
 @app.get("/scenario/catalog", response_model=ScenarioCatalogResponse)
 def get_scenario_catalog(request: Request = None) -> ScenarioCatalogResponse:
+    current_user = None
     if request is not None:
-        require_authenticated_user(request)
-    return get_training_scenario_catalog()
+        current_user = require_authenticated_user(request)
+    return get_training_scenario_catalog(current_user.id if current_user else None)
 
 
 @app.get("/scenario/{scenario_id}", response_model=GenerateScenarioResponse)

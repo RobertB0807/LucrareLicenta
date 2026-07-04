@@ -67,58 +67,67 @@ class OnboardingCompleteResponse(BaseModel):
 
 ASSESSMENT_QUESTIONS: tuple[dict[str, object], ...] = (
     {
-        "id": "email-urgency",
+        "id": "knowledge-confidence",
         "attack_type": "phishing",
-        "channel": "email",
+        "channel": "profil",
         "prompt": (
-            "Primești un email care spune că accesul la cont va fi blocat în 15 minute "
-            "și îți cere să te autentifici dintr-un link. Ce faci?"
+            "Cât de familiar ești cu atacuri precum phishing, mesaje false sau impersonare?"
         ),
         "options": (
-            {"id": "open_link", "text": "Deschid linkul rapid ca să evit blocarea."},
-            {"id": "reply", "text": "Răspund emailului și cer confirmarea."},
+            {"id": "new_to_security", "text": "Sunt nou în domeniu și vreau explicații de la zero."},
+            {"id": "know_basics", "text": "Cunosc câteva semnale, dar nu sunt mereu sigur."},
             {
-                "id": "verify_official",
-                "text": "Deschid separat aplicația oficială și raportez mesajul.",
+                "id": "confident",
+                "text": "Am cunoștințe bune și vreau cazuri mai dificile.",
             },
         ),
-        "correct_option_id": "verify_official",
+        "level_points": {
+            "new_to_security": 0,
+            "know_basics": 1,
+            "confident": 2,
+        },
     },
     {
-        "id": "delivery-sms",
+        "id": "real-world-exposure",
         "attack_type": "smishing",
-        "channel": "sms",
+        "channel": "profil",
         "prompt": (
-            "Un SMS despre un colet îți cere o taxă mică printr-un link scurt. "
-            "Nu aștepți nicio livrare. Cum reacționezi?"
+            "Cât de des ai analizat sau raportat până acum mesaje suspecte?"
         ),
         "options": (
-            {"id": "pay_fee", "text": "Plătesc taxa, fiind o sumă mică."},
-            {"id": "open_tracking", "text": "Deschid linkul doar ca să verific detaliile."},
+            {"id": "never", "text": "Aproape niciodată; de obicei nu știu ce să verific."},
+            {"id": "sometimes", "text": "Uneori verific expeditorul, linkul sau contextul."},
             {
-                "id": "report_sms",
-                "text": "Nu folosesc linkul și raportez mesajul ca spam.",
+                "id": "often",
+                "text": "Fac asta des și pot explica de ce un mesaj este suspect.",
             },
         ),
-        "correct_option_id": "report_sms",
+        "level_points": {
+            "never": 0,
+            "sometimes": 1,
+            "often": 2,
+        },
     },
     {
-        "id": "manager-payment",
+        "id": "training-pace",
         "attack_type": "impersonation",
-        "channel": "chat",
+        "channel": "profil",
         "prompt": (
-            "Un presupus manager îți cere urgent, printr-un cont nou, să schimbi "
-            "datele unei plăți confidențiale. Care este răspunsul sigur?"
+            "Cum vrei să înceapă antrenamentul tău?"
         ),
         "options": (
-            {"id": "follow_request", "text": "Execut cererea pentru că pare urgentă."},
-            {"id": "ask_details", "text": "Cer mai multe detalii în același chat."},
+            {"id": "guided", "text": "Cu pași ghidați, exemple simple și multe explicații."},
+            {"id": "balanced", "text": "Cu un mix între lecții scurte și scenarii realiste."},
             {
-                "id": "verify_identity",
-                "text": "Verific identitatea prin canalul oficial și procedura internă.",
+                "id": "challenge",
+                "text": "Cu provocări mai grele și feedback direct.",
             },
         ),
-        "correct_option_id": "verify_identity",
+        "level_points": {
+            "guided": 0,
+            "balanced": 1,
+            "challenge": 2,
+        },
     },
 )
 
@@ -155,25 +164,32 @@ def get_onboarding_status(user_id: str) -> OnboardingStatusResponse:
     )
 
 
+EXPERIENCE_POINTS: dict[OnboardingExperience, int] = {
+    "beginner": 0,
+    "intermediate": 1,
+    "advanced": 2,
+}
+
+
 def _assessment_level(score: int) -> AssessmentLevel:
-    if score >= 3:
+    if score >= 6:
         return "advanced"
-    if score >= 2:
+    if score >= 3:
         return "intermediate"
     return "beginner"
 
 
 def _recommended_attack(
     *,
-    incorrect_attacks: list[AttackType],
+    level: AssessmentLevel,
     learning_goal: LearningGoal,
 ) -> AttackType:
-    if incorrect_attacks:
-        return incorrect_attacks[0]
     if learning_goal == "workplace":
         return "impersonation"
     if learning_goal == "personal_safety":
         return "smishing"
+    if level == "advanced":
+        return "impersonation"
     return "phishing"
 
 
@@ -192,8 +208,7 @@ def complete_onboarding(
         raise ValueError("All assessment questions must be answered")
 
     outcomes: list[dict[str, object]] = []
-    incorrect_attacks: list[AttackType] = []
-    score = 0
+    score = EXPERIENCE_POINTS[payload.experience]
     for answer in payload.answers:
         question = question_map[answer.question_id]
         valid_option_ids = {
@@ -203,15 +218,14 @@ def complete_onboarding(
         if answer.selected_option_id not in valid_option_ids:
             raise ValueError("Selected option does not belong to the question")
 
-        is_correct = answer.selected_option_id == question["correct_option_id"]
+        level_points = question["level_points"]  # type: ignore[index]
+        selected_points = int(level_points[answer.selected_option_id])  # type: ignore[index]
         attack_type: AttackType = question["attack_type"]  # type: ignore[assignment]
-        score += int(is_correct)
-        if not is_correct:
-            incorrect_attacks.append(attack_type)
+        score += selected_points
         outcomes.append(
             {
                 "attack_type": attack_type,
-                "is_correct": is_correct,
+                "is_correct": selected_points > 0,
             }
         )
 
@@ -225,7 +239,7 @@ def complete_onboarding(
         outcome["difficulty"] = difficulty
 
     recommendation_attack = _recommended_attack(
-        incorrect_attacks=incorrect_attacks,
+        level=level,
         learning_goal=payload.learning_goal,
     )
     complete_user_onboarding(
@@ -237,12 +251,12 @@ def complete_onboarding(
         outcomes=outcomes,
     )
 
-    if incorrect_attacks:
-        reason = "Începem cu zona în care evaluarea a identificat cea mai mare nevoie de consolidare."
-    elif level == "advanced":
-        reason = "Evaluarea indică o bază solidă, așa că începem direct cu un scenariu avansat."
+    if level == "advanced":
+        reason = "Profilul tău indică o bază solidă, așa că începem cu provocări mai complexe."
+    elif level == "intermediate":
+        reason = "Ai deja o bază; începem cu exerciții medii și consolidăm zonele importante."
     else:
-        reason = "Ai răspuns corect la evaluare; primul scenariu este adaptat obiectivului ales."
+        reason = "Începem ghidat, cu lecții de bază și scenarii ușoare înainte de niveluri mai grele."
 
     return OnboardingCompleteResponse(
         onboarding_completed=True,

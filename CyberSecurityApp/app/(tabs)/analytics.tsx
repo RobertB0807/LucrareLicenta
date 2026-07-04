@@ -1,13 +1,29 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
+import { Link, type Href } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import {
+  ActivityIndicator,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+  useWindowDimensions,
+} from 'react-native';
 
 import { AppBackdrop } from '@/components/app-backdrop';
-import { getSessionEvents, getSessionSnapshot, getSessionTrendAggregates } from '@/features/training/api';
+import { StateCard } from '@/components/state-card';
+import {
+  getRecentLiveDrills,
+  getSessionEvents,
+  getSessionSnapshot,
+  getSessionTrendAggregates,
+} from '@/features/training/api';
 import type {
   AttackType,
   LearningProfileAttack,
+  LiveDrillSummaryApiResponse,
   SessionEvent,
   SessionStats,
   SessionTrendAggregatesApiResponse,
@@ -53,6 +69,22 @@ const ATTACK_TREND_COLORS: Record<AttackType, string> = {
   impersonation: TrainingColors.accentAmber,
 };
 
+function liveDrillDate(value: string): number {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 0 : date.getTime();
+}
+
+function formatLiveDrillDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return 'Dată indisponibilă';
+  }
+  return date.toLocaleDateString('ro-RO', {
+    day: '2-digit',
+    month: 'short',
+  });
+}
+
 export default function AnalyticsScreen() {
   const {
     sessionId,
@@ -60,6 +92,7 @@ export default function AnalyticsScreen() {
     perAttackStats,
     adaptiveProfile,
     isLoadingAdaptiveProfile,
+    adaptiveProfileError,
     refreshActiveSession,
     refreshAdaptiveProfile,
   } = useTrainingSession();
@@ -85,6 +118,9 @@ export default function AnalyticsScreen() {
     impersonation: null,
   });
   const [serverEventsTotal, setServerEventsTotal] = useState(0);
+  const [liveDrills, setLiveDrills] = useState<LiveDrillSummaryApiResponse[]>([]);
+  const [isLoadingLiveDrills, setIsLoadingLiveDrills] = useState(false);
+  const [liveDrillError, setLiveDrillError] = useState<string | null>(null);
   const [eventsLimit, setEventsLimit] = useState(12);
   const [trendAttackFilter, setTrendAttackFilter] = useState<TrendAttackFilter>('all');
   const [dateRangeFilter, setDateRangeFilter] = useState<DateRangeFilter>('30d');
@@ -99,6 +135,12 @@ export default function AnalyticsScreen() {
       void refreshAdaptiveProfile();
     }, [refreshActiveSession, refreshAdaptiveProfile])
   );
+
+  const reloadAnalytics = useCallback(() => {
+    setFocusRevision((current) => current + 1);
+    void refreshActiveSession();
+    void refreshAdaptiveProfile();
+  }, [refreshActiveSession, refreshAdaptiveProfile]);
 
   useEffect(() => {
     setEventsLimit(12);
@@ -166,7 +208,7 @@ export default function AnalyticsScreen() {
         });
       } catch {
         if (!cancelled) {
-          setFetchError('Nu am putut incarca datele salvate ale sesiunii.');
+          setFetchError('Nu am putut încărca datele salvate ale sesiunii.');
           setPerAttackTrendAggregates({
             phishing: null,
             smishing: null,
@@ -193,6 +235,34 @@ export default function AnalyticsScreen() {
     stats.totalScore,
     trendAttackFilter,
   ]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadLiveDrills = async () => {
+      setIsLoadingLiveDrills(true);
+      setLiveDrillError(null);
+      try {
+        const response = await getRecentLiveDrills({ limit: 50 });
+        if (!cancelled) {
+          setLiveDrills(response.items);
+        }
+      } catch {
+        if (!cancelled) {
+          setLiveDrillError('Nu am putut încărca rezultatele exercițiilor live.');
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingLiveDrills(false);
+        }
+      }
+    };
+
+    void loadLiveDrills();
+    return () => {
+      cancelled = true;
+    };
+  }, [focusRevision]);
 
   const effectiveStats = serverStats ?? {
     total_score: stats.totalScore,
@@ -334,6 +404,52 @@ export default function AnalyticsScreen() {
     });
   }, [aggregateByAttackMap, effectiveStats.per_attack, perAttackTrendAggregates]);
 
+  const filteredLiveDrills = useMemo(() => {
+    if (!rangeSince) {
+      return liveDrills;
+    }
+    const sinceTime = new Date(rangeSince).getTime();
+    return liveDrills.filter((item) => liveDrillDate(item.created_at) >= sinceTime);
+  }, [liveDrills, rangeSince]);
+
+  const liveDrillSummary = useMemo(() => {
+    const opened = filteredLiveDrills.filter((item) => item.opened_at).length;
+    const safelyReported = filteredLiveDrills.filter((item) => item.reported_at && !item.opened_at).length;
+    const pending = filteredLiveDrills.filter((item) => !item.opened_at && !item.reported_at).length;
+    const completed = opened + safelyReported;
+    const safeReportRate = completed > 0 ? Math.round((safelyReported / completed) * 100) : 0;
+    const clickRate = completed > 0 ? Math.round((opened / completed) * 100) : 0;
+    return {
+      total: filteredLiveDrills.length,
+      opened,
+      safelyReported,
+      pending,
+      completed,
+      safeReportRate,
+      clickRate,
+    };
+  }, [filteredLiveDrills]);
+
+  const liveDrillByAttack = useMemo(() => {
+    return (Object.keys(ATTACK_LABELS) as AttackType[]).map((attackType) => {
+      const items = filteredLiveDrills.filter((item) => item.attack_type === attackType);
+      const opened = items.filter((item) => item.opened_at).length;
+      const reported = items.filter((item) => item.reported_at && !item.opened_at).length;
+      const completed = opened + reported;
+      return {
+        attackType,
+        label: ATTACK_LABELS[attackType],
+        color: ATTACK_TREND_COLORS[attackType],
+        total: items.length,
+        opened,
+        reported,
+        safeRate: completed > 0 ? Math.round((reported / completed) * 100) : 0,
+      };
+    });
+  }, [filteredLiveDrills]);
+
+  const recentLiveDrillOutcomes = filteredLiveDrills.slice(0, 4);
+
   const badges = [
     { name: 'Prima detectare', earned: effectiveStats.total_correct > 0 },
     {
@@ -372,26 +488,42 @@ export default function AnalyticsScreen() {
         <View style={styles.headerIcon}>
           <Ionicons name="stats-chart" size={18} color="#EFF6FF" />
         </View>
-        <View>
+        <View style={styles.headerCopy}>
           <Text style={[styles.title, isCompact && styles.titleCompact]}>Progres</Text>
           <Text style={[styles.subtitle, isCompact && styles.subtitleCompact]}>Apărarea ta, măsurată</Text>
         </View>
       </View>
 
       {!sessionId ? (
-        <View style={styles.emptyCard}>
-          <Ionicons name="information-circle-outline" size={18} color={TrainingColors.textMuted} />
-          <Text style={styles.emptyText}>
-            Nu există o sesiune activă. Rulează un scenariu din tab-ul Antrenează pentru a vedea statistica persistată.
-          </Text>
-        </View>
+        <StateCard
+          icon="analytics-outline"
+          title="Nu există sesiune activă"
+          message="Rulează un scenariu din laborator pentru a vedea statistici persistate și trenduri."
+          tone="neutral"
+        />
       ) : null}
 
       {fetchError ? (
-        <View style={styles.errorCard}>
-          <Ionicons name="alert-circle-outline" size={16} color={TrainingColors.accentDanger} />
-          <Text style={styles.errorText}>{fetchError}</Text>
-        </View>
+        <StateCard
+          icon="cloud-offline-outline"
+          title="Datele sesiunii nu s-au încărcat"
+          message={fetchError}
+          tone="danger"
+          actionLabel="Reîncearcă"
+          onAction={reloadAnalytics}
+        />
+      ) : null}
+
+      {adaptiveProfileError ? (
+        <StateCard
+          compact
+          icon="sparkles-outline"
+          title="Profil adaptiv indisponibil"
+          message={adaptiveProfileError}
+          tone="warning"
+          actionLabel="Reîncearcă"
+          onAction={() => void refreshAdaptiveProfile()}
+        />
       ) : null}
 
       <View style={styles.summaryCard}>
@@ -414,7 +546,7 @@ export default function AnalyticsScreen() {
 
       <View style={styles.adaptiveCard}>
         <View style={styles.adaptiveHeader}>
-          <View>
+          <View style={styles.adaptiveCopy}>
             <Text style={styles.adaptiveEyebrow}>Profil adaptiv</Text>
             <Text style={styles.adaptiveTitle}>
               {adaptiveProfile?.overall_mastery ?? stats.accuracy}% stăpânire globală
@@ -435,6 +567,128 @@ export default function AnalyticsScreen() {
               }`
             : 'Profilul adaptiv se construiește după primele răspunsuri evaluate.'}
         </Text>
+      </View>
+
+      <View style={styles.liveAnalyticsCard}>
+        <View style={styles.liveAnalyticsHeader}>
+          <View style={styles.chartHeaderCopy}>
+            <Text style={styles.chartEyebrow}>Exerciții live</Text>
+            <Text style={[styles.chartScore, isCompact && styles.chartScoreCompact]}>
+              {liveDrillSummary.safeReportRate}%
+            </Text>
+            <Text style={styles.chartMeta}>raportare sigură</Text>
+          </View>
+          <Link href={'/live-drills' as Href} asChild>
+            <Pressable style={({ pressed }) => [styles.liveHistoryButton, pressed && styles.pressed]}>
+              <Ionicons name="time-outline" size={13} color={TrainingColors.accentTeal} />
+              <Text style={styles.liveHistoryButtonText}>Istoric</Text>
+            </Pressable>
+          </Link>
+        </View>
+
+        <View style={styles.liveMetricGrid}>
+          <LiveMetric label="Raportate" value={String(liveDrillSummary.safelyReported)} tone="success" />
+          <LiveMetric label="Deschise" value={String(liveDrillSummary.opened)} tone="danger" />
+          <LiveMetric label="Active" value={String(liveDrillSummary.pending)} tone="warning" />
+        </View>
+
+        {isLoadingLiveDrills ? (
+          <View style={styles.liveStateRow}>
+            <ActivityIndicator size="small" color={TrainingColors.accentTeal} />
+            <Text style={styles.liveStateText}>Se încarcă exercițiile live...</Text>
+          </View>
+        ) : null}
+
+        {!isLoadingLiveDrills && liveDrillError ? (
+          <StateCard
+            compact
+            icon="cloud-offline-outline"
+            title="Rezultatele live nu s-au încărcat"
+            message={liveDrillError}
+            tone="danger"
+            actionLabel="Reîncearcă"
+            onAction={reloadAnalytics}
+          />
+        ) : null}
+
+        {!isLoadingLiveDrills && !liveDrillError && filteredLiveDrills.length === 0 ? (
+          <View style={styles.liveStateRow}>
+            <Ionicons name="mail-unread-outline" size={15} color={TrainingColors.textMuted} />
+            <Text style={styles.liveStateText}>
+              Rezultatele live apar după trimiterea primului email de antrenament.
+            </Text>
+          </View>
+        ) : null}
+
+        {filteredLiveDrills.length > 0 ? (
+          <>
+            <View style={styles.liveRateRow}>
+              <View style={styles.liveRateCopy}>
+                <Text style={styles.liveRateLabel}>Rată click pe link</Text>
+                <Text style={styles.liveRateMeta}>
+                  {liveDrillSummary.completed} exerciții finalizate în intervalul selectat
+                </Text>
+              </View>
+              <Text style={styles.liveRateValue}>{liveDrillSummary.clickRate}%</Text>
+            </View>
+            <View style={styles.liveProgressTrack}>
+              <View
+                style={[
+                  styles.liveProgressFill,
+                  { width: `${Math.max(0, Math.min(100, liveDrillSummary.safeReportRate))}%` },
+                ]}
+              />
+            </View>
+
+            <View style={styles.liveAttackList}>
+              {liveDrillByAttack.map((item) => (
+                <View key={item.attackType} style={styles.liveAttackRow}>
+                  <View
+                    style={[
+                      styles.liveAttackIcon,
+                      { borderColor: `${item.color}55`, backgroundColor: `${item.color}1A` },
+                    ]}>
+                    <Ionicons name={ATTACK_ICONS[item.attackType]} size={13} color={item.color} />
+                  </View>
+                  <View style={styles.liveAttackCopy}>
+                    <Text style={styles.liveAttackLabel}>{item.label}</Text>
+                    <Text style={styles.liveAttackMeta}>
+                      {item.reported} raportate · {item.opened} deschise
+                    </Text>
+                  </View>
+                  <Text style={styles.liveAttackValue}>{item.total ? `${item.safeRate}%` : '-'}</Text>
+                </View>
+              ))}
+            </View>
+
+            <View style={styles.liveOutcomeList}>
+              {recentLiveDrillOutcomes.map((item) => {
+                const isOpened = Boolean(item.opened_at);
+                const isReported = Boolean(item.reported_at);
+                const color = isOpened
+                  ? TrainingColors.accentDanger
+                  : isReported
+                    ? TrainingColors.accentTeal
+                    : TrainingColors.accentAmber;
+                const label = isOpened ? 'Link deschis' : isReported ? 'Raportat' : 'În desfășurare';
+                return (
+                  <View key={item.id} style={styles.liveOutcomeRow}>
+                    <View style={[styles.liveOutcomeDot, { backgroundColor: color }]} />
+                    <View style={styles.liveOutcomeCopy}>
+                      <Text style={styles.liveOutcomeTitle}>{label}</Text>
+                      <Text style={styles.liveOutcomeMeta}>
+                        {ATTACK_LABELS[item.attack_type]} · {formatLiveDrillDate(item.created_at)}
+                      </Text>
+                    </View>
+                    <Text style={[styles.liveOutcomeStatus, { color }]}>
+                      {item.delivery_status === 'dry_run' ? 'DEMO' : item.delivery_status.toUpperCase()}
+                    </Text>
+                  </View>
+                );
+              })}
+            </View>
+          </>
+        ) : null}
       </View>
 
       <View style={styles.filtersCard}>
@@ -479,7 +733,7 @@ export default function AnalyticsScreen() {
 
       <View style={styles.chartCard}>
         <View style={styles.chartHeader}>
-          <View>
+          <View style={styles.chartHeaderCopy}>
             <Text style={styles.chartEyebrow}>Evoluție sesiune</Text>
             <Text style={[styles.chartScore, isCompact && styles.chartScoreCompact]}>
               {trendEnd?.cumulative_score_after ?? effectiveStats.total_score}
@@ -539,7 +793,7 @@ export default function AnalyticsScreen() {
 
       <View style={styles.chartCard}>
         <View style={styles.chartHeader}>
-          <View>
+          <View style={styles.chartHeaderCopy}>
             <Text style={styles.chartEyebrow}>Acuratețe de detecție pe tip de atac</Text>
             <Text style={[styles.chartScore, isCompact && styles.chartScoreCompact]}>
               {effectiveStats.accuracy}%
@@ -573,7 +827,7 @@ export default function AnalyticsScreen() {
 
       <View style={styles.chartCard}>
         <View style={styles.chartHeader}>
-          <View>
+          <View style={styles.chartHeaderCopy}>
             <Text style={styles.chartEyebrow}>Trend acuratețe pe tip de atac</Text>
             <Text style={[styles.chartScore, isCompact && styles.chartScoreCompact]}>{trendAttemptsCount}</Text>
             <Text style={styles.chartMeta}>încercări urmărite</Text>
@@ -594,7 +848,7 @@ export default function AnalyticsScreen() {
                   ]}>
                   <Ionicons name={ATTACK_ICONS[series.attackType]} size={14} color={series.color} />
                 </View>
-                <View style={{ flex: 1 }}>
+                <View style={styles.attackTrendCopy}>
                   <Text style={styles.attackTrendLabel}>{series.label}</Text>
                   <Text style={styles.attackTrendMeta}>{series.attempts} încercări</Text>
                 </View>
@@ -639,7 +893,7 @@ export default function AnalyticsScreen() {
                   color={spot.tone === 'danger' ? TrainingColors.accentDanger : TrainingColors.accentAmber}
                 />
               </View>
-              <View style={{ flex: 1 }}>
+              <View style={styles.weakSpotCopy}>
                 <Text style={styles.weakSpotName}>{spot.label}</Text>
                 <Text style={styles.weakSpotMeta}>{spot.detail}</Text>
               </View>
@@ -701,11 +955,35 @@ export default function AnalyticsScreen() {
   );
 }
 
+function LiveMetric({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: 'success' | 'warning' | 'danger';
+}) {
+  const color =
+    tone === 'success'
+      ? TrainingColors.accentTeal
+      : tone === 'warning'
+        ? TrainingColors.accentAmber
+        : TrainingColors.accentDanger;
+  return (
+    <View style={styles.liveMetric}>
+      <Text style={[styles.liveMetricValue, { color }]}>{value}</Text>
+      <Text style={styles.liveMetricLabel}>{label}</Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: TrainingColors.pageBase },
   scroll: { flex: 1, backgroundColor: 'transparent' },
   content: { paddingHorizontal: 20, paddingTop: 50, paddingBottom: 130, gap: 12 },
   header: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 4 },
+  headerCopy: { flex: 1, minWidth: 0 },
   headerIcon: {
     width: 40,
     height: 40,
@@ -778,6 +1056,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   adaptiveHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 },
+  adaptiveCopy: { flex: 1, minWidth: 0 },
   adaptiveEyebrow: {
     color: TrainingColors.accentTeal,
     fontSize: 10,
@@ -785,7 +1064,7 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     fontWeight: '700',
   },
-  adaptiveTitle: { color: TrainingColors.textPrimary, fontSize: 18, fontWeight: '800', marginTop: 2 },
+  adaptiveTitle: { color: TrainingColors.textPrimary, fontSize: 18, fontWeight: '800', lineHeight: 23, marginTop: 2 },
   adaptivePill: {
     borderRadius: 999,
     backgroundColor: 'rgba(69,224,177,0.12)',
@@ -796,6 +1075,122 @@ const styles = StyleSheet.create({
   },
   adaptivePillText: { color: TrainingColors.accentTeal, fontSize: 10, fontWeight: '700' },
   adaptiveText: { color: TrainingColors.textSecondary, fontSize: 12, lineHeight: 17 },
+  liveAnalyticsCard: {
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: TrainingColors.border,
+    backgroundColor: TrainingColors.panel,
+    padding: 14,
+    gap: 12,
+  },
+  liveAnalyticsHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  liveHistoryButton: {
+    minHeight: 34,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(69,224,177,0.3)',
+    backgroundColor: 'rgba(69,224,177,0.1)',
+    paddingHorizontal: 11,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  liveHistoryButtonText: {
+    color: TrainingColors.accentTeal,
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  liveMetricGrid: { flexDirection: 'row', gap: 8 },
+  liveMetric: {
+    flex: 1,
+    minHeight: 62,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: TrainingColors.border,
+    backgroundColor: TrainingColors.panelAlt,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  liveMetricValue: { fontSize: 20, fontWeight: '800' },
+  liveMetricLabel: { color: TrainingColors.textMuted, fontSize: 10, fontWeight: '700', marginTop: 2 },
+  liveStateRow: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: TrainingColors.border,
+    backgroundColor: TrainingColors.panelAlt,
+    padding: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  liveStateText: {
+    color: TrainingColors.textSecondary,
+    fontSize: 12,
+    lineHeight: 17,
+    flex: 1,
+  },
+  liveRateRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  liveRateCopy: { flex: 1, minWidth: 0 },
+  liveRateLabel: { color: TrainingColors.textPrimary, fontSize: 13, fontWeight: '800' },
+  liveRateMeta: { color: TrainingColors.textMuted, fontSize: 10, marginTop: 2 },
+  liveRateValue: { color: TrainingColors.accentDanger, fontSize: 18, fontWeight: '800' },
+  liveProgressTrack: {
+    height: 7,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,125,125,0.18)',
+    overflow: 'hidden',
+  },
+  liveProgressFill: {
+    height: '100%',
+    borderRadius: 999,
+    backgroundColor: TrainingColors.accentTeal,
+  },
+  liveAttackList: { gap: 8 },
+  liveAttackRow: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: TrainingColors.border,
+    backgroundColor: TrainingColors.panelAlt,
+    padding: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  liveAttackIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 10,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  liveAttackCopy: { flex: 1, minWidth: 0 },
+  liveAttackLabel: { color: TrainingColors.textPrimary, fontSize: 12, fontWeight: '800' },
+  liveAttackMeta: { color: TrainingColors.textMuted, fontSize: 10, marginTop: 1 },
+  liveAttackValue: { color: TrainingColors.textPrimary, fontSize: 12, fontWeight: '800' },
+  liveOutcomeList: { gap: 7 },
+  liveOutcomeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 2,
+  },
+  liveOutcomeDot: { width: 8, height: 8, borderRadius: 4 },
+  liveOutcomeCopy: { flex: 1, minWidth: 0 },
+  liveOutcomeTitle: { color: TrainingColors.textPrimary, fontSize: 12, fontWeight: '800' },
+  liveOutcomeMeta: { color: TrainingColors.textMuted, fontSize: 10, marginTop: 1 },
+  liveOutcomeStatus: { fontSize: 9, fontWeight: '800' },
   filtersCard: {
     borderRadius: 16,
     borderWidth: 1,
@@ -831,7 +1226,8 @@ const styles = StyleSheet.create({
     padding: 14,
     gap: 10,
   },
-  chartHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  chartHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  chartHeaderCopy: { flex: 1, minWidth: 0 },
   chartEyebrow: { color: TrainingColors.textMuted, fontSize: 10, textTransform: 'uppercase', letterSpacing: 1 },
   chartScore: { color: TrainingColors.textPrimary, fontSize: 32, fontWeight: '800' },
   chartScoreCompact: { fontSize: 28 },
@@ -897,6 +1293,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   attackTrendHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  attackTrendCopy: { flex: 1, minWidth: 0 },
   attackTrendIcon: {
     width: 32,
     height: 32,
@@ -932,6 +1329,7 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   weakSpotTop: { flexDirection: 'row', alignItems: 'center', gap: 9 },
+  weakSpotCopy: { flex: 1, minWidth: 0 },
   weakSpotIcon: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   weakSpotIconDanger: { backgroundColor: 'rgba(255,125,125,0.14)' },
   weakSpotIconWarning: { backgroundColor: 'rgba(245,197,107,0.15)' },
@@ -987,4 +1385,5 @@ const styles = StyleSheet.create({
   badgeIconEarned: { backgroundColor: TrainingColors.accentBlue },
   badgeIconLocked: { backgroundColor: '#334A70' },
   badgeText: { color: TrainingColors.textPrimary, fontSize: 10, fontWeight: '700', textAlign: 'center' },
+  pressed: { opacity: 0.82 },
 });

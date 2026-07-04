@@ -11,7 +11,9 @@ from llm_service import generate_llm_scenario
 from persistence_repository import (
     apply_scenario_evaluation_once,
     fetch_generated_scenario,
+    fetch_learning_path_progress,
     fetch_recent_generated_scenarios,
+    fetch_user_by_id,
     fetch_user_learning_profiles,
     fetch_scenario_context,
     fetch_scenario_session_owner,
@@ -273,6 +275,8 @@ class ScenarioCatalogItemResponse(BaseModel):
     channel: str
     attacker_message_preview: str
     red_flags: list[str]
+    locked: bool = False
+    unlock_reason: str | None = None
 
 
 class ScenarioCatalogResponse(BaseModel):
@@ -910,6 +914,52 @@ def build_recommendation(
     )
 
 
+LEVEL_RANK: dict[str, int] = {
+    "beginner": 0,
+    "intermediate": 1,
+    "advanced": 2,
+}
+
+
+def _scenario_access_for_user(
+    user_id: str | None,
+    difficulty: DifficultyLevel,
+) -> tuple[bool, str | None]:
+    if user_id is None or difficulty == "easy":
+        return True, None
+
+    user = fetch_user_by_id(user_id) or {}
+    if not bool(user.get("onboarding_completed", False)):
+        return True, None
+    user_level = str(user.get("assessment_level") or user.get("onboarding_experience") or "beginner")
+    level_rank = LEVEL_RANK.get(user_level, 0)
+    progress = fetch_learning_path_progress(user_id)
+    completed_lessons = progress.get("completed_lessons", [])
+    completed_count = len(completed_lessons) if isinstance(completed_lessons, list) else 0
+    xp = int(progress.get("xp", 0))
+    profile_rows = fetch_user_learning_profiles(user_id)
+    total_attempts = sum(int(row.get("attempts", 0)) for row in profile_rows)
+    mastery_values = [
+        float(row.get("mastery_score", 0.0))
+        for row in profile_rows
+        if int(row.get("attempts", 0)) > 0
+    ]
+    average_mastery = (
+        sum(mastery_values) / len(mastery_values)
+        if mastery_values
+        else 0.0
+    )
+
+    if difficulty == "medium":
+        if level_rank >= 1 or completed_count >= 2 or xp >= 50 or total_attempts >= 3:
+            return True, None
+        return False, "Finalizează două lecții de bază sau atinge nivel intermediar în onboarding."
+
+    if level_rank >= 2 or (completed_count >= 5 and average_mastery >= 70) or xp >= 130:
+        return True, None
+    return False, "Deblochează nivelul foarte avansat prin lecții, XP și mastery peste 70%."
+
+
 def generate_scenario(
     attack_type: AttackType,
     difficulty: DifficultyLevel,
@@ -917,6 +967,10 @@ def generate_scenario(
     owner_user_id: str | None = None,
     template_id: str | None = None,
 ) -> GenerateScenarioResponse:
+    allowed, reason = _scenario_access_for_user(owner_user_id, difficulty)
+    if not allowed:
+        raise ValueError(reason or "Scenario difficulty is locked")
+
     current_session_id = session_id or str(uuid4())
     progress = get_or_create_session(current_session_id)
 
@@ -1219,11 +1273,12 @@ def get_session_trend_aggregates(
     return SessionTrendAggregatesResponse.model_validate(aggregates)
 
 
-def get_scenario_catalog() -> ScenarioCatalogResponse:
+def get_scenario_catalog(owner_user_id: str | None = None) -> ScenarioCatalogResponse:
     items: list[ScenarioCatalogItemResponse] = []
 
     for attack_type in ALL_ATTACK_TYPES:
         for difficulty in ALL_DIFFICULTIES:
+            allowed, unlock_reason = _scenario_access_for_user(owner_user_id, difficulty)
             templates = SCENARIO_LIBRARY[(attack_type, difficulty)]
             for index, template in enumerate(templates):
                 preview = template.attacker_message.strip()
@@ -1238,6 +1293,8 @@ def get_scenario_catalog() -> ScenarioCatalogResponse:
                         channel=template.channel,
                         attacker_message_preview=preview,
                         red_flags=template.red_flags[:3],
+                        locked=not allowed,
+                        unlock_reason=unlock_reason,
                     )
                 )
 

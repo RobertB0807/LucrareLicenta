@@ -128,6 +128,58 @@ export type GenerateScenarioApiResponse = Scenario & {
   session_id: string;
 };
 
+export type LiveDrillApiResponse = {
+  id: string;
+  session_id: string;
+  scenario_id: string;
+  delivery_channel: 'email';
+  recipient: string;
+  subject: string;
+  tracking_url: string;
+  delivery_status: 'sent' | 'dry_run' | 'failed';
+  delivery_error: string | null;
+  opened_at: string | null;
+  reported_at: string | null;
+  created_at: string;
+  scenario: GenerateScenarioApiResponse;
+};
+
+export type LiveDrillSummaryApiResponse = {
+  id: string;
+  session_id: string;
+  scenario_id: string;
+  delivery_channel: 'email';
+  recipient: string;
+  subject: string;
+  tracking_url: string;
+  delivery_status: 'sent' | 'dry_run' | 'failed';
+  delivery_error: string | null;
+  opened_at: string | null;
+  reported_at: string | null;
+  created_at: string;
+  attack_type: AttackType;
+  difficulty: DifficultyLevel;
+  red_flags: string[];
+};
+
+export type LiveDrillListApiResponse = {
+  items: LiveDrillSummaryApiResponse[];
+};
+
+export type LiveDrillReportApiResponse = {
+  id: string;
+  scenario_id: string;
+  session_id: string;
+  is_correct: boolean;
+  score_delta: number;
+  explanation: string;
+  opened_at: string | null;
+  reported_at: string;
+  attack_type: AttackType;
+  difficulty: DifficultyLevel;
+  red_flags: string[];
+};
+
 export type SessionSnapshotApiResponse = {
   session_id: string;
   session_stats: SessionStats;
@@ -227,6 +279,8 @@ export type ScenarioCatalogItemApiResponse = {
   channel: string;
   attacker_message_preview: string;
   red_flags: string[];
+  locked: boolean;
+  unlock_reason: string | null;
 };
 
 export type ScenarioCatalogApiResponse = {
@@ -253,9 +307,29 @@ export type LearningLessonSummaryApiResponse = {
   best_score: number | null;
   passed: boolean;
   status: LearningLessonStatus;
+  recommended: boolean;
+  recommendation_reason: string | null;
+};
+
+export type LearningLessonCategoryApiResponse = {
+  name: string;
+  total: number;
+  completed: number;
+  in_progress: number;
+  available: number;
+  locked: number;
+  recommended: number;
+  progress_percent: number;
+  next_lesson_id: string | null;
+  next_lesson_title: string | null;
+  next_action_label: string | null;
 };
 
 export type LearningLessonCatalogApiResponse = {
+  user_level: LearningLessonLevel;
+  learning_goal: string | null;
+  recommended_lesson_ids: string[];
+  categories: LearningLessonCategoryApiResponse[];
   items: LearningLessonSummaryApiResponse[];
 };
 
@@ -343,6 +417,7 @@ export type LearningPathStep = {
   difficulty: DifficultyLevel | null;
   mastery_current: number | null;
   minimum_mastery: number | null;
+  unlock_reason: string | null;
 };
 
 export type LearningPathModule = {
@@ -354,6 +429,8 @@ export type LearningPathModule = {
   progress_percent: number;
   completed_steps: number;
   total_steps: number;
+  unlock_reason: string | null;
+  next_unlock_hint: string | null;
   steps: LearningPathStep[];
 };
 

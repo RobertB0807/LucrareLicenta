@@ -27,7 +27,7 @@ def call(
         method=method,
     )
     try:
-        with request.urlopen(http_request, timeout=15) as response:
+        with request.urlopen(http_request, timeout=30) as response:
             content = response.read().decode("utf-8")
             content_type = response.headers.get("content-type", "")
             if "application/json" in content_type:
@@ -73,6 +73,55 @@ def main() -> int:
     if not isinstance(token, str) or not token:
         raise RuntimeError("Registration did not return an access token")
 
+    onboarding = require_status(
+        call("GET", "/onboarding", token=token),
+        200,
+        "onboarding status",
+    )
+    if not isinstance(onboarding, dict) or onboarding.get("completed") is not False:
+        raise RuntimeError("Onboarding initial status is invalid")
+    questions = onboarding.get("questions")
+    if not isinstance(questions, list) or len(questions) != 3:
+        raise RuntimeError("Onboarding assessment questions are missing")
+    onboarding_answers: list[dict[str, object]] = []
+    for question in questions:
+        if not isinstance(question, dict):
+            raise RuntimeError("Onboarding question payload is invalid")
+        options = question.get("options")
+        if (
+            not isinstance(question.get("id"), str)
+            or not isinstance(options, list)
+            or not options
+            or not isinstance(options[0], dict)
+            or not isinstance(options[0].get("id"), str)
+        ):
+            raise RuntimeError("Onboarding question options are invalid")
+        onboarding_answers.append(
+            {
+                "question_id": question["id"],
+                "selected_option_id": options[0]["id"],
+            }
+        )
+    completed_onboarding = require_status(
+        call(
+            "POST",
+            "/onboarding/complete",
+            payload={
+                "experience": "beginner",
+                "learning_goal": "personal_safety",
+                "answers": onboarding_answers,
+            },
+            token=token,
+        ),
+        200,
+        "onboarding completion",
+    )
+    if (
+        not isinstance(completed_onboarding, dict)
+        or completed_onboarding.get("onboarding_completed") is not True
+    ):
+        raise RuntimeError("Onboarding completion failed")
+
     catalog = require_status(
         call("GET", "/scenario/catalog", token=token),
         200,
@@ -80,6 +129,26 @@ def main() -> int:
     )
     if not isinstance(catalog, dict) or not catalog.get("items"):
         raise RuntimeError("Scenario catalog is empty")
+
+    learning_path = require_status(
+        call("GET", "/learning/path", token=token),
+        200,
+        "learning path",
+    )
+    if (
+        not isinstance(learning_path, dict)
+        or not isinstance(learning_path.get("modules"), list)
+        or not learning_path["modules"]
+    ):
+        raise RuntimeError("Learning path is incomplete")
+
+    learning_profile = require_status(
+        call("GET", "/learning/profile", token=token),
+        200,
+        "learning profile",
+    )
+    if not isinstance(learning_profile, dict) or "recommended_next" not in learning_profile:
+        raise RuntimeError("Learning profile is incomplete")
 
     lessons = require_status(
         call("GET", "/learning/lessons", token=token),
@@ -139,6 +208,96 @@ def main() -> int:
         200,
         "scenario evaluation",
     )
+
+    session_id = generated.get("session_id")
+    if not isinstance(session_id, str) or not session_id:
+        raise RuntimeError("Generated scenario did not include a session id")
+
+    session_snapshot = require_status(
+        call("GET", f"/session/{session_id}", token=token),
+        200,
+        "session snapshot",
+    )
+    if not isinstance(session_snapshot, dict) or session_snapshot.get("session_id") != session_id:
+        raise RuntimeError("Session snapshot is incomplete")
+
+    assistant = require_status(
+        call(
+            "POST",
+            "/assistant/ask",
+            payload={
+                "message": "Explică-mi pe scurt ce trebuie verificat într-un email suspect.",
+                "session_id": session_id,
+                "scenario_id": scenario_id,
+                "attack_type": "phishing",
+                "difficulty": "easy",
+            },
+            token=token,
+        ),
+        200,
+        "assistant guidance",
+    )
+    if (
+        not isinstance(assistant, dict)
+        or not isinstance(assistant.get("answer"), str)
+        or assistant.get("safety_status") != "answered"
+    ):
+        raise RuntimeError("Assistant guidance response is incomplete")
+
+    live_drill = require_status(
+        call(
+            "POST",
+            "/live-drills",
+            payload={
+                "delivery_channel": "email",
+                "recipient": email,
+                "dry_run": True,
+                "attack_type": "phishing",
+                "difficulty": "easy",
+                "session_id": session_id,
+            },
+            token=token,
+        ),
+        200,
+        "live drill creation",
+    )
+    if not isinstance(live_drill, dict):
+        raise RuntimeError("Live drill creation did not return JSON")
+    live_drill_id = live_drill.get("id")
+    tracking_url = live_drill.get("tracking_url")
+    delivery_status = live_drill.get("delivery_status")
+    if (
+        not isinstance(live_drill_id, str)
+        or not isinstance(tracking_url, str)
+        or "/live-drills/track/" not in tracking_url
+        or delivery_status != "dry_run"
+    ):
+        raise RuntimeError("Live drill payload is incomplete")
+
+    live_drills = require_status(
+        call("GET", "/live-drills/recent?limit=10", token=token),
+        200,
+        "live drill history",
+    )
+    if not isinstance(live_drills, dict) or not isinstance(live_drills.get("items"), list):
+        raise RuntimeError("Live drill history is incomplete")
+    if not any(
+        isinstance(item, dict) and item.get("id") == live_drill_id
+        for item in live_drills["items"]
+    ):
+        raise RuntimeError("Created live drill was not returned in history")
+
+    live_report = require_status(
+        call("POST", f"/live-drills/{live_drill_id}/report", payload={}, token=token),
+        200,
+        "live drill report",
+    )
+    if (
+        not isinstance(live_report, dict)
+        or live_report.get("id") != live_drill_id
+        or live_report.get("reported_at") is None
+    ):
+        raise RuntimeError("Live drill report response is incomplete")
 
     metrics = require_status(call("GET", "/metrics"), 200, "metrics")
     if not isinstance(metrics, str) or "cyber_training_http_requests_total" not in metrics:

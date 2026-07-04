@@ -8,6 +8,7 @@ import {
   StyleSheet,
   Text,
   View,
+  useWindowDimensions,
 } from 'react-native';
 
 import { AppBackdrop } from '@/components/app-backdrop';
@@ -29,19 +30,19 @@ const EXPERIENCE_OPTIONS: {
   {
     id: 'beginner',
     title: 'Începător',
-    detail: 'Vreau explicații clare și exerciții de bază.',
+    detail: 'Sunt nou în domeniu sau vreau să pornesc de la bază.',
     icon: 'leaf-outline',
   },
   {
     id: 'intermediate',
     title: 'Intermediar',
-    detail: 'Cunosc noțiunile principale și vreau practică.',
+    detail: 'Cunosc câteva noțiuni și vreau să exersez aplicat.',
     icon: 'shield-outline',
   },
   {
     id: 'advanced',
-    title: 'Avansat',
-    detail: 'Vreau situații complexe și decizii dificile.',
+    title: 'Foarte avansat',
+    detail: 'Am experiență și vreau situații complexe.',
     icon: 'ribbon-outline',
   },
 ];
@@ -74,6 +75,8 @@ const GOAL_OPTIONS: {
 
 export default function OnboardingScreen() {
   const { token, user, completeOnboarding } = useAuth();
+  const { width } = useWindowDimensions();
+  const isCompact = width < 370;
   const [questions, setQuestions] = useState<OnboardingQuestion[]>([]);
   const [experience, setExperience] = useState<OnboardingExperience | null>(null);
   const [learningGoal, setLearningGoal] = useState<LearningGoal | null>(null);
@@ -105,7 +108,7 @@ export default function OnboardingScreen() {
           setError(
             requestError instanceof Error
               ? requestError.message
-              : 'Nu am putut încărca evaluarea inițială.'
+              : 'Nu am putut încărca profilarea inițială.'
           );
         }
       } finally {
@@ -145,7 +148,7 @@ export default function OnboardingScreen() {
     setError(null);
     setIsSubmitting(true);
     try {
-      const result = await completeOnboarding({
+      await completeOnboarding({
         experience,
         learning_goal: learningGoal,
         answers: questions.map((question) => ({
@@ -153,21 +156,12 @@ export default function OnboardingScreen() {
           selected_option_id: answers[question.id],
         })),
       });
-      router.replace({
-        pathname: '/chat/[scenarioId]',
-        params: {
-          scenarioId: `onboarding-${result.recommendation.attack_type}-${result.recommendation.difficulty}`,
-          attackType: result.recommendation.attack_type,
-          difficulty: result.recommendation.difficulty,
-          generateNew: 'true',
-          runId: `onboarding-${Date.now()}`,
-        },
-      });
+      router.replace('/(tabs)/dashboard');
     } catch (requestError) {
       setError(
         requestError instanceof Error
           ? requestError.message
-          : 'Nu am putut finaliza evaluarea inițială.'
+          : 'Nu am putut finaliza profilarea inițială.'
       );
       setIsSubmitting(false);
     }
@@ -177,7 +171,7 @@ export default function OnboardingScreen() {
     return (
       <View style={styles.centeredState}>
         <ActivityIndicator size="large" color={TrainingColors.accentTeal} />
-        <Text style={styles.stateText}>Pregătim evaluarea inițială...</Text>
+        <Text style={styles.stateText}>Pregătim profilarea inițială...</Text>
       </View>
     );
   }
@@ -185,12 +179,12 @@ export default function OnboardingScreen() {
   return (
     <View style={styles.screen}>
       <AppBackdrop grid />
-      <View style={styles.header}>
+      <View style={[styles.header, isCompact && styles.headerCompact]}>
         <View style={styles.brandIcon}>
           <Ionicons name="shield-checkmark" size={21} color="#FFFFFF" />
         </View>
         <View style={styles.headerText}>
-          <Text style={styles.eyebrow}>CONFIGURARE INIȚIALĂ</Text>
+          <Text style={styles.eyebrow}>PROFILARE INIȚIALĂ</Text>
           <Text style={styles.headerTitle}>{greeting}</Text>
         </View>
         <Text style={styles.stepText}>{currentStep}/{totalSteps}</Text>
@@ -200,7 +194,7 @@ export default function OnboardingScreen() {
         <View style={[styles.progressFill, { width: `${progress}%` }]} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView contentContainerStyle={[styles.content, isCompact && styles.contentCompact]}>
         {error ? (
           <View style={styles.errorBanner}>
             <Ionicons name="alert-circle" size={18} color={TrainingColors.accentDanger} />
@@ -214,7 +208,7 @@ export default function OnboardingScreen() {
               <Ionicons name="compass-outline" size={28} color={TrainingColors.accentTeal} />
               <Text style={styles.introTitle}>Construim traseul potrivit pentru tine</Text>
               <Text style={styles.introText}>
-                Alegerea ta și evaluarea scurtă vor seta nivelul, recomandările și primul scenariu.
+                Răspunsurile tale setează nivelul, lecțiile recomandate și scenariile disponibile.
               </Text>
             </View>
 
@@ -239,7 +233,7 @@ export default function OnboardingScreen() {
                 !canStartAssessment && styles.disabledButton,
                 pressed && canStartAssessment && styles.pressed,
               ]}>
-              <Text style={styles.primaryButtonText}>Începe evaluarea</Text>
+              <Text style={styles.primaryButtonText}>Continuă profilarea</Text>
               <Ionicons name="arrow-forward" size={18} color="#FFFFFF" />
             </Pressable>
           </>
@@ -261,7 +255,7 @@ export default function OnboardingScreen() {
                 <Text style={styles.channelText}>{currentQuestion.channel.toUpperCase()}</Text>
               </View>
               <Text style={styles.questionCounter}>
-                Situația {questionIndex + 1} din {questions.length}
+                Întrebarea {questionIndex + 1} din {questions.length}
               </Text>
             </View>
 
@@ -304,7 +298,7 @@ export default function OnboardingScreen() {
               })}
             </View>
 
-            <View style={styles.navigationRow}>
+            <View style={[styles.navigationRow, isCompact && styles.navigationRowCompact]}>
               <Pressable
                 disabled={isSubmitting}
                 onPress={() => {
@@ -332,7 +326,7 @@ export default function OnboardingScreen() {
                   <>
                     <Text style={styles.primaryButtonText}>
                       {questionIndex === questions.length - 1
-                        ? 'Finalizează'
+                        ? 'Vezi traseul'
                         : 'Continuă'}
                     </Text>
                     <Ionicons name="arrow-forward" size={17} color="#FFFFFF" />
@@ -343,7 +337,7 @@ export default function OnboardingScreen() {
           </>
         ) : (
           <View style={styles.introCard}>
-            <Text style={styles.introTitle}>Evaluarea nu este disponibilă</Text>
+            <Text style={styles.introTitle}>Profilarea nu este disponibilă</Text>
             <Text style={styles.introText}>Reîncarcă aplicația și încearcă din nou.</Text>
           </View>
         )}
@@ -420,6 +414,7 @@ const styles = StyleSheet.create({
     paddingBottom: 15,
     backgroundColor: TrainingColors.panel,
   },
+  headerCompact: { paddingHorizontal: 14, paddingTop: 44, paddingBottom: 12 },
   brandIcon: {
     width: 42,
     height: 42,
@@ -430,7 +425,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: TrainingColors.buttonPrimaryBorder,
   },
-  headerText: { flex: 1, marginLeft: 11 },
+  headerText: { flex: 1, minWidth: 0, marginLeft: 11 },
   eyebrow: {
     color: TrainingColors.accentTeal,
     fontSize: 9,
@@ -442,9 +437,10 @@ const styles = StyleSheet.create({
   progressTrack: { height: 4, backgroundColor: TrainingColors.panelSoft },
   progressFill: { height: '100%', backgroundColor: TrainingColors.accentTeal },
   content: { padding: 20, paddingBottom: 50, gap: 16 },
+  contentCompact: { paddingHorizontal: 14, paddingTop: 16, gap: 12 },
   errorBanner: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: 8,
     padding: 12,
     borderRadius: 14,
@@ -489,7 +485,7 @@ const styles = StyleSheet.create({
     backgroundColor: TrainingColors.panelSoft,
   },
   optionIconSelected: { backgroundColor: TrainingColors.buttonPrimary },
-  optionText: { flex: 1 },
+  optionText: { flex: 1, minWidth: 0 },
   optionTitle: { color: TrainingColors.textPrimary, fontSize: 13, fontWeight: '700' },
   optionTitleSelected: { color: TrainingColors.accentTeal },
   optionDetail: { color: TrainingColors.textSecondary, fontSize: 10, lineHeight: 14, marginTop: 2 },
@@ -505,7 +501,7 @@ const styles = StyleSheet.create({
     borderColor: TrainingColors.buttonPrimaryBorder,
   },
   primaryButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' },
-  questionMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  questionMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
   channelPill: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -528,7 +524,7 @@ const styles = StyleSheet.create({
   answerList: { gap: 10 },
   answerCard: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: 11,
     padding: 14,
     borderRadius: 17,
@@ -551,9 +547,10 @@ const styles = StyleSheet.create({
   answerIndexSelected: { backgroundColor: TrainingColors.accentTeal },
   answerIndexText: { color: TrainingColors.textSecondary, fontSize: 12, fontWeight: '800' },
   answerIndexTextSelected: { color: TrainingColors.pageBase },
-  answerText: { flex: 1, color: TrainingColors.textSecondary, fontSize: 12, lineHeight: 17 },
+  answerText: { flex: 1, minWidth: 0, color: TrainingColors.textSecondary, fontSize: 12, lineHeight: 17 },
   answerTextSelected: { color: TrainingColors.textPrimary, fontWeight: '600' },
   navigationRow: { flexDirection: 'row', gap: 10, marginTop: 4 },
+  navigationRowCompact: { gap: 8 },
   backButton: {
     flex: 1,
     minHeight: 48,

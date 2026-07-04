@@ -551,6 +551,7 @@ def fetch_learning_lessons(user_id: str) -> list[dict[str, Any]]:
                 "difficulty": lesson.difficulty,
                 "pass_score": lesson.pass_score,
                 "xp_reward": lesson.xp_reward,
+                "order_index": lesson.order_index,
                 "attempts": len(by_lesson.get(lesson.id, [])),
                 "best_score": max(
                     (attempt.score for attempt in by_lesson.get(lesson.id, [])),

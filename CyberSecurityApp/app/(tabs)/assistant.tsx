@@ -1,7 +1,18 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+  useWindowDimensions,
+} from 'react-native';
 
 import { AppBackdrop } from '@/components/app-backdrop';
 import { useAuth } from '@/features/auth/auth-context';
@@ -9,7 +20,6 @@ import { askAssistant } from '@/features/training/api';
 import {
   ASSISTANT_MESSAGES_STORAGE_KEY,
   buildUserStorageKey,
-  clearTrainingLocalCache,
 } from '@/features/training/local-cache';
 import type { AssistantAskApiResponse } from '@/features/training/types';
 import { TrainingColors } from '@/features/training/ui-theme';
@@ -51,6 +61,8 @@ const suggestions = [
 export default function AssistantScreen() {
   const { user } = useAuth();
   const { sessionId, scenario, attackType, difficulty } = useTrainingSession();
+  const { width } = useWindowDimensions();
+  const isCompact = width < 370;
   const [messages, setMessages] = useState<Msg[]>(defaultMessages);
   const [draft, setDraft] = useState('');
   const [thinking, setThinking] = useState(false);
@@ -128,7 +140,7 @@ export default function AssistantScreen() {
   }, [hydratedUserId, isHydrated, messages, storageKey, user]);
 
   const clearLocalCache = async () => {
-    await clearTrainingLocalCache(user?.id);
+    await AsyncStorage.removeItem(storageKey);
     setMessages(defaultMessages);
     setDraft('');
     setThinking(false);
@@ -193,21 +205,27 @@ export default function AssistantScreen() {
   };
 
   return (
-    <View style={styles.screen}>
+    <KeyboardAvoidingView
+      style={styles.screen}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 92 : 0}>
       <AppBackdrop grid />
-      <View style={styles.header}>
+      <View style={[styles.header, isCompact && styles.headerCompact]}>
         <View style={styles.headerLeft}>
           <View style={styles.headerIcon}>
             <Ionicons name="sparkles" size={18} color="#EFF6FF" />
           </View>
-          <View>
-            <Text style={styles.title}>Asistent Sentinel</Text>
+          <View style={styles.headerText}>
+            <Text style={[styles.title, isCompact && styles.titleCompact]}>Asistent Sentinel</Text>
             <Text style={styles.subtitle}>Coach-ul tău cyber mereu activ</Text>
           </View>
         </View>
-        <Pressable onPress={() => void clearLocalCache()} style={styles.clearCacheButton}>
+        <Pressable
+          accessibilityLabel="Șterge cache asistent"
+          onPress={() => void clearLocalCache()}
+          style={styles.clearCacheButton}>
           <Ionicons name="trash-outline" size={14} color={TrainingColors.textSecondary} />
-          <Text style={styles.clearCacheText}>Șterge cache</Text>
+          <Text style={styles.clearCacheText}>{isCompact ? 'Cache' : 'Șterge cache'}</Text>
         </Pressable>
       </View>
 
@@ -289,7 +307,7 @@ export default function AssistantScreen() {
             </Pressable>
           </View>
       </View>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -304,7 +322,9 @@ const styles = StyleSheet.create({
     paddingTop: 50,
     paddingBottom: 10,
   },
-  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  headerCompact: { paddingHorizontal: 14, gap: 8 },
+  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 },
+  headerText: { flex: 1, minWidth: 0 },
   headerIcon: {
     width: 40,
     height: 40,
@@ -316,6 +336,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   title: { color: TrainingColors.textPrimary, fontSize: 23, fontWeight: '800' },
+  titleCompact: { fontSize: 20 },
   subtitle: { color: TrainingColors.textSecondary, fontSize: 12 },
   clearCacheButton: {
     flexDirection: 'row',
@@ -330,7 +351,7 @@ const styles = StyleSheet.create({
   },
   clearCacheText: { color: TrainingColors.textSecondary, fontSize: 11, fontWeight: '700' },
   messages: { flex: 1 },
-  messageContent: { paddingHorizontal: 20, paddingBottom: 12, gap: 10 },
+  messageContent: { paddingHorizontal: 20, paddingBottom: 18, gap: 10 },
   assistantRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
   assistantIcon: {
     width: 30,

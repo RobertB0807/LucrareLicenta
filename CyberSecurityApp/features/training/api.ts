@@ -12,6 +12,9 @@ import type {
   LearningQuizSubmitApiResponse,
   LearningPathApiResponse,
   LearningPathLessonCompletionApiResponse,
+  LiveDrillApiResponse,
+  LiveDrillListApiResponse,
+  LiveDrillReportApiResponse,
   Evaluation,
   GenerateScenarioApiResponse,
   ScenarioCatalogApiResponse,
@@ -90,6 +93,16 @@ type AssistantAskPayload = {
   difficulty?: DifficultyLevel;
   context_title?: string;
   context_summary?: string;
+};
+
+type CreateLiveDrillPayload = {
+  delivery_channel?: 'email';
+  recipient?: string | null;
+  dry_run?: boolean;
+  attack_type: AttackType;
+  difficulty: DifficultyLevel;
+  session_id?: string | null;
+  template_id?: string;
 };
 
 const DEFAULT_API_BASE_URL =
@@ -271,6 +284,37 @@ export async function getScenario(scenarioId: string): Promise<GenerateScenarioA
 
 export async function evaluateScenario(payload: EvaluateScenarioPayload): Promise<Evaluation> {
   return postJson<Evaluation>('/scenario/evaluate', payload, 'Nu am putut evalua raspunsul.');
+}
+
+export async function createLiveDrill(
+  payload: CreateLiveDrillPayload
+): Promise<LiveDrillApiResponse> {
+  return postJson<LiveDrillApiResponse>(
+    '/live-drills',
+    payload,
+    'Nu am putut porni exercițiul live.',
+    AI_REQUEST_TIMEOUT_MS
+  );
+}
+
+export async function getRecentLiveDrills(
+  options: { limit?: number } = {}
+): Promise<LiveDrillListApiResponse> {
+  const params = new URLSearchParams({
+    limit: String(options.limit ?? 20),
+  });
+  return getJson<LiveDrillListApiResponse>(
+    `/live-drills/recent?${params.toString()}`,
+    'Nu am putut încărca exercițiile live.'
+  );
+}
+
+export async function reportLiveDrill(drillId: string): Promise<LiveDrillReportApiResponse> {
+  return postJson<LiveDrillReportApiResponse>(
+    `/live-drills/${encodeURIComponent(drillId)}/report`,
+    {},
+    'Nu am putut marca emailul ca raportat.'
+  );
 }
 
 export async function getSessionSnapshot(sessionId: string): Promise<SessionSnapshotApiResponse> {

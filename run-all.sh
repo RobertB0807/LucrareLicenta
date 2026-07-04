@@ -158,7 +158,15 @@ for key in \
   LLM_PROVIDER \
   OLLAMA_BASE_URL \
   OLLAMA_MODEL \
-  LLM_TIMEOUT_SECONDS
+  LLM_TIMEOUT_SECONDS \
+  LIVE_DRILL_EMAIL_ENABLED \
+  LIVE_DRILL_SMTP_HOST \
+  LIVE_DRILL_SMTP_PORT \
+  LIVE_DRILL_SMTP_USERNAME \
+  LIVE_DRILL_SMTP_PASSWORD \
+  LIVE_DRILL_SMTP_TLS \
+  LIVE_DRILL_EMAIL_FROM \
+  LIVE_DRILL_PUBLIC_BASE_URL
 do
   export_backend_setting "$key"
 done
@@ -216,6 +224,19 @@ if [[ "$FRONTEND_MODE" == "phone" ]]; then
   FRONTEND_API_BASE_URL="http://${PHONE_LAN_IP}:${API_PORT}"
   FRONTEND_NPM_SCRIPT="start"
   FRONTEND_ARGS+=(--lan)
+
+  if [[ -z "${LIVE_DRILL_PUBLIC_BASE_URL:-}" ]]; then
+    LIVE_DRILL_PUBLIC_BASE_URL="$FRONTEND_API_BASE_URL"
+    export LIVE_DRILL_PUBLIC_BASE_URL
+  fi
+fi
+
+FRONTEND_ENV=(
+  "EXPO_PUBLIC_API_BASE_URL=$FRONTEND_API_BASE_URL"
+)
+
+if [[ "$FRONTEND_MODE" == "phone" ]]; then
+  FRONTEND_ENV+=("REACT_NATIVE_PACKAGER_HOSTNAME=$PHONE_LAN_IP")
 fi
 
 COMPOSE=(
@@ -277,6 +298,8 @@ echo
 echo "Backend:    $API_BASE_URL"
 if [[ "$FRONTEND_MODE" == "phone" ]]; then
   echo "Phone API:  $FRONTEND_API_BASE_URL"
+  echo "Expo host:  $PHONE_LAN_IP"
+  echo "Live URL:   ${LIVE_DRILL_PUBLIC_BASE_URL:-$FRONTEND_API_BASE_URL}"
 fi
 echo "Readiness:  $API_BASE_URL/health/ready"
 echo "Metrics:    $API_BASE_URL/metrics"
@@ -287,5 +310,4 @@ echo "Press Ctrl+C to stop the app. Database and Redis data will be kept."
 echo
 
 cd "$MOBILE_DIR"
-EXPO_PUBLIC_API_BASE_URL="$FRONTEND_API_BASE_URL" \
-  npm run "$FRONTEND_NPM_SCRIPT" -- "${FRONTEND_ARGS[@]}"
+env "${FRONTEND_ENV[@]}" npm run "$FRONTEND_NPM_SCRIPT" -- "${FRONTEND_ARGS[@]}"
